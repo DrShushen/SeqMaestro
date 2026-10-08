@@ -1,0 +1,59 @@
+# =============================================================================================
+#  RUN BUDGET  --  what this run is allowed to spend, and what happens when it runs out
+# =============================================================================================
+#
+#  ACCOUNTING IS ALWAYS ON. The limits below are opt-in.
+#
+#  Every run writes `token_usage.json` into its output directory and prints a summary:
+#  prompt, completion and reasoning tokens, API calls, wall clock, and tokens per node. That
+#  happens whether or not any limit is set, so you can measure first and choose a limit second.
+#  This preset measures without limiting -- it is the default.
+#
+#
+#  WHAT HAPPENS WHEN A LIMIT IS REACHED
+#  ------------------------------------
+#  The tree stops growing. It does not crash, and the run does not fail.
+#
+#  The node being expanded becomes a leaf with the correct majority prediction, every node still
+#  queued becomes a leaf too, and `fit` returns a complete, valid tree that is simply shallower
+#  than `max_depth` would allow. It is saved and scored like any other.
+#
+#  Aborting instead would throw away a tree that is most of the way built and already paid for.
+#
+#  The result says so about itself: `stopped_early` and `stopped_reason` in `token_usage.json`,
+#  `budget_stopped` on the tree object, and a STOPPED EARLY line in the printed summary. Nodes
+#  cut short this way are exempt from the `integrity` checks, since running out of budget is not
+#  the same failure as the language model not contributing.
+#
+#
+#  A LIMIT IS A TARGET, NOT A HARD CEILING
+#  ---------------------------------------
+#  Requests are checked before dispatch, and a batch goes out concurrently, so spend can
+#  overshoot by roughly one batch of in-flight requests. Expect the final total to land slightly
+#  above `max_total_tokens` rather than exactly on it. The report shows what was actually spent,
+#  so the overshoot is visible rather than hidden.
+#
+#
+#  CHOOSING A NUMBER
+#  -----------------
+#  Measure, do not guess. Run once with this preset, read `mean_tokens_per_node` from the
+#  report, and multiply by the number of internal nodes you expect -- roughly `2^max_depth - 1`
+#  in the worst case, usually far fewer. Reflection dominates: each reflection round adds
+#  another generate-and-score pass per node.
+#
+#  `src/deft/conf/budget/pilot.yaml` is a worked example.
+#
+# =============================================================================================
+
+# Stop once this many tokens have been spent, counting prompt, completion and reasoning
+# tokens together. `null` means no limit.
+max_total_tokens: null
+
+# Stop after this many API requests. Useful as a backstop independent of token size: the retry
+# policy allows up to 100 attempts per request, so a flaky endpoint can otherwise generate a
+# great many calls. `null` means no limit.
+max_api_calls: null
+
+# Stop after this many seconds of wall clock. The published cost is ~353 s per node split, so a
+# depth-6 tree is hours. `null` means no limit.
+max_wall_seconds: null

@@ -1,0 +1,14 @@
+# The copy's configuration, composed with Hydra's compose API by the program that runs IGSR in
+# process and passes it a dataset (`igsr.method.igsr.igsr(cfg, seed, data_bundle)`). There is no
+# dataset group: the dataset is handed over, not loaded by name. The language model is chosen
+# explicitly, with `llm=<name>`.
+defaults:
+  - experiment: igsr
+  - llm: ???
+  - _self_
+
+logging:
+  logger_name: "igsr.experiments.discovery.${experiment.kind}"
+  mode: "w"
+  # A JSON log per seed where the caller names a file; none otherwise.
+  log_file: null

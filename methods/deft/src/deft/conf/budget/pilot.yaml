@@ -1,0 +1,24 @@
+# Run budget: a worked example of a capped run.
+#
+# `src/deft/conf/budget/unlimited.yaml` explains what a budget does, what happens when one is
+# reached, and how to choose a number. Read that one first.
+#
+#     python experiments/deft_tree.py --config-name=config budget=pilot
+#
+# The numbers below are a starting point, not a recommendation. Measure your own cost per node
+# with `budget=unlimited` first -- it depends heavily on `n_samples_per_prompt`, on
+# `n_reflections`, and on how much reasoning the model does.
+#
+# Override any of them from the command line without editing this file, for example:
+#
+#     python experiments/deft_tree.py --config-name=config budget=pilot \
+#         budget.max_total_tokens=2000000
+
+# Roughly a depth-4 tree with light reflection at the time of writing.
+max_total_tokens: 500000
+
+# Backstop against a flaky endpoint turning into a very large number of retried calls.
+max_api_calls: 2000
+
+# Backstop against a run that stalls rather than fails. One hour.
+max_wall_seconds: 3600

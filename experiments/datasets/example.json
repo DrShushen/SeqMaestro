@@ -1,0 +1,5 @@
+{
+  "target_name": "binding of the factor",
+  "task": "Predicting whether a DNA-binding factor is bound at a candidate site, from the DNA sequence around the site. Each example is one candidate binding site. The positive class is sites where the factor was found bound, and the negative class is candidate sites where it was not. The data is synthetic: it was generated to show how a dataset is prepared and to try a run on, and it describes no real factor and no real genome.",
+  "sequence_layout": "60 nucleotides of DNA in upper case A, C, G and T, cut around the centre of the candidate site. Positions are 0-based, 0 to 59, read left to right, and position 30 is the centre of the site in every sequence, so a given position is the same distance from the site in every row. The sequences are not oriented, so a feature should not assume that one end is upstream of the other."
+}

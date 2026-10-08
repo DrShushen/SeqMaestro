@@ -1,0 +1,6 @@
+# Entropy-based splitting, as an alternative to Gini.
+#
+# `offset` is added to every score so that a better split scores higher and the whole pipeline
+# can maximise; it does not change which split wins.
+_target_: deft.trees.split_criterion.InformationGainCriterion
+offset: 1.0

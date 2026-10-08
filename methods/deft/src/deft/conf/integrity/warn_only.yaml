@@ -1,0 +1,18 @@
+# Run-integrity policy: report everything, never fail the run.
+#
+# Same checks as `strict.yaml`, same `provenance.json`, same end-of-run summary -- but a
+# breach logs a warning instead of raising. Use when you are deliberately studying degraded
+# behaviour, or on a first run against a new backend where you would rather see the full
+# picture than stop at the first bad node.
+#
+# `strict.yaml` documents what each setting means. Read that one first.
+#
+#     python experiments/deft_tree.py --config-name=config integrity=warn_only
+
+enabled: true
+on_violation: warn
+
+min_llm_candidates_per_node: 1
+min_usable_feature_yield: 0.25
+min_request_success_rate: 0.95
+warn_if_naive_split_share_above: 0.5

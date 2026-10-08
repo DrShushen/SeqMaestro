@@ -1,0 +1,86 @@
+# =============================================================================================
+#  CODE GUARD  --  what language-model-generated Python is allowed to do before we run it
+# =============================================================================================
+#
+#  WHY THIS EXISTS
+#  ---------------
+#  DEFT's method *is* to have a model write feature functions and then `exec()` them. That is
+#  not an implementation detail that could be avoided; it is the mechanism.
+#
+#  What makes it sharp here rather than theoretical: the prompts embed rows of your own dataset
+#  as in-context examples. So a crafted CSV is a prompt-injection path to code execution on this
+#  machine -- and SeqMaestro's whole premise is taking someone else's dataset.
+#
+#  Upstream's guard was a substring scan for "exec" and "eval". `__import__("os").system(...)`
+#  passed it untouched, and it rejected good code that happened to mention `eval` in a comment.
+#
+#
+#  WHAT THIS IS, AND WHAT IT IS NOT
+#  --------------------------------
+#  A guardrail, not a security boundary.
+#
+#  It raises the cost of an accident or of casual misbehaviour from zero to substantial. It does
+#  not stop a determined adversary: nothing short of process or container isolation does that,
+#  and that has deliberately not been built. Do not read this file as a promise of safety when
+#  running genuinely hostile data.
+#
+#  Three layers, described in `src/deft/code_guard.py`: a static check of the parsed source, a
+#  restricted execution namespace, and compiling the checked AST directly so that what runs is
+#  exactly what was checked.
+#
+#
+#  WHAT IS REJECTED
+#  ----------------
+#      * imports of anything outside the allowlist below, including relative imports
+#      * `open`, `eval`, `exec`, `compile`, `__import__`, `globals`, `locals`, `vars`, `input`
+#      * `getattr` / `setattr` / `delattr` -- the attribute name there is a runtime string, so
+#        this is the one route that would slip past the check below
+#      * any dunder attribute access (`__class__`, `__subclasses__`, ...)
+#      * anything at the top level except imports and function definitions, so no example usage
+#
+#  Rejections are logged and the feature is discarded, exactly as for code that fails to
+#  compile. So they show up as a falling `min_usable_feature_yield`, which the `integrity`
+#  policy reports -- an allowlist that is too tight announces itself rather than quietly
+#  starving the candidate pool.
+#
+#
+#  A NOTE ON THE ALLOWLIST
+#  -----------------------
+#  The *builtins* matter more than the modules, and are not configurable here: without `len`,
+#  `sum`, `sorted`, `max`, `zip` and the rest, almost every real feature breaks. See
+#  `_SAFE_BUILTIN_NAMES` in `src/deft/code_guard.py`.
+#
+#  `numpy` and `pandas` are also pre-bound as `np` and `pd`, because a model writes `np.`
+#  without importing it more often than not. That raises the yield rather than lowering it.
+#
+#  The prompts do not tell the model which modules it may use, and prompts are out of scope for
+#  now -- so this list is deliberately generous, and the yield metric is how we find out if it
+#  is still too tight.
+#
+#     code_guard=off      run without any of this (upstream's behaviour)
+#
+# =============================================================================================
+
+enabled: true
+
+# Modules a sequence feature may import or reference.
+#
+# `re` is here because regex motifs (`[AG]GGTCA`) are a natural way to express a binding site.
+# `collections` and `itertools` because `Counter` is the obvious tool for k-mer composition and
+# `product` for k-mer enumeration.
+#
+# Deliberately absent: `scipy`, which DEFT does not depend on and whose uses here (entropy,
+# periodicity) are writable in numpy; and Biopython, which is a new dependency the model has no
+# way to know about.
+allowed_modules:
+  - numpy
+  - pandas
+  - re
+  - math
+  - collections
+  - itertools
+
+# Added to the list above rather than replacing it, so you can widen the allowlist from the
+# command line without restating it:
+#     python experiments/deft_tree.py ... '+code_guard.extra_allowed_modules=[scipy]'
+extra_allowed_modules: []

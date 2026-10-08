@@ -1,0 +1,23 @@
+# Code guard: disabled. This is upstream DEFT's behaviour.
+#
+# Model-generated Python is `exec`'d with no restriction on imports, builtins or attribute
+# access. Anything the model writes -- including anything a crafted dataset persuades it to
+# write, since your data appears in the prompts -- runs with the privileges of this process.
+#
+# A warning is logged at startup when this is selected, so a run made under it is identifiable
+# afterwards.
+#
+# `strict.yaml` explains the threat and what the guard does. Read that before choosing this.
+#
+#     python experiments/deft_tree.py --config-name=config code_guard=off
+
+enabled: false
+
+allowed_modules:
+  - numpy
+  - pandas
+  - re
+  - math
+  - collections
+  - itertools
+extra_allowed_modules: []

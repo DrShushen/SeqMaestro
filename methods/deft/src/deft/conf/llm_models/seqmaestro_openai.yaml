@@ -1,0 +1,9 @@
+# The OpenAI API, for SeqMaestro runs.
+#
+# Values come from the SeqMaestro root `.env`. Export them before running:
+#     set -a && source .env && set +a
+#
+# `model` is a LiteLLM model string, so it carries its own provider prefix. The part after
+# `openai/` is the model's name as the API lists it, such as `gpt-5.4`.
+model: openai/${oc.env:SEQMAESTRO_OPENAI_MODEL}
+api_key: ${oc.env:SEQMAESTRO_OPENAI_KEY}

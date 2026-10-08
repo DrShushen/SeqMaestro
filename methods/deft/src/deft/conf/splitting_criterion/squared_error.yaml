@@ -1,0 +1,7 @@
+# Variance reduction, for a continuous target (`dataset.target_kind: continuous`), with a node's
+# impurity measured in units of the variance of every fitting row.
+#
+# `offset` is added to every score so that a better split scores higher and the whole pipeline
+# can maximise; it does not change which split wins.
+_target_: deft.trees.split_criterion.SquaredErrorCriterion
+offset: 1.0

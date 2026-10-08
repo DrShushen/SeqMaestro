@@ -1,0 +1,22 @@
+# Engine settings for the Claude models, through the Claude API.
+#
+# Three things differ from `gpt5.yaml`, each because the API refuses or ignores what the GPT-5
+# settings send.
+_target_: deft.llm.engines.litellm_engine.LiteLLMEngine
+content: ${content}
+config: ${llm_models}
+temperature: 1
+# The API takes a temperature or a nucleus threshold, and refuses a request that states both.
+top_p: null
+max_tokens: 4000
+# No reasoning effort. LiteLLM would turn one into extended thinking, with a budget that has to
+# fit under `max_tokens`. Left out, thinking is off, which is the counterpart of the minimal
+# effort the GPT-5 models are called with.
+reasoning_effort: null
+num_retries: 5
+request_timeout: 60
+# The API returns one completion per request and has no `n`. LiteLLM drops an `n` it is given,
+# so a request for several would come back as one without an error. With this cap the engine
+# sends one request per completion, and `params_generation.n_samples_per_prompt` candidates
+# are what it gets.
+max_n_per_request: 1

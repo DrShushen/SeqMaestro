@@ -1,0 +1,20 @@
+# Engine settings for the GPT-5 reasoning models, through Azure OpenAI or the OpenAI API.
+#
+# `temperature` and `top_p` are left set but are dropped before dispatch: reasoning models
+# reject them, and the engine passes `drop_params` so LiteLLM strips what the model does not
+# support. `max_tokens` becomes `max_completion_tokens`, and reasoning tokens are billed
+# against it -- so it is the budget for reasoning *and* output together.
+_target_: deft.llm.engines.litellm_engine.LiteLLMEngine
+content: ${content}
+config: ${llm_models}
+temperature: 1
+top_p: 0.95
+max_tokens: 4000
+reasoning_effort: minimal
+num_retries: 5
+request_timeout: 60
+# Hard limit of the API, not a preference: both Azure and OpenAI reject n > 8 with HTTP 400
+# (`integer_above_max_value`). This caps completions *per request*, it does not fix them --
+# the engine splits a larger ask across several requests and merges the results, so
+# `params_generation.n_samples_per_prompt: 20` really does yield 20 candidates.
+max_n_per_request: 8

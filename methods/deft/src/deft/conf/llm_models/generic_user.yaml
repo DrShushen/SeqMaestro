@@ -1,0 +1,9 @@
+# Generic Azure OpenAI model. Edit `model` and `api_base` for your own resource, or prefer
+# `llm_models=seqmaestro_azure`, which reads everything from the repo-root `.env`.
+#
+# `model` is a LiteLLM model string: `<provider>/<deployment or model name>`.
+model: azure/gpt-4o
+base_model: azure/gpt-4o
+api_base: https://<your-azure-openai-resource>.openai.azure.com/
+api_version: 2025-04-01-preview
+api_key: ${oc.env:DEFT_API_KEY}

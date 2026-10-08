@@ -1,0 +1,21 @@
+# Azure OpenAI model, for SeqMaestro runs.
+#
+# Values come from the SeqMaestro root `.env`. Export them before running:
+#     set -a && source .env && set +a
+#
+# `model` is a LiteLLM model string, so it carries its own provider prefix. The part after
+# `azure/` is the *deployment* name, which may differ from the base model name.
+model: azure/${oc.env:SEQMAESTRO_AZURE_OPENAI_DEPLOYMENT}
+
+# The real model family behind an opaque deployment name.
+#
+# LiteLLM keys capability on the model string, and a deployment name like `gpt-5.4-es` appears
+# in no model map. `base_model` is unioned into the capability gate, which is what lets
+# `reasoning_effort` through. It does not change which deployment is called.
+#
+# Update this when the deployment is upgraded to a new family.
+base_model: ${oc.env:SEQMAESTRO_AZURE_OPENAI_BASE_MODEL,azure/gpt-5.4}
+
+api_base: ${oc.env:SEQMAESTRO_AZURE_OPENAI_ENDPOINT}
+api_version: ${oc.env:SEQMAESTRO_AZURE_OPENAI_API_VERSION,2025-04-01-preview}
+api_key: ${oc.env:SEQMAESTRO_AZURE_OPENAI_KEY}

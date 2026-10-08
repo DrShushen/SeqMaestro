@@ -1,0 +1,20 @@
+# Run-integrity policy: no checks.
+#
+# Counting and reporting still happen -- `provenance.json` is still written and the summary is
+# still printed -- but nothing is enforced and nothing warns.
+#
+# This is upstream DEFT's behaviour. Choosing it means accepting that a run in which the
+# language model contributed nothing will look identical to one in which it did all the work.
+# Prefer `warn_only` if what you actually want is "do not stop my run".
+#
+# `strict.yaml` explains the problem and documents every setting.
+#
+#     python experiments/deft_tree.py --config-name=config integrity=off
+
+enabled: false
+on_violation: warn
+
+min_llm_candidates_per_node: 1
+min_usable_feature_yield: 0.25
+min_request_success_rate: 0.95
+warn_if_naive_split_share_above: 0.5

@@ -1,0 +1,9 @@
+# The Claude API, for SeqMaestro runs.
+#
+# Values come from the SeqMaestro root `.env`. Export them before running:
+#     set -a && source .env && set +a
+#
+# `model` is a LiteLLM model string, so it carries its own provider prefix. The part after
+# `anthropic/` is the model's name as the API lists it, such as `claude-sonnet-5-5`.
+model: anthropic/${oc.env:SEQMAESTRO_CLAUDE_MODEL}
+api_key: ${oc.env:SEQMAESTRO_CLAUDE_KEY}

@@ -1,0 +1,195 @@
+# Task-neutral generation settings: the only ones shipped, and deliberately vague about the data.
+#
+# The prompts used to describe RNA polymerase II pausing on a 101-nucleotide window centred on a
+# pause site, in a copy that no longer ships that dataset. A user who overrides
+# `dataset.csv_path` but not these gets a model told, in detail, that it is looking at pause
+# sites when it is not -- a wrong answer that announces nothing. Selecting a dataset is loud
+# (`csv_path` is mandatory); selecting the wrong task description was silent.
+#
+# The model learns the *columns* from the data: `serialize_features` describes every column's
+# type and range, and in-context rows show their values. So these settings only have to supply
+# what the data cannot -- what the target means, and what makes a good feature for it.
+#
+# **Set `target_name` and `dataset_info` for your task.** They are interpolated into every
+# prompt and matter far more than their size suggests.
+#
+# This package describes **no dataset**, deliberately: which one is being run is the caller's
+# decision, and a library that ships a description of one dataset has to be edited to run
+# another. Put your own group configs on hydra's search path instead --
+# `deft-tree --config-dir <your-dir> params_generation=<yours>` -- inheriting this file with
+# `defaults: [default, _self_]` so you override only what your task actually changes.
+
+# The kind of target these prompts are written for (`deft.targets`). A run whose dataset declares
+# another kind is refused before any prompt is sent; `regression.yaml` is written for a continuous
+# target.
+target_kind: binary
+
+target_name: "the target"
+dataset_info: >-
+  This is a binary classification dataset. The columns available to you, with their types and
+  ranges, are described below.
+
+context_template_name_desc: >-
+  Your goal is to help with the task of growing a decision tree to predict {target_name}.
+  {dataset_info} Given a current node that we want to split in the tree, you will construct a
+  new feature from the columns described above, such that this new feature is discriminative
+  for the prediction task of classifying {target_name}.
+
+context_code: "Your goal is to generate a python code to construct a feature, based on a dataframe."
+
+instructions_name_desc: >-
+  Use your domain expertise and your creativity to generate a good feature (name, description,
+  justification). This feature can be simple. Importantly, take into account the contextual
+  history given above, which defines the sequence of splitting conditions from the root node up
+  to the current node. Your new feature should not be redundant with the splitting condition
+  features. This point is very important because the dataset at the current node can be small,
+  and you have to avoid overfitting. Another important point: The feature should be
+  interpretable. The feature should capture a single, clear mechanism. Use only basic properties
+  of the columns that a domain expert could understand and find intuitive. Avoid combining
+  multiple mechanisms into one feature, which would introduce complexity. Be very explicit in
+  your description on how you compute the feature. Return the feature in the following JSON
+  format:
+
+  {"rationale": "rationale", "description": "your_feature_description", "name": "your_feature_name"}
+
+  Only return the JSON object, with no additional text. Do not include "json" in front of it
+
+instructions_code: >-
+  Give instantly executable code without example usage. Only return the Python function, with no
+  additional text. The name of the argument should be 'X'. Only output one function, this is very
+  important. The function should only return the new feature column. The function name must be a
+  valid Python identifier. Start your output with the string 'def {Function Name}(X):' do not
+  include 'python' in front of it
+
+include_ic_samples: true
+include_history: true
+include_feature_description: true
+population_size: 10
+n_prompts: 1
+n_parents_per_prompt: 10
+n_ic_samples: 1
+n_samples_per_prompt: 20
+n_outcomes_per_sample_code: 1
+
+use_reflection: true
+list_instructions_reflection:
+  - >-
+    Your goal is to help with the task of growing a decision tree to predict the target.
+    Given a current node that we want to split in the tree, you will construct a new feature
+    from the columns described above, such that this new feature is discriminative for the
+    prediction task of classifying the target. The feature should be: 1. Interpretable -
+    based on a plausible mechanism and intuitive for a domain expert. 2. Computationally clear -
+    specify exact columns and calculation methods. 3. Complementary to previous splitting
+    conditions from the root to the current node. Your new feature should not be redundant with
+    the splitting condition features. This point is very important because the dataset at the
+    current node can be small, and you have to avoid overfitting. I am going to give you an
+    initial population of features with their respective scores (higher is better). The feature
+    you generate should be as different as possible from the initial population in order to
+    explore new ideas. Another important point: The feature should be interpretable. To assess
+    interpretability, please consider the following aspects: 1) Simplicity: it should be simple
+    and easy to understand. An interpretable feature should not be overly complex (and not
+    involve multiple complex phenomena). Hence features which incorporate too many distinct
+    components are NOT simple and should not be generated. 2) Intuitiveness: The feature should
+    be intuitive and easy to explain. 3) Relevance: the feature should be relevant to the
+    prediction task. Return three things: 1. Rationale: describe step by step how you came up
+    with this feature, taking into account BOTH the splitting conditions and the population of
+    candidate features. If your feature involves a specific mechanism, say why it is relevant.
+    2. Description: precise calculation method. 3. Name: clear and descriptive. Return in the
+    following JSON format:
+
+    {"rationale": "your_rationale", "description": "your_feature_description", "name": "your_feature_name"}
+
+    Only return the JSON object, with no additional text. Do not include "json" in front of it
+  - >-
+    Your goal is to help with the task of growing a decision tree to predict the target.
+    Given a current node that we want to split in the tree, you will construct a new feature
+    from the columns described above, such that this new feature is discriminative for the
+    prediction task of classifying the target. The feature should be: 1. Interpretable -
+    based on a plausible mechanism and intuitive for a domain expert. 2. Computationally clear -
+    specify exact columns and calculation methods. 3. Complementary to previous splitting
+    conditions from the root to the current node. Your new feature should not be redundant with
+    the splitting condition features. This point is very important because the dataset at the
+    current node can be small, and you have to avoid overfitting. I am going to give you an
+    initial population of features with their respective scores (higher is better). Very
+    important: First identify common ideas of the top performing solutions in the population.
+    Then base your feature on these common ideas and simplify them to get one good feature, but
+    do not simply combine these common ideas (do not just add them for example, that would
+    create too much complexity). Another important point: The feature should be interpretable.
+    To assess interpretability, please consider the following aspects: 1) Simplicity: it should
+    be simple and easy to understand. An interpretable feature should not be overly complex (and
+    not involve multiple complex phenomena). Hence features which incorporate too many distinct
+    components are NOT simple and should not be generated. 2) Intuitiveness: The feature should
+    be intuitive and easy to explain. 3) Relevance: the feature should be relevant to the
+    prediction task. Return three things: 1. Rationale: describe step by step how you came up
+    with this feature, taking into account BOTH the splitting conditions and the population of
+    candidate features. If your feature involves a specific mechanism, say why it is relevant.
+    2. Description: precise calculation method. 3. Name: clear and descriptive. Return in the
+    following JSON format:
+
+    {"rationale": "your_rationale", "description": "your_feature_description", "name": "your_feature_name"}
+
+    Only return the JSON object, with no additional text. Do not include "json" in front of it
+n_reflections: 20
+
+# Show the reflection population best-scoring first. False -- worst first, best last -- is what
+# this has always done; the pilot keeps it so its prompts are the paper's. See
+# `serialize_list_features`.
+sort_reflection_best_first: false
+
+remove_duplicates: true
+alpha: 0.1
+initialize_with_naive_features: true
+include_code_in_reflection: true
+include_rationale_in_reflection: true
+use_description_in_history: true
+
+# Naive features over covariates. A non-numeric column with more distinct values than this
+# contributes no naive features -- it would otherwise be an identifier producing one indicator
+# per row. Numeric columns are unaffected: they get one identity feature each and the threshold
+# search does the rest.
+naive_max_categorical_levels: 20
+# Which columns count as a pre-split sequence, used only when `dataset.sequence_column` is null.
+# `seq_0 … seq_100` is the shape this matches.
+naive_position_prefix: "seq_"
+
+# Generated candidates that fail on a node's rows. Each default keeps DEFT as it has always been:
+# a failing candidate is dropped, any NaN counts as a failure, and a text value is shown whole.
+#
+# `max_undefined_share`: the share of a node's rows on which a candidate may return NaN and still
+# be kept. The threshold search and the routing send NaN right of every threshold, at fit and at
+# predict alike.
+max_undefined_share: 0.0
+# `repair_rounds`: how many times a candidate whose code failed (it raised, returned the wrong
+# shape, was constant, or was undefined on too many rows) goes back to the model, one prompt each,
+# with its code, what went wrong, and how to correct that kind of failure. 0 sends nothing back.
+repair_rounds: 0
+# `max_sequence_chars_in_prompt`: the most characters of one text value an in-context row shows;
+# a longer one is shown by its ends with its length stated. null shows every value whole.
+max_sequence_chars_in_prompt: null
+
+# How a repair prompt asks for each kind of failure to be corrected (`GUIDANCE_FOR` in
+# `deft.features.helpers`). Code at fault is fixed without changing what the feature computes. A
+# feature that cannot work on these rows has to compute something a little different, and is then
+# named and described for what it computes, so no feature's name says one thing while its code
+# computes another.
+repair_guidance:
+  code_fault: >-
+    The code is at fault. Keep what the feature computes, and change only what makes the code
+    fail.
+  constant: >-
+    As written, the feature cannot tell one row from another at this node, so it cannot help.
+    Change what it computes as little as you can so that it varies from row to row, for example by
+    loosening a condition that no row meets, or tightening one that every row meets.
+  undefined: >-
+    As written, the feature is undefined for too much of the data at this node. Change what it
+    computes as little as you can so that it is defined on more rows, for example by reading a
+    window that fits inside every sequence, or by avoiding a division that is often by zero.
+
+instructions_code_repair: >-
+  A corrected feature that still computes what its description says keeps its name and
+  description. One that now computes something different needs a new name and a new description,
+  both saying what it computes now. The code must be one function whose argument is named 'X',
+  which returns the new feature column, whose name is a valid Python identifier, and which has no
+  example usage. Return a JSON object only, with no other text:
+
+  {"name": "feature_name", "description": "what the feature computes", "code": "def function_name(X): ..."}

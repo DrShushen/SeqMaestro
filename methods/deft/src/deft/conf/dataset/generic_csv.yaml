@@ -1,0 +1,61 @@
+name: generic_csv
+
+# The rows DEFT trains on. This plugin does NOT split: it uses every row of this file, so pass
+# your training split here and keep the validation and test files yourself. Relative paths
+# resolve against the directory you run from (Hydra does not change the working directory).
+csv_path: ???
+
+# The target. Kept under its own name in `y`; nothing downstream assumes "label".
+target_column: label
+
+# What the target holds: `binary` (the labels 0 and 1; a leaf predicts the share of 1s) or
+# `continuous` (finite numbers; a leaf predicts their mean). A continuous target also needs
+# `splitting_criterion=squared_error` and prompts written for it (`params_generation=regression`),
+# and the run refuses either when it does not fit the kind.
+target_kind: binary
+
+# The column holding the sequence, as strings. DEFT indexes into it by offset to build
+# positional features, so every sequence must be the same length and aligned to the same
+# landmark, unless `positional_window` below says how to read sequences of different lengths.
+# Set to `null` for a dataset with no sequence: DEFT then looks for pre-split per-position
+# columns (`params_generation.naive_position_prefix`, default `seq_`), and failing that works
+# from covariates alone.
+sequence_column: raw_sequence
+
+# How positional features read sequences of different lengths: `length` positions from the
+# `start` or the `end` of each sequence. A longer sequence is cut at the far end; a shorter one is
+# padded at the far end with `pad: true`, which adds a `pos_<i>_is_pad` feature per position, and
+# refused with `pad: false`. `pad` has no default, since it is a decision about the data.
+# null: every sequence must be one length.
+#   positional_window: {length: 100, anchor: start, pad: false}
+positional_window: null
+
+# What each column means, `{column: text}`. The prompts show a described column's text beside
+# its type and range. null: the prompts show types and ranges only.
+column_descriptions: null
+
+# Every column that is not the target is given to DEFT: the sequence, and everything else as a
+# covariate. That is deliberate -- deciding what a model may learn from belongs to whatever
+# prepared the file, not to DEFT. These two are escape hatches for when re-preparing the file
+# is not worth it:
+#   covariate_columns  an allowlist; null means "everything that is not the target"
+#   drop_columns       a blocklist, applied after the allowlist
+covariate_columns: null
+drop_columns: null
+
+tree_filename: tree_generic.dill
+
+plugin:
+  _target_: deft.data.generic_csv_plugin.GenericCsvDatasetPlugin
+  csv_path: ${..csv_path}
+  target_column: ${..target_column}
+  target_kind: ${..target_kind}
+  sequence_column: ${..sequence_column}
+  covariate_columns: ${..covariate_columns}
+  drop_columns: ${..drop_columns}
+  weight_column: ${..weight_column}
+  tree_filename: ${..tree_filename}
+  column_descriptions: ${..column_descriptions}
+  positional_window: ${..positional_window}
+# Column holding per-row fitting weights. Kept out of the features and handed to the tree.
+weight_column: null

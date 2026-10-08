@@ -1,0 +1,124 @@
+# The proposer's prompts on rows with no covariates and one sequence length, as rendered before
+# covariates and variable lengths were added. tests/test_proposer.py checks that the proposer still
+# renders exactly these, byte for byte. Change this file only with a deliberate change of wording,
+# and say so in the commit. Each section runs from its marker to the next.
+=== system ===
+You are an expert computational molecular biologist. You propose interpretable features of nucleic acid sequence that might predict a biological outcome, and you write each one as a short Python function. You favour features a biologist could name and reason about -- composition over a defined window, motif occurrence, periodicity, skew, positional context -- over opaque statistics. Each feature should be a distinct hypothesis, not a restatement of another.
+=== blind_round_1 ===
+Task: Predicting a binary outcome from DNA sequence.
+Sequence layout: 12 nucleotides, 0-based, position 6 is the site.
+
+Below are 4 example rows from the training data.
+  GCGCGGCCATGG   -> outcome=1
+  TTAATTAAGCAT   -> outcome=0
+  AATTTAAGCTAT   -> outcome=0
+  CCGGGCGCATCC   -> outcome=1
+
+Propose 3 candidate features that might distinguish the classes. For each, write a Python function computing it for every row of a pandas DataFrame.
+
+Requirements for the code:
+  - exactly one argument, named X: a DataFrame with a 'window' column of strings
+  - return one number per row -- a pandas Series or numpy array of length len(X)
+  - you may use numpy, pandas, re, math, collections and itertools; np and pd are already bound, and nothing else may be imported
+  - no top-level code: definitions only, no example usage, no prints
+  - the feature name must be a legal Python identifier: letters, digits and underscores, not starting with a digit
+
+Example of the expected shape:
+
+def gc_fraction_first_6nt(X):
+    """Fraction of G or C in the first 6 nt of the sequence."""
+    seqs = X["window"].astype(str).str.upper().str.slice(0, 6)
+    return (seqs.str.count("G") + seqs.str.count("C")) / 6.0
+
+Answer with a JSON array only, no other text:
+[
+  {
+    "name": "<identifier>",
+    "description": "<one sentence, what it computes>",
+    "rationale": "<one sentence, why it might predict the outcome>",
+    "code": "<the function definition>"
+  }
+]
+=== blind_round_2 ===
+Task: Predicting a binary outcome from DNA sequence.
+Sequence layout: 12 nucleotides, 0-based, position 6 is the site.
+
+Below are 4 example rows from the training data.
+  GCGCGGCCATGG   -> outcome=1
+  TTAATTAAGCAT   -> outcome=0
+  AATTTAAGCTAT   -> outcome=0
+  CCGGGCGCATCC   -> outcome=1
+
+Propose 3 candidate features that might distinguish the classes. For each, write a Python function computing it for every row of a pandas DataFrame.
+
+Requirements for the code:
+  - exactly one argument, named X: a DataFrame with a 'window' column of strings
+  - return one number per row -- a pandas Series or numpy array of length len(X)
+  - you may use numpy, pandas, re, math, collections and itertools; np and pd are already bound, and nothing else may be imported
+  - no top-level code: definitions only, no example usage, no prints
+  - the feature name must be a legal Python identifier: letters, digits and underscores, not starting with a digit
+
+Example of the expected shape:
+
+def gc_fraction_first_6nt(X):
+    """Fraction of G or C in the first 6 nt of the sequence."""
+    seqs = X["window"].astype(str).str.upper().str.slice(0, 6)
+    return (seqs.str.count("G") + seqs.str.count("C")) / 6.0
+
+These have already been proposed. Propose different ones -- not restatements, rescalings or neighbouring windows of these:
+  gc_share
+
+Answer with a JSON array only, no other text:
+[
+  {
+    "name": "<identifier>",
+    "description": "<one sentence, what it computes>",
+    "rationale": "<one sentence, why it might predict the outcome>",
+    "code": "<the function definition>"
+  }
+]
+=== informed_round ===
+Task: Predicting a binary outcome from DNA sequence.
+Sequence layout: 12 nucleotides, 0-based, position 6 is the site.
+
+Below are 4 example rows from the training data.
+  GCGCGGCCATGG   -> outcome=1
+  TTAATTAAGCAT   -> outcome=0
+  AATTTAAGCTAT   -> outcome=0
+  CCGGGCGCATCC   -> outcome=1
+
+Propose 3 candidate features that might distinguish the classes. For each, write a Python function computing it for every row of a pandas DataFrame.
+
+Requirements for the code:
+  - exactly one argument, named X: a DataFrame with a 'window' column of strings
+  - return one number per row -- a pandas Series or numpy array of length len(X)
+  - you may use numpy, pandas, re, math, collections and itertools; np and pd are already bound, and nothing else may be imported
+  - no top-level code: definitions only, no example usage, no prints
+  - the feature name must be a legal Python identifier: letters, digits and underscores, not starting with a digit
+
+Example of the expected shape:
+
+def gc_fraction_first_6nt(X):
+    """Fraction of G or C in the first 6 nt of the sequence."""
+    seqs = X["window"].astype(str).str.upper().str.slice(0, 6)
+    return (seqs.str.count("G") + seqs.str.count("C")) / 6.0
+
+A model was fitted on the features proposed so far. What it reported:
+{
+  "auroc": 0.71,
+  "unused": [
+    "at_share"
+  ]
+}
+
+Propose features that address what this shows -- what the model could not use, what it leaned on and might be over-relying on, or what the errors suggest is missing.
+
+Answer with a JSON array only, no other text:
+[
+  {
+    "name": "<identifier>",
+    "description": "<one sentence, what it computes>",
+    "rationale": "<one sentence, why it might predict the outcome>",
+    "code": "<the function definition>"
+  }
+]

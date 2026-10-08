@@ -1,0 +1,17 @@
+# Engine settings for a standard chat model.
+#
+# Provider differences -- request shape, which parameters are supported, `max_tokens` versus
+# `max_completion_tokens` -- are LiteLLM's problem, not ours. `drop_params` is set in the
+# engine, so a model that rejects `temperature` simply does not receive it.
+_target_: deft.llm.engines.litellm_engine.LiteLLMEngine
+content: ${content}
+config: ${llm_models}
+temperature: 1
+top_p: 0.95
+max_tokens: 500
+# Retries are LiteLLM's, with backoff on rate limits and timeouts. Non-retryable errors -- bad
+# key, missing deployment, rejected request -- are re-raised immediately instead.
+num_retries: 5
+request_timeout: 20
+# Cap on completions per request, if the provider has one. null means no cap.
+max_n_per_request: null

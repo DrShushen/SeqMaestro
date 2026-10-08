@@ -1,0 +1,20 @@
+# Plain CART, as a baseline for a DEFT run: axis-aligned splits on the data as given, with
+# nothing generated. No language model, so no API call, no credentials and no cost.
+#
+# It is the *same* tree, splitting criterion, threshold search and stopping rules as a DEFT
+# run, so a comparison against it isolates the feature generation and nothing else. An external
+# CART would differ in a dozen small ways that have nothing to do with the question.
+#
+# Its candidates are exactly the population DEFT seeds every node with (`get_naive_features`):
+# one indicator per position and nucleotide for the sequence column, the value itself for a
+# numeric covariate, one indicator per level for a low-cardinality categorical one. So it works
+# on sequence data, and -- because it is the *same* population -- `llm_split_share` from a DEFT
+# run and this baseline are scored against the same yardstick.
+#
+#     python experiments/deft_tree.py --config-name=config \
+#         feature_finder=cart dataset.csv_path=train.csv dataset.target_column=label
+#
+# The integrity policy does not apply and `run_experiment` says so and skips it. That policy
+# asks "did the language model actually contribute?", and here the answer is no by
+# construction -- leaving it on would fail every run at the first node.
+_target_: deft.features.feature_finder.CartFeatureFinder

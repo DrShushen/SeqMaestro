@@ -1,0 +1,62 @@
+# What was decided when data/example/splits was built, by
+# experiments/prepare/build_example_dataset.py. finalise_dataset.py counts and checks everything
+# else. Fields: docs/dataset.md.
+#
+#   python experiments/prepare/finalise_dataset.py \
+#       --splits data/example/splits \
+#       --declared experiments/prepare/declarations/example__splits.yaml
+#
+# The dataset is synthetic, and this file is the worked example of a declaration: each answer is
+# written the way a real dataset's is.
+
+columns:
+  sequence: sequence
+  target: bound
+  weight: null
+
+target:
+  kind: binary
+
+classes:
+  1:
+    name: bound
+    meaning: candidate sites where the factor was found bound
+  0:
+    name: not bound
+    meaning: candidate sites where the factor was not found bound
+
+sequences:
+  window: >-
+    60 nt of DNA cut around the centre of one candidate binding site. The sites are delivered
+    longer than the window, so the sequence more than 30 nt from the centre is not shown
+  anchor: the centre of the site, which is position 30 of the window
+  orientation: >-
+    as generated, in upper case. The sequences are random and have no strand, so there is no
+    orientation to verify, and a feature must not assume that one end is upstream of the other
+  length: 60
+
+split:
+  method: StratifiedGroupKFold over 10 folds; 7 train, 1 validation, 2 test
+  grouped_by: [region]
+  stratified_on: [bound]
+  seed: 20261008
+
+filters:
+  - step: sites delivered shorter than the 60 nt window dropped
+    why: >-
+      a position has to be the same distance from the site in every row, which takes one window
+      for all of them, and a site delivered shorter than the window cannot supply it. The bound
+      sites are delivered longer, so the cut removes a tenth of them and a fifth of the others
+    rows_in: {1: 600, 0: 600}
+    rows_out: {1: 540, 0: 480}
+
+sources:
+  - path: raw/sites.csv
+    note: written by the builder, where a real dataset has the delivered files and their digests
+
+builders:
+  - experiments/prepare/build_example_dataset.py
+
+notes: >-
+  Synthetic. The sequences are random bases, and 70% of the bound sites carry the motif GATTACA
+  centred on the site, at positions 27 to 33 of the window. That motif is all a run can find here.

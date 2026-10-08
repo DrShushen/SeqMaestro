@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=62.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deft"
+version = "0.1.0"
+description = "DEFT: interpretable DNA sequence classification via dynamic feature generation in decision trees. Vendored into SeqMaestro and reduced to the DEFT method itself."
+# Upstream pinned <3.11 for torch/transformers, which are gone. The ceiling that replaced it
+# was caution, not evidence, and it is now removed: the full suite passes identically on 3.10
+# and 3.12 -- 307 passed on both, including the live-API tests, and the 3.12 run was against
+# numpy 2.4 / pandas 3.0 / pytest 9. `litellm` caps the resolver at <3.15 in any case.
+requires-python = ">=3.10"
+
+# Only what the DEFT method itself imports. Verified against a transitive import graph from
+# the CLI entry point plus every Hydra `_target_` on the DEFT config path.
+dependencies = [
+    "dill>=0.3.8",          # tree serialization; features are exec'd callables, so pickle cannot
+    "hydra-core>=1.3",      # config composition and the run directory
+    # The single LLM client. The floor is a version validated against live Azure traffic;
+    # it also keeps the Claude-on-Azure-Foundry path open, which needs >= 1.92 for the adaptive
+    # thinking wire shape.
+    "litellm>=1.92",
+    "numpy>=1.26",
+    "omegaconf>=2.3",       # config objects the engine accepts directly
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "python-dotenv>=1.0",  # tests only: loads credentials from the SeqMaestro root .env
+    "ruff>=0.6",
+]
+
+[project.scripts]
+deft-tree = "deft.cli.deft_tree:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+# A real src layout: `src/` is a container, not a package. The distribution is `deft` and so is
+# the import -- previously the top-level package was literally `src`, which is the collision the
+# src layout exists to prevent, wearing the same directory name.
+where = ["src"]
+
+[tool.setuptools.package-data]
+"deft" = ["conf/*.yaml", "conf/*/*.yaml"]
+
+[tool.ruff]
+# Pinned rather than left to ruff's defaults, which have widened between releases -- an
+# unconfigured `ruff check` reported a different set on 0.16 than it did on 0.6.
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# `I` is the point of most of this: import order was drifting file by file. The rest is the
+# usual correctness-and-modernisation set. Deliberately absent: the security (`S`) and
+# blind-except (`BLE`) families, because this code `exec`s model-generated Python on purpose
+# and swallows exceptions on purpose -- both are the method, documented where they happen, and
+# flagging them every run would train the reader to ignore the output.
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PIE", "RUF"]
+ignore = [
+    # Upstream style, harmless and not worth a diff across every file.
+    "E741",    # ambiguous variable names (`l`, `N`)
+    "RUF059",  # unused unpacked variable
+    "B008",    # function call in a default argument
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests import inside a function on purpose, to keep a heavy import out of collection.
+"tests/*" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["deft", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "llm: test that makes real LLM API calls (needs credentials; costs tokens)",
+]
+# `optimize_threshold` guards itself with SIGALRM, which only works on the main thread, so
+# these must not run under pytest-xdist.
+addopts = "-p no:cacheprovider"

@@ -1,0 +1,15 @@
+# The run of the example dataset, which experiments/prepare/build_example_dataset.py builds
+# (experiments/prepare/README.md). It states what every dataset's config states and no more, so it
+# runs the shared grid and the shared arms as they are.
+extends: _shared.yaml
+name: example
+description: >
+  Sixty nucleotides around a made-up binding site, labelled by whether the factor was found bound.
+  The data is synthetic: random bases, with one motif planted at the centre of most bound sites. A
+  run on it shows what each stage produces, and says nothing about biology.
+
+dataset:
+  task: example
+  blinded: false
+  # The columns and the classes are stated by the dataset, in data/example/splits/dataset.json.
+  splits: data/example/splits

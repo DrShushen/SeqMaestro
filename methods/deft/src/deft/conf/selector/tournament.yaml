@@ -1,0 +1,3 @@
+_target_: deft.utils.selection.TournamentSelector
+tournament_size: 2
+random_state: ${oc.select:random_state,42}

@@ -1,0 +1,4 @@
+# NOTE: Azure *openai* models via AzureOpenAI API.
+# llm:
+kind: azure
+api_version: "2025-03-01-preview"

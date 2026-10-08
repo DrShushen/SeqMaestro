@@ -1,0 +1,10 @@
+# SeqMaestro's Azure OpenAI deployment, read from the SEQMAESTRO_AZURE_* variables of SeqMaestro's
+# root .env, exported before the run, as DEFT's vendored copy reads them. Nothing here holds a key.
+defaults:
+  - azure_base
+  - _self_
+
+deployment: ${oc.env:SEQMAESTRO_AZURE_OPENAI_DEPLOYMENT}
+endpoint: ${oc.env:SEQMAESTRO_AZURE_OPENAI_ENDPOINT}
+api_key: ${oc.env:SEQMAESTRO_AZURE_OPENAI_KEY}
+api_version: ${oc.env:SEQMAESTRO_AZURE_OPENAI_API_VERSION,2025-04-01-preview}

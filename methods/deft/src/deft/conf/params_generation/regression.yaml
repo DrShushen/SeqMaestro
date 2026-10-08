@@ -1,0 +1,80 @@
+# The default prompts, written for a continuous target (`dataset.target_kind: continuous`).
+#
+# Only what names the task changes: the default asks for a feature that is discriminative for
+# classifying the target, and these ask for one that separates rows with a higher value of it from
+# rows with a lower one. The scores the reflection shows are the squared-error criterion's, higher
+# being better, as they are for the classification criteria. As with the default, set
+# `target_name` and `dataset_info` for your task in a config that inherits this one.
+defaults:
+  - default
+  - _self_
+
+target_kind: continuous
+
+dataset_info: >-
+  This is a regression dataset: the target is a number. The columns available to you, with their
+  types and ranges, are described below.
+
+context_template_name_desc: >-
+  Your goal is to help with the task of growing a decision tree to predict {target_name}.
+  {dataset_info} Given a current node that we want to split in the tree, you will construct a
+  new feature from the columns described above, such that this new feature separates the rows
+  with a higher {target_name} from the rows with a lower one.
+
+list_instructions_reflection:
+  - >-
+    Your goal is to help with the task of growing a decision tree to predict the target, which is
+    a number. Given a current node that we want to split in the tree, you will construct a new
+    feature from the columns described above, such that this new feature separates the rows with
+    a higher value of the target from the rows with a lower one. The feature should be: 1.
+    Interpretable - based on a plausible mechanism and intuitive for a domain expert. 2.
+    Computationally clear - specify exact columns and calculation methods. 3. Complementary to
+    previous splitting conditions from the root to the current node. Your new feature should not
+    be redundant with the splitting condition features. This point is very important because the
+    dataset at the current node can be small, and you have to avoid overfitting. I am going to
+    give you an initial population of features with their respective scores (higher is better).
+    The feature you generate should be as different as possible from the initial population in
+    order to explore new ideas. Another important point: The feature should be interpretable. To
+    assess interpretability, please consider the following aspects: 1) Simplicity: it should be
+    simple and easy to understand. An interpretable feature should not be overly complex (and not
+    involve multiple complex phenomena). Hence features which incorporate too many distinct
+    components are NOT simple and should not be generated. 2) Intuitiveness: The feature should
+    be intuitive and easy to explain. 3) Relevance: the feature should be relevant to the
+    prediction task. Return three things: 1. Rationale: describe step by step how you came up
+    with this feature, taking into account BOTH the splitting conditions and the population of
+    candidate features. If your feature involves a specific mechanism, say why it is relevant.
+    2. Description: precise calculation method. 3. Name: clear and descriptive. Return in the
+    following JSON format:
+
+    {"rationale": "your_rationale", "description": "your_feature_description", "name": "your_feature_name"}
+
+    Only return the JSON object, with no additional text. Do not include "json" in front of it
+  - >-
+    Your goal is to help with the task of growing a decision tree to predict the target, which is
+    a number. Given a current node that we want to split in the tree, you will construct a new
+    feature from the columns described above, such that this new feature separates the rows with
+    a higher value of the target from the rows with a lower one. The feature should be: 1.
+    Interpretable - based on a plausible mechanism and intuitive for a domain expert. 2.
+    Computationally clear - specify exact columns and calculation methods. 3. Complementary to
+    previous splitting conditions from the root to the current node. Your new feature should not
+    be redundant with the splitting condition features. This point is very important because the
+    dataset at the current node can be small, and you have to avoid overfitting. I am going to
+    give you an initial population of features with their respective scores (higher is better).
+    Very important: First identify common ideas of the top performing solutions in the
+    population. Then base your feature on these common ideas and simplify them to get one good
+    feature, but do not simply combine these common ideas (do not just add them for example, that
+    would create too much complexity). Another important point: The feature should be
+    interpretable. To assess interpretability, please consider the following aspects: 1)
+    Simplicity: it should be simple and easy to understand. An interpretable feature should not be
+    overly complex (and not involve multiple complex phenomena). Hence features which incorporate
+    too many distinct components are NOT simple and should not be generated. 2) Intuitiveness:
+    The feature should be intuitive and easy to explain. 3) Relevance: the feature should be
+    relevant to the prediction task. Return three things: 1. Rationale: describe step by step how
+    you came up with this feature, taking into account BOTH the splitting conditions and the
+    population of candidate features. If your feature involves a specific mechanism, say why it is
+    relevant. 2. Description: precise calculation method. 3. Name: clear and descriptive. Return
+    in the following JSON format:
+
+    {"rationale": "your_rationale", "description": "your_feature_description", "name": "your_feature_name"}
+
+    Only return the JSON object, with no additional text. Do not include "json" in front of it

@@ -1,0 +1,18 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Hydra run directories
+logs/
+outputs/
+multirun/
+
+# Environment files (API keys, secrets).
+# SeqMaestro runs read the repo-root .env; nothing here should ever hold a key.
+.env
+.env.*
+
+# Note: `methods/*/data/` is already ignored by the SeqMaestro root .gitignore, so the
+# polymerase CSVs under data/ live on disk but are not tracked.

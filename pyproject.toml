@@ -1,0 +1,138 @@
+[build-system]
+requires = ["setuptools>=62.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seqmaestro"
+version = "0.1.0"
+description = "SeqMaestro: interpretable feature discovery from nucleic acid sequence. Shared featurisation, evaluation harness and language-model proposer -- the code that is neither a vendored method nor a single experiment."
+# The version SeqMaestro is built, tested and run on: `SeqMaestro_Core` is 3.12, which is also the
+# floor for current `xgboost` (>= 3.3.0). A lower floor would claim support nothing
+# tests, and the test suite reads `pyproject.toml` with `tomllib`, which is in the standard library
+# only from 3.11. No method environment needs SeqMaestro installed, because the two sides exchange
+# files and never import each other. If that changes, lower this only on evidence. See
+# ENVIRONMENTS.md.
+requires-python = ">=3.12"
+
+# The base dependencies stay small so the package is cheap to install anywhere. Anything heavier
+# goes behind an extra below, so a method environment can take the featuriser without also taking
+# a boosting library or an LLM client.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "scikit-learn>=1.6",  # the sparse linear models, and the floor interpret-core sets
+    # Arrives transitively with scikit-learn, but the harness imports it directly (Hungarian
+    # assignment, rank transforms), so it is declared explicitly.
+    "scipy>=1.11",
+    # Arrives with scikit-learn too. The reliability panel and the time estimate import it to hold
+    # the numeric libraries to one thread inside a worker.
+    "threadpoolctl>=3.1",
+]
+
+[project.optional-dependencies]
+# The models fitted in Core beside the sparse linear ones: EBM and XGBoost, on any pool.
+models = [
+    # `interpret-core`, not `interpret`: the meta-package pulls dash, plotly, notebook and shap
+    # through extras, none of which are needed to fit an EBM and read its shape functions.
+    "interpret-core>=0.7",
+    # xgboost requires Python 3.12 from 3.3.0, which is the reason this package's floor is 3.12.
+    # Resolves to 3.4.x here. Its own TreeSHAP gives the direction of each feature, so no separate
+    # SHAP package is needed.
+    "xgboost>=3.3",
+]
+# The proposer, the judge and the recurrence analysis. DEFT uses the same client and declares it
+# independently.
+llm = [
+    "litellm>=1.92",
+]
+# What driving a run needs (`seqmaestro.pipeline`): `psutil` to probe the machine and measure the
+# processes a run starts (`seqmaestro.execution`), and `pyyaml` to read a run's config
+# (`seqmaestro/pipeline/config.py`). Nothing a cell computes imports either.
+driver = [
+    "psutil>=5.9",
+    "pyyaml>=6.0",
+]
+# Reporting after a run and one-off analysis, which turn a finished run into something to hand to
+# somebody: the report's figures, the last stage of a run, and spreadsheets. No number depends on
+# any of it, so it is an extra and not a base dependency, and it is installed in its own
+# environment and not in `SeqMaestro_Core`. See ENVIRONMENTS.md.
+localutils = [
+    "openpyxl>=3.1",  # writing .xlsx for collaborators who want to filter and sort
+    # Drawing a report's figures from the JSON the report build exports. `seqmaestro.report.figures`
+    # is the only importer, and nothing in Core imports that.
+    "matplotlib>=3.8",
+    # Arrives with matplotlib. The script that draws the figures opens each one to measure its
+    # shape, so it imports Pillow directly, and a direct import is declared.
+    "pillow>=10.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.6",   # the suite runs in parallel by default; see `addopts` below
+    "ruff>=0.6",
+    # Read by the test that checks the hand-written DEFT prompt configs under
+    # `experiments/adapters/deft_conf/` inherit DEFT's defaults, and by the experiment scripts that
+    # read a declaration. The `driver` extra declares it for the package.
+    "pyyaml>=6.0",
+    # The reference the reliability panel's multiplicity corrections are tested against. The panel
+    # implements BH, BY and Holm itself (`seqmaestro/reliability/multitest.py`), so nothing outside
+    # the tests imports it.
+    "statsmodels>=0.14",
+]
+
+[tool.setuptools.packages.find]
+# Flat layout, so discovery must be explicit: `tests`, `experiments`, `methods` and `data` are
+# all top-level directories and auto-discovery would either grab them or refuse to guess.
+include = ["seqmaestro*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"  # tracks `requires-python`'s floor
+# Vendored methods are linted from their own directory with their own config (`methods/deft` has
+# its own `[tool.ruff]`). Linting them from here would produce a result that belongs to neither
+# package.
+extend-exclude = ["methods"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "C4", "PIE", "RUF"]
+ignore = [
+    "B008",  # function call in a default argument
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["seqmaestro", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# `norecursedirs` is what keeps a root run out of `methods/`, and `testpaths` does not make it
+# redundant. When `testpaths` matches nothing, pytest warns `No files were found in testpaths ...
+# Searching recursively from the current directory instead` and collects `methods/deft/tests`
+# under this interpreter. The result is mostly green, from an environment DEFT is not tested in,
+# which is worse than a red one. Each package is tested from its own directory, with its own
+# interpreter; see ENVIRONMENTS.md.
+#
+# The first nine entries are pytest's own defaults, which are replaced rather than extended
+# when this key is set.
+norecursedirs = [
+    "*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}",
+    "methods",      # vendored methods: own environment, own suite
+    "experiments",  # run scripts, with no tests of their own; testable logic belongs in seqmaestro/
+    "data",
+]
+
+markers = [
+    "llm: test that makes real LLM API calls (needs credentials; costs tokens)",
+    "crossenv: test that runs a vendored method in its own conda environment via subprocess; skips when that environment is absent",
+]
+# Parallel by default. `-n 0` turns it off, which helps when debugging a single failure, because
+# output stops interleaving and tracebacks arrive in order.
+#
+# Six workers, not every core. Measured 2026-08-06 on 20 cores, the suite took 166 s sequentially
+# and 86 s, 47 s, 32 s, 26 s and 22 s with 2, 4, 6, 8 and 16 workers. The curve bends at about six,
+# and the floor of about 20 s is per-worker import cost, so more cores buy little, and this project
+# runs long measurements alongside its tests.
+#
+# `tests/conftest.py` caps each worker at one BLAS thread, and the suite depends on that cap:
+# without it, twenty workers ask for four hundred threads on twenty cores and `-n auto` is slower
+# than sequential.
+addopts = "-p no:cacheprovider -n 6"

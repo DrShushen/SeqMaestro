@@ -1,0 +1,6 @@
+# The Claude API, read from the SEQMAESTRO_CLAUDE_* variables of SeqMaestro's root .env, exported
+# before the run. Nothing here holds a key. `deployment` is the model's name as the API lists it,
+# such as claude-sonnet-5-5.
+kind: anthropic
+deployment: ${oc.env:SEQMAESTRO_CLAUDE_MODEL}
+api_key: ${oc.env:SEQMAESTRO_CLAUDE_KEY}

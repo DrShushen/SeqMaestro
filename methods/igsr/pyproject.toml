@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=62.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "igsr"
+version = "0.1.0"
+description = "IGSR: influence-guided symbolic regression with a language model in the loop. Vendored into SeqMaestro and reduced to the method itself."
+requires-python = ">=3.10"
+
+# Only what the IGSR method imports: the search, the agent, the influence and the term
+# languages. The baselines, dataset loaders and plotting of the upstream repository are not
+# part of the copy, and neither are their dependencies.
+dependencies = [
+    "hydra-core>=1.3.2",    # config composition
+    "litellm",              # the single LLM client
+    "numpy",
+    "omegaconf>=2.3.0",
+    "openai",               # the retry handler catches its error type
+    "pandas",
+    "scikit-learn",         # the least-squares fits and the metrics
+    "structlog",
+    "tabulate",             # pandas' to_markdown, which renders the pruner's table
+    "tenacity",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",               # tests only: builds the rate-limit responses the retry tests raise
+    "networkx",            # tests only: the tree search's graph, which four of its tests inspect
+    "pytest>=8.0",
+    "python-dotenv>=1.0",  # tests only: loads credentials from the SeqMaestro root .env
+    "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"igsr" = ["conf/*.yaml", "conf/*/*.yaml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+# Upstream's lint settings: ruff's default rules as they were when upstream wrote `extend-select`,
+# plus import order. Stated in full, since later ruff releases widened the default set.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["igsr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+markers = [
+    "slow: a test that calls a live language model (needs credentials; costs tokens); deselect with '-m \"not slow\"'",
+]

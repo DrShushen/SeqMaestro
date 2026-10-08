@@ -1,0 +1,28 @@
+# experiment:
+n_seeds: 10  # Number of seeds to run
+max_workers_seeds: "auto"  # Maximum number of workers to run seeds in parallel (int) or "auto"= use all cores.
+max_agent_steps: 10  # Max reasoning steps for the agent per iteration
+loss: "mse"  # one of [mse, bce]
+best_result_metric: "mse"  # one of the metric names.
+max_retry_seed: 5  # Maximum number of retries for each seed.
+retry_attempts: 10  # Number of retry attempts for LLM call stage.
+do_not_parallelize: false  # If true, run in serial.
+
+# For parallel runs only:
+use_timeoutable_parallelism: false  # The experimental seed parallelization that allows for timeout.
+process_timeout_seconds: null  # Maximum number of seconds to run the process. If null, no timeout. Only applies if use_timeoutable_parallelism is true.
+
+
+
+# How a term is written: `expression`, a numpy expression over numeric columns, which is the
+# method as published, or `function`, a Python function of the rows, which can read text columns
+# of any length. See `igsr/method/function_terms.py`.
+term_language: expression
+
+# ----------------------------------------------------------------------------------------------------------------------
+# To avoid failures on missing config...
+fallback_ridge_small_alpha_for_stability: false
+error_on_all_weights_zero: false
+tree: false
+n_iters: 0
+additional_validation_of_terms: false

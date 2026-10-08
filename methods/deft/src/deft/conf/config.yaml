@@ -1,0 +1,45 @@
+max_depth: 6
+min_samples_leaf_fraction: 0.01
+random_state: 42
+
+# Refuse to start in a directory that already holds a run's artifacts. Hydra's timestamped
+# directories only resolve to the second, so a scripted multi-seed sweep can land two runs in
+# one directory, where they interleave and silently corrupt each other's record. Set true only
+# if you mean to overwrite.
+allow_run_dir_reuse: false
+
+hydra:
+  job:
+    # Do not change the process working directory into the run directory. Hydra's
+    # 1.1-compatible default does, which makes any relative path given on the command line
+    # resolve somewhere the caller did not intend -- `dataset.csv_path` most of all, which is
+    # now mandatory and usually given as a relative path.
+    chdir: false
+
+content: "You are an expert in biology and DNA sequences."
+
+defaults:
+  # Prompts, and task-neutral: this package describes no dataset. Set `target_name` and
+  # `dataset_info`, or put your own group config on hydra's search path with `--config-dir`.
+  # A wrong task description is otherwise silent -- see `params_generation/default.yaml`.
+  - params_generation: default
+  - selector: topk
+  - llm_models: generic_user
+  - llm: default
+  - feature_finder: default
+  # `csv_path` is mandatory and unset, so a bare `--config-name=config` stops with a missing
+  # -value error until a dataset is named. That is deliberate: there is no default dataset.
+  - dataset: generic_csv
+  - splitting_criterion: gini
+  - tree: default
+  # Fails the run when the language model did not actually contribute, instead of quietly
+  # building the tree out of naive features. Override with `integrity=warn_only` or
+  # `integrity=off`; strict.yaml explains what the problem is and what each setting does.
+  - integrity: strict
+  # Token accounting, always on; spend limits, opt-in. `unlimited` measures without capping.
+  # `budget=pilot` is a worked capped example; unlimited.yaml explains what a limit does.
+  - budget: unlimited
+  # Constrains what the model-generated feature code may do before it is exec'd. `code_guard=off`
+  # restores upstream's behaviour; strict.yaml explains the threat and the limits of the guard.
+  - code_guard: strict
+  - _self_

@@ -1,0 +1,203 @@
+# What every dataset's run has in common. It is not runnable on its own, because it names no
+# dataset. Each dataset config `extends` this and states only what is its own: `null` removes an
+# arm, and any key written again replaces what is here.
+
+grid:
+  # Five seeds. Stability is a mean over seed *pairs*, so five seeds give ten pairs where three
+  # would give three, and the permuted null is estimated from as many draws as there are seeds.
+  # Both are too thin with three seeds.
+  seeds: [42, 43, 44, 45, 46]
+  labels: [real, permuted]
+  # The share of the training rows each seed fits on, drawn anew per seed and kept in the target's
+  # proportions. Most models here give the same fit on the same rows, so the draw is what makes two
+  # seeds differ, and the stability of an arm is measured across it. Every arm and the baseline
+  # fit on the same rows at a seed.
+  train_fraction: 0.8
+  # The same count for every dataset, so their intervals are comparable. Each draw scores every
+  # row of the split again, so the cost of a larger count grows with the rows, while the ends of a
+  # percentile interval move little past a few hundred draws.
+  n_bootstrap: 200
+  # How many independent nulls the run has. `seed` shares one shuffled label vector across every
+  # arm of a seed, so the null's level rests on as many draws as there are seeds, and a draw
+  # landing above chance lands there in every arm at once. `cell` draws per arm, giving one null
+  # per cell, so the level can be averaged and quoted with an interval. How far one draw lands from
+  # chance grows with how much of the signal one feature carries: a model fitted to shuffled labels
+  # still picks a direction, which can fall along that feature with either sign. On such data the
+  # null needs every seed here, or `cell` where it has to be quoted with an interval
+  # (docs/report/components/10_evaluation.binary.md).
+  permutation_scope: seed
+  # Applies to every arm, including the two tree arms. Both sides resolve `balanced` to
+  # scikit-learn's `n_samples / (n_classes * count)`, which makes the arms comparable on a dataset
+  # whose positive rate is far from a half. On a balanced dataset the weights are 1.0 and this is a
+  # no-op, so the same setting suits every dataset.
+  class_weight: balanced
+  # Shuffles per feature for the permutation importance, which is measured the same way for every
+  # arm, so it is the number to use when arms are compared with each other. Each repeat is one
+  # prediction pass per feature, so its cost grows with the width of the pool. 0 skips it, and a
+  # grid run without it cannot be given it later without being run again.
+  #
+  # Off, because **nothing reads this column**: every analysis takes its top-N by the model's own
+  # importance, and neither the reduction, the panel, the judge nor the report uses it. Set it above
+  # 0 when something does. See docs/feature_record.md.
+  permutation_repeats: 0
+  # Whether the significance judge runs (docs/analyses/judge.md). It asks a language model about
+  # the most important features of each cell, several times each (`analyses`, below), so its calls
+  # grow with the arms and the seeds, and nothing after Stage 2 depends on its scores.
+  # `judge: true` in a dataset's config runs it.
+  judge: false
+  # Whether the judge, when it runs, is told which class each feature runs with. It is shown the
+  # sign of the marginal effect and never its size, so the permuted-label controls stay
+  # indistinguishable from the real features. It sharpens the question from "is this feature
+  # plausible" to "is this claim plausible". That is a better instrument but a different one, so
+  # judge scores from a run with this on cannot be compared with scores from a run with it off.
+  judge_direction: true
+  # How the arms that run a language model's code treat a feature it wrote that fails on the rows.
+  # Stated once here, so that every such arm generates under one policy.
+  generated_features:
+    # Times a round's failed candidates (raised, too slow, wrong shape, too often undefined,
+    # constant) go back to the model with their failures. One call recovers a feature whose code
+    # missed a case, such as a short sequence, for the price of a call. 0 sends nothing back.
+    repair_rounds: 1
+    # A feature undefined (NaN) on up to this share of rows is kept and filled with its median;
+    # above it, it is mostly a statement about which rows it cannot measure, and is dropped.
+    max_undefined_share: 0.2
+    # The longest, in whole seconds, one feature may run on the rows it is checked on. A feature
+    # whose cost grows with the square or cube of a sequence's length finishes in seconds on a few
+    # hundred bases and runs for days on several thousand, holding up its whole arm. Past this
+    # limit it has failed like any other, and on more rows it is given proportionally longer. IGSR
+    # takes the same limit for each term on each split. DEFT stops a feature after 60 seconds, a
+    # number fixed in its code.
+    max_seconds: 60
+    # Characters of one sequence an example in a prompt shows. A longer one is shown by its ends.
+    max_example_length: 300
+
+# How the Stage 2 analyses take the run's cells. Each decides what a table of the run holds, so
+# they are settings of the run, and an analysis started by hand takes them from the run's recorded
+# config as the driver's does.
+analyses:
+  # The features of a cell an analysis takes: its most important, by the model's importance.
+  # Models differ by orders of magnitude in how many features they use, and a comparison of a
+  # 400-feature set with a 15-feature one measures their sizes, so every analysis cuts at one rank.
+  top_n: 20
+  # The judge, where `grid.judge` has it run.
+  judge:
+    # Independent ratings of each feature. Their spread says how repeatable a rating is.
+    repeats: 3
+    # Whether the judge is shown each feature's code beside its description.
+    show_code: false
+    # The label conditions whose features are rated. A language-model proposer writes much the
+    # same features on shuffled labels, so rating those would rate one panel twice
+    # (docs/analyses/judge.md).
+    labels: [real]
+    # The share of the panel that must get a rating. Below it the judge's stage fails.
+    min_answered: 0.9
+    # Seeds the order the panel is presented in.
+    seed: 0
+  # The recurrence analysis (docs/analyses/recurrence.md).
+  recurrence:
+    # The kinds of feature grouped: those a language model wrote. A positional split is drawn from
+    # an enumeration, so its recurrence is arithmetic.
+    kinds: [llm_generated]
+    # The size of group the grouping request asks for, the same for both label conditions.
+    items_per_group: 6
+    # Permutations behind the recurrence null.
+    draws: 2000
+    # Whether every arm's features are also grouped together in one pass, which is what can say
+    # that two arms reached one idea.
+    across_arms: true
+    # Seeds the order the features are listed in, and the null.
+    seed: 0
+
+# How each source the pools below hold is computed, stated once for the run. A source no pool holds
+# is not set: a config that extends this one and drops every pool holding one sets it to null.
+# `llm_generated` stays while a pool holds `llm_generated_iterative`, which writes with its settings.
+sources:
+  kmer:
+    k_range: [1, 6]
+    # Counts as they are. `per_length` divides each by the k-mer positions in its sequence, so that
+    # a count does not carry the sequence's length (docs/dataset.md).
+    normalise: counts
+  llm_generated:
+    # Calls per proposal, each told the names proposed before it; features asked for per call; and
+    # labelled rows shown. The iterative source writes with the same settings. Each arm, labels and
+    # seed has a proposal of its own: no two arms share one.
+    proposal_rounds: 3
+    n_per_round: 10
+    n_examples: 20
+  llm_generated_iterative:
+    # Rounds after the blind first one, each shown a fit of the arm's model: five rounds in all.
+    # Each further round is one more request and one more fit of the arm's model in every cell.
+    feedback_rounds: 4
+
+# Settings of the models that take any: their methods' configurations, passed verbatim.
+models:
+  deft_or_cart:
+    # The DEFT paper uses 20 reflections and 20 samples per prompt, which costs an order of
+    # magnitude more tokens per node. Reflection is part of the method and not overhead, so it is
+    # reduced here and not removed. Each run records the per-node cost at these settings. CART
+    # builds no language model and ignores them. Which language model DEFT calls is no setting
+    # of a config: it is the one the environment names for the whole run (.env.example).
+    config_overrides:
+      - params_generation.n_reflections=5
+      - params_generation.n_samples_per_prompt=10
+
+# Each pool, and the models fitted on it. An arm is one model on one pool, and the driver offers the
+# arms the machine in the order written here, so the cheap ones come first. `l1` is l1_logistic for
+# a binary target and l1_linear for a continuous one. Every arm is reduced and profiled unless its
+# entry leaves it out with a reason, `not_reduced: {model: reason}` or `not_profiled: {model:
+# reason}`. XGBoost is a black box, which the panel leaves out by itself.
+arms:
+  positional:
+    # `pysr` is one equation found by PySR's symbolic search (`seqmaestro/models/symbolic.py`),
+    # whose search runs in SeqMaestro_Method_pysr. A search's cost is set by the rows and the
+    # iterations far more than by the columns, so it takes the positional pool as every model does.
+    # `deft_or_cart` here is CART: DEFT's tree over its naive candidates, with no language model.
+    models: [l1, ebm, xgboost, pysr, deft_or_cart]
+  llm_generated:
+    # Every model that can consume a proposal, so the pool axis is read against the same four
+    # models as `positional`.
+    models: [l1, ebm, xgboost, pysr]
+  llm_generated_iterative:
+    # The same proposer, shown each round what a fit of the arm's model made of the features so far.
+    # `l1` reports the sign of every weight, which is the feedback a proposer can act on most
+    # directly: "this counts against the outcome" is a different instruction from "this is unused".
+    # `pysr` shows the proposer its equation, and each of its informed rounds is one more search.
+    # A pool with a vocabulary beside the proposal, such as `kmer+llm_generated_iterative`, shows
+    # each informed round which of those columns the fit leaned on too (README, Arms).
+    models: [l1, ebm, xgboost, pysr]
+  positional+llm_generated_joint:
+    # DEFT: the same tree as CART above, with a language model writing candidates at each node.
+    models: [deft_or_cart]
+  positional+kmer:
+    # EBM is left out because it boosts round-robin over columns, so its cost grows with the width
+    # of a k-mer vocabulary. PySR is left out because among thousands of k-mer counts a search has
+    # little chance of finding the ones that matter. Either may be added, and the time estimate
+    # says what it would cost on the dataset at hand.
+    models: [l1, xgboost]
+
+# Stage 3A: every arm cut to a model of this many features, at its best validation seed, but those
+# an entry of `arms` lists under `not_reduced`. See docs/reduction.md.
+reduction:
+  n_features: 10
+
+# Stage 3B: the reliability panel of every reduced arm whose model can be read feature by feature,
+# but those an entry of `arms` lists under `not_profiled`. See docs/reliability.md.
+reliability:
+  # Complementary pairs behind Tier 1: 2B selections per arm. The bound holds at any B, so a run
+  # with a slow arm may set fewer, for every arm, and each arm's record states the number.
+  pairs: 50
+  # Label permutations behind Tier 2. The smallest p-value is 1/(permutations + 1), and calling
+  # the single most associated of p features at BH q needs it below q/p: 100,000 reaches that for
+  # pools of up to 5,000 candidates at q = 0.05.
+  permutations: 100000
+  # Every pair inside a cluster agrees at least this much, in absolute Spearman correlation.
+  cluster_rho: 0.8
+  # Drop a candidate whose commonest value covers more than this share of train + val.
+  max_modal_share: 0.99
+  # The planted-signal check: this many real columns, a linear predictor of this spread.
+  planted_count: 5
+  planted_signal_sd: 1.5
+  # The arm that carries the global-null and planted-signal reruns of Tier 1: the whole positional
+  # vocabulary as its pool, large and heavily correlated, and cheap to fit.
+  check_arm: l1/positional
+  seed: 0

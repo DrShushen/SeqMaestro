@@ -1,0 +1,96 @@
+defaults:
+  - experiment_base
+  - _self_
+
+max_retry_seed: 5  # Maximum number of retries for each seed.
+max_agent_steps: 5  # Max reasoning steps for the agent per iteration
+allow_error_history_length: 15  # Allow the run to count as successful, on error, if the history length is less than this.
+
+# igsr:
+kind: igsr
+best_result_metric: "mse"
+
+# prompting:
+terms_per_round: 5
+first_round_n_candidates: 10
+keep_n_terms: 6  # **NOTE** Set to None (null) to disable.
+
+# monitoring/logging:
+print_prompts: false
+save_new_terms: false  # records new terms to a json file in the run directory if true.
+
+# For non tree only
+n_iters: 30
+
+# search:
+tree: True   # False -- just ICL.
+total_budget: 30
+depth_limit: 10
+n_successors: 5
+c: 1.41421356
+# ---
+rollout_is_just_node_reward: True
+rollout_depth: 1  # N/A if rollout_is_just_node_reward is True.
+
+influence_feedback: True
+history_enabled: True
+refit_aware: false           # If true, compute refit-aware influence on validation
+refit_aware_efficient: false # If true, use efficient partitioned-inverse for linear/ridge
+
+# Dataset preview prompt configuration:
+preview_N_elements: 50  # Number of elements to preview in the dataset, for each feature.
+# RNAPol-dataset, special experiment variants:
+collapse_seq_feats: false
+# ^ If true, collapse sequence features seq_{N}__A/T/G/C to only show the first and last N, e.g. 1st and 50th position.
+# Applies analogously to the negative side seq_neg{N}__A/T/G/C. Only relevant to the rnapol datasets. Not core to the method.
+focus_on_seq_feats: false  # Add a nudge to specifically look at sequence features -- a form of domain knowledge / inductive bias.
+
+algorithmic_pruning: False
+
+# XGBoost predictor ablation/variant, set to true.
+use_xgb_predictor: false
+
+# Simplified prompts variant:
+simplified_prompts: false
+
+# Early stopping
+early_stop_enabled: True
+early_stop_patience: 10
+
+# Optimization
+optimization_method: linear  # linear, ridge, lasso
+# possibly add some parameters.
+fallback_ridge_small_alpha_for_stability: false
+error_on_all_weights_zero: true
+
+# Drop columns ablation:
+keep_n_columns: null
+keep_n_columns_always_keep: null  # List of column names to always keep when dropping columns (e.g. [col1, col2])
+
+# Additional validation of terms:
+additional_validation_of_terms: true
+
+# Token-budget early stopping (stop starting the NEXT generation once tokens exceed threshold)
+break_on_tokens: false
+break_above_N_tokens: 260000  # total input+output tokens budget
+
+# Wallclock-budget early stopping (stop starting the NEXT generation once wallclock time exceeds threshold)
+break_on_wallclock: false
+break_above_wallclock: 300  # In seconds.
+
+# The function form (`term_language: function`): how its terms are shown to the model, screened and
+# repaired (`igsr/method/function_terms.py`). One proposal's replies, repairs included, count
+# against `max_agent_steps`.
+function_terms:
+  max_undefined_share: 0.2  # a term undefined (NaN or infinite) on more of the training rows is refused
+  repair_rounds: 1          # times a proposal's failed terms go back to the model with their failures
+  n_examples: 20            # training rows shown with their target, spread over the target's range
+  max_example_length: 300   # characters of a text value an example shows; a longer one by its ends
+  timeout_seconds: 60       # one term on one split
+  code_guard:
+    enabled: true
+    extra_allowed_modules: []
+
+# Raw feature importance in prompts:
+show_feature_importance: false        # If true, inject per-raw-feature importance into LLM prompts.
+feature_importance_max_features: 20   # Max number of top features to show. null = show all.

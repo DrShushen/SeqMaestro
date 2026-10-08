@@ -1,0 +1,121 @@
+# =============================================================================================
+#  RUN-INTEGRITY POLICY  --  "did the language model actually contribute to this tree?"
+# =============================================================================================
+#
+#  THE PROBLEM THIS SOLVES
+#  -----------------------
+#  DEFT seeds every node's candidate pool with *naive* features: one indicator per position
+#  and nucleotide, such as `pos_50_is_G`. Those are generated locally, in Python, with no API
+#  call at all.
+#
+#  So when the language model contributes nothing, DEFT does not crash. It quietly builds the
+#  entire tree out of naive features. The result fits, serializes, prints and looks exactly
+#  like a real DEFT run -- it just is not one. Every ordinary fault behaves this way:
+#
+#      * a dead endpoint, or a deployment name that does not exist
+#      * a request parameter the provider rejects
+#      * generated code that never compiles to a Python function
+#      * generated features that compile but raise on the data
+#
+#  All of those are retried, logged at INFO or ERROR, and then dropped. Nothing stops the run.
+#
+#  This file turns that silence into a loud failure.
+#
+#
+#  WHAT IS ALWAYS COUNTED  (regardless of the settings below)
+#  ---------------------------------------------------------
+#  Every run writes `provenance.json` into its output directory, and prints a summary at the
+#  end. Per node it records the whole chain:
+#
+#      semantic prompts sent
+#        -> proposals parsed out of the responses
+#        -> code-generation prompts sent
+#        -> features parsed out of those responses
+#        -> features that actually ran on the data and scored  <-- the number that matters
+#        -> whether the winning split came from an LLM feature or a naive one
+#
+#  Plus run totals: API requests attempted, succeeded and failed, and completions requested
+#  against returned.
+#
+#  The headline is `llm_split_share`: the fraction of splits won by a generated feature. If it
+#  is 0, the tree is a naive-feature tree wearing a DEFT label.
+#
+#
+#  WHAT FAILS THE RUN  (the settings below)
+#  ----------------------------------------
+#  Per-node checks fire during `fit`, at the first node that breaches them, so a broken run
+#  stops before spending a budget. Run-level checks fire once after `fit`.
+#
+#  If a check fails, `provenance.json` is still written -- so you can see why -- and then the
+#  run exits non-zero.
+#
+#
+#  IF YOU JUST WANT TO SEE THE NUMBERS WITHOUT FAILING
+#  ---------------------------------------------------
+#      integrity=warn_only        report everything, never fail
+#      integrity=off              no checks at all (still counts and still reports)
+#
+# =============================================================================================
+
+# Master switch. `false` keeps the counting and the report but skips every check below,
+# and is identical to `integrity=off`.
+enabled: true
+
+# What a breached check does.
+#   error  -- raise, and exit non-zero. The right setting for real runs.
+#   warn   -- log and carry on. Useful when you are deliberately studying degraded behaviour.
+on_violation: error
+
+# --- Per-node checks, evaluated as each node is expanded -------------------------------------
+
+# The core check. How many language-model features must survive at a node -- parsed, compiled,
+# run on that node's data without raising, and scored -- for the node to count as DEFT's work.
+#
+# Below this, the split was decided entirely by naive features. 1 is the honest minimum; there
+# is no sensible reason to set it to 0 other than to disable the check.
+min_llm_candidates_per_node: 1
+
+# Of the code-generation prompts sent at a node, what fraction must end as a usable feature.
+#
+# This separates two very different faults. A low value here with healthy API requests means
+# the *generated code* is the problem -- it is not compiling, or it raises on the data. A low
+# request success rate below means the *API* is the problem.
+#
+# Some loss is normal: models occasionally emit function names with hyphens, or index past the
+# end of a sequence. 0.25 tolerates the usual noise while catching systematic breakage.
+min_usable_feature_yield: 0.25
+
+# --- Run-level checks, evaluated once after fit ----------------------------------------------
+
+# Fraction of API requests that must return a response. Failed requests are retried to
+# exhaustion and then dropped silently, so a low rate means every node was working from a
+# smaller candidate pool than you configured -- which is a quiet quality loss, not an error
+# you would otherwise ever see.
+min_request_success_rate: 0.95
+
+# --- Warning only, never fails the run -------------------------------------------------------
+
+# Share of splits won by naive features, above which a warning is logged.
+#
+# Deliberately not a failure. A naive feature winning a split is a legitimate modelling
+# outcome -- sometimes a single position really is the best available split, and DEFT's own
+# published trees mix both kinds. It is only evidence of breakage in combination with
+# `min_llm_candidates_per_node`, which has already passed by the time this is evaluated.
+warn_if_naive_split_share_above: 0.5
+
+# Share of nodes allowed to produce no usable language-model feature at all.
+#
+# The per-node check above only fails while *every* node so far has produced none -- which is
+# what a dead endpoint or non-compiling code looks like, and it still stops such a run at its
+# first node. An isolated starved node is a different thing: a feature scores only when some cut
+# point leaves `min_samples_leaf` samples on both sides, so a node barely above twice that size
+# can defeat every sparse feature in the pool while nothing is wrong. This bounds how much of
+# that is tolerable across the whole run.
+# Failing here means most of the tree was decided without the language model. Deliberately well
+# above the rate geometry alone produces: a measured Pol II tree had 4 of 30 nodes (13%) too
+# small for any sparse feature to cut, with a healthy pipeline and 19 of 30 splits won by
+# generated features.
+max_no_candidate_node_share: 0.5
+
+# Logged, never fatal. Keeps the number in front of you when it rises without acting on it.
+warn_no_candidate_node_share: 0.25
