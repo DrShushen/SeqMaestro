@@ -1,41 +1,41 @@
-"""The search of a PySR model, run as a process of `SeqMaestro_Method_pysr`. **numpy, sympy, PySR
-and the standard library only.**
+"""The search of a PySR model, run as a process of `SeqMaestro_Method_pysr`. It imports **numpy,
+sympy, PySR and the standard library only**.
 
 `seqmaestro.models.symbolic` starts this file by its path under the PySR environment's interpreter
 the first time a model is fitted in a Core process, and keeps the process open for every later fit
 of that Core process, so Julia compiles once per Core process and not once per fit. The PySR
-environment has no `seqmaestro`, which is why nothing here imports it (`tests/test_symbolic.py`
-checks), and why the equation format below is restated and not imported.
+environment has no `seqmaestro`, which is why this file does not import it (`tests/test_symbolic.py`
+checks this), and why the equation format below is restated instead of imported.
 
-**The protocol.** Requests and replies travel on two pipes of their own, whose descriptors are this
+**The protocol.** Requests and replies pass through two dedicated pipes, whose descriptors are this
 script's first two arguments, because Julia takes over the standard streams when it starts: it
 writes to standard output as it pleases, and it switches standard input to non-blocking mode, which
 ends a Python loop reading from it. Standard input is `/dev/null`, and standard output and error go
 to the log the caller opened. The third argument is the working directory the caller made for this
-process, removed when the requests end. A request is one line naming a directory. It holds the
-rows to search (`X.npy`), their targets (`y.npy`), their weights (`weights.npy`, absent for an
-unweighted fit) and PySR's settings (`options.json`). The reply goes into the same directory:
-`reply.json` with every equation on the front as a tree, its complexity and PySR's loss on the rows
-searched, and `values.npy` with PySR's own prediction of each equation on those rows, so that Core
-can check its evaluation against PySR's. Then one line is written on the reply pipe. A search that
-fails replies with its error, and the process goes on serving. It ends when the request pipe
-closes.
+process, which is removed when the requests end. A request is one line naming a directory, which
+holds the rows to search (`X.npy`), their targets (`y.npy`), their weights (`weights.npy`, absent
+for an unweighted fit) and PySR's settings (`options.json`). The reply goes into the same
+directory: `reply.json` with every equation on the front as a tree, its complexity and PySR's loss
+on the rows searched, and `values.npy` with PySR's prediction of each equation on those rows, so
+that Core can check its evaluation against PySR's. Then one line is written on the reply pipe. A
+search that fails replies with its error, and the process goes on serving. It ends when the request
+pipe closes.
 
 **The tree** is `seqmaestro.models.equation`'s: nested lists of `add`, `mul`, `pow` with a constant
-exponent, `exp`, `log`, `col` and `const`. It is built from each equation's sympy form, the form
-PySR's own `predict` evaluates. PySR parses that form unevaluated, so `x0 - 0.6` arrives as a sum
-holding a product of -1 and 0.6, and a division as a product with a power of -1. The walk below
-keeps every node as it comes, so the tree computes what PySR's `predict` computes. An equation
-holding anything else is left out of the reply, and counted.
+exponent, `exp`, `log`, `col` and `const`. It is built from each equation's sympy form, which is the
+form PySR's `predict` evaluates. PySR parses that form unevaluated, so `x0 - 0.6` arrives as a sum
+holding a product of -1 and 0.6, and a division as a product with a power of -1. `tree_of` keeps
+every node as it comes, so the tree computes what PySR's `predict` computes. An equation holding
+any other node is left out of the reply and counted.
 
 **Julia stays inside the environment.** juliapkg decides where Julia, its packages and its project
-live, and left alone it may use the home directory or whichever conda environment the caller has
-active (`ENVIRONMENTS.md`). Before PySR is imported, the four variables that decide it are set from
-this interpreter's prefix, and the process refuses to start if any of them is already set to
-something else.
+live, and unless told otherwise it may use the home directory or whichever conda environment the
+caller has active (`ENVIRONMENTS.md`). Before PySR is imported, the four variables that decide it
+are set from this interpreter's prefix, and the process refuses to start if any of them is already
+set to something else.
 
-**The variables are named `x0` to `xk` here**, since PySR refuses names that sympy defines, and a
-tree refers to a column by its position. No equation leaves this process as text.
+**The variables are named `x0` to `xk` here**, because PySR refuses names that sympy defines, and a
+tree refers to a column by its position. An equation never leaves this process as text.
 """
 
 from __future__ import annotations
@@ -51,11 +51,11 @@ from pathlib import Path
 
 import numpy as np
 
-#: Set here and never by a request. PySR may otherwise watch standard input for a `q` to stop, and
-#: nothing is typed into this process, whose standard input is `/dev/null`. It otherwise writes its
-#: equations under `outputs/` wherever it runs. The last three keep the log quiet and make the
-#: thread count, which the caller sets when it starts the process, the only thing that decides how
-#: the search runs.
+#: Options set here and never by a request. `input_stream` stops PySR from watching standard input
+#: for a `q` to stop, since nothing is typed into this process (its standard input is `/dev/null`).
+#: `temp_equation_file` stops it from writing its equations under `outputs/` wherever it runs. The
+#: last three keep the log quiet and make the thread count, which the caller sets when it starts the
+#: process, the only thing that decides how the search runs.
 PROCESS_OPTIONS = {"input_stream": "devnull", "temp_equation_file": True, "verbosity": 0,
                    "progress": False, "parallelism": "multithreading"}
 
@@ -92,7 +92,7 @@ class OutsideVocabulary(ValueError):
 
 
 def tree_of(expression, n_columns: int) -> list:
-    """The tree for one sympy expression, as it comes."""
+    """The tree for one sympy expression, node for node as PySR parsed it."""
     import sympy
 
     if expression.is_Symbol:
@@ -122,7 +122,8 @@ def tree_of(expression, n_columns: int) -> list:
 
 
 def versions() -> dict[str, str]:
-    """PySR's version, the Julia package's that searches, and Julia's."""
+    """The versions of PySR, of the Julia package that runs the search (SymbolicRegression.jl),
+    and of Julia."""
     import pysr
     from pysr.julia_import import jl, jl_version
 
@@ -134,7 +135,7 @@ def versions() -> dict[str, str]:
 def search_with_pysr(X: np.ndarray, y: np.ndarray, weights: np.ndarray | None, options: dict
                      ) -> tuple[dict, np.ndarray]:
     """One PySR search. Returns the reply (the front as trees, what was left out, the versions) and
-    PySR's own prediction of each equation on the searched rows, one row per equation."""
+    PySR's prediction of each equation on the searched rows, one row per equation."""
     from pysr import PySRRegressor
 
     clash = sorted(set(options) & set(PROCESS_OPTIONS))
@@ -149,7 +150,8 @@ def search_with_pysr(X: np.ndarray, y: np.ndarray, weights: np.ndarray | None, o
             tree = tree_of(row["sympy_format"], X.shape[1])
             predicted = np.asarray(model.predict(X, index=index), dtype=float).ravel()
         except Exception as error:  # an equation that cannot be exported is counted, not fatal
-            # Only this module's own message is kept: any other may quote the expression.
+            # Only this module's message (`OutsideVocabulary`) is kept, because any other may quote
+            # the expression.
             reason = str(error) if isinstance(error, OutsideVocabulary) else type(error).__name__
             left_out.append({"complexity": int(row["complexity"]), "reason": reason})
             continue
@@ -184,8 +186,8 @@ def serve(requests, channel, search) -> None:
 
 
 def run(argv: list[str], search) -> None:
-    """Serve on the two pipes named by `argv`, the request pipe's descriptor, then the reply
-    pipe's; then remove the working directory named third, if it is one the caller made.
+    """Serve on the two pipes that `argv` names (the request pipe's descriptor, then the reply
+    pipe's), then remove the working directory named third, if it is one the caller made.
 
     It is removed only when the requests end normally, so the log inside it survives a crash for
     the caller to quote.

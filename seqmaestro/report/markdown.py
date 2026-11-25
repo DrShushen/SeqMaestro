@@ -1,13 +1,13 @@
 """Markdown tables, and the printed precision of every number a report shows.
 
-Every table a report carries is rendered here and included verbatim. The writer of the report
+Every table a report includes is rendered here and included verbatim. The writer of the report
 chooses which tables to show and what to say about them, and never transcribes a number, because
 transcription is where a report and its evidence come apart.
 
-A cell holds one line. Markdown has no lists inside cells, and the PDF path silently drops the
-workarounds that render on a web page. A number is written at the precision it is worth: three
-decimals for a score, two for a frequency, and a q-value below a thousandth as `<0.001` instead of
-an exponent a reader has to decode.
+**A cell holds one line**, because markdown has no lists inside cells, and the conversion to PDF
+silently drops the workarounds that render on a web page. A number is written at the precision it
+merits: three decimals for a score, two for a frequency, and a q-value below a thousandth as
+`<0.001` instead of an exponent a reader has to decode.
 """
 
 from __future__ import annotations
@@ -18,10 +18,21 @@ from collections.abc import Iterable, Sequence
 MISSING = "—"
 
 
-def render(headers: Sequence[str], rows: Iterable[Sequence]) -> str:
-    """A markdown pipe table. Cells are stringified as they arrive; format numbers first."""
+def render(headers: Sequence[str], rows: Iterable[Sequence],
+           widths: Sequence[int] | None = None) -> str:
+    """A markdown pipe table. Cells are converted to strings as they arrive, so format numbers
+    first.
+
+    `widths` gives the columns' relative widths, as the numbers of dashes under the headers. Pandoc
+    reads them when a table is wider than the page and wraps its cells, so a column of prose can be
+    given most of the width. Without `widths`, every column has the same width."""
+    if widths is None:
+        widths = [3] * len(headers)
+    if len(widths) != len(headers) or any(width < 1 for width in widths):
+        raise ValueError(f"A table of {len(headers)} columns needs as many positive widths, "
+                         f"not {list(widths)}.")
     lines = ["| " + " | ".join(str(h) for h in headers) + " |",
-             "|" + "|".join("---" for _ in headers) + "|"]
+             "|" + "|".join("-" * width for width in widths) + "|"]
     for row in rows:
         row = list(row)
         if len(row) != len(headers):
@@ -76,20 +87,15 @@ def percentage(value, places: int = 1) -> str:
     return MISSING if value is None else f"{float(value) * 100:.{places}f}%"
 
 
-def clip(text: str, width: int = 190) -> str:
-    """A description cut to something a table cell can hold.
+def prose(text: str) -> str:
+    """Text from a record, such as a feature's description, in full as one table cell.
 
-    Some feature records carry a full implementation specification where a description was asked
-    for. The first sentence is almost always the summary, so it is preferred, and a word boundary
-    is the fallback.
-    """
-    text = " ".join((text or "").split())
-    if len(text) <= width:
-        return text
-    first = text.split(". ")[0].rstrip(".")
-    if len(first) <= width:
-        return first + "."
-    return first[:width].rsplit(" ", 1)[0] + " ..."
+    A description is kept whole, since the part that says what a feature computes can come in any
+    of its sentences: a description DEFT writes is a specification, which often opens with the
+    stretch of sequence it measures and only then says what it counts there. Its whitespace is
+    collapsed, since a cell holds one line, and a pipe is escaped, since an unescaped one would end
+    the cell."""
+    return " ".join((text or "").split()).replace("|", "\\|")
 
 
 #: Numbers up to twenty, spelled out as prose writes them. Above twenty a numeral is clearer.
@@ -98,6 +104,12 @@ WORDS = {
     9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen",
     15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty",
 }
+
+
+def series(items: Sequence[str]) -> str:
+    """Items as prose: `a`, `a and b`, `a, b and c`."""
+    items = [str(item) for item in items]
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def word(value) -> str:

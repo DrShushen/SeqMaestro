@@ -1,6 +1,6 @@
 # What was decided when data/example/splits was built, by
 # experiments/prepare/build_example_dataset.py. finalise_dataset.py counts and checks everything
-# else. Fields: docs/dataset.md.
+# else. Fields: docs/developer/dataset.md.
 #
 #   python experiments/prepare/finalise_dataset.py \
 #       --splits data/example/splits \

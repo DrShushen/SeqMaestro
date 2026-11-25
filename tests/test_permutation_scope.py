@@ -1,7 +1,9 @@
-"""How many independent nulls a run has, which can be fewer than how many permuted cells it has.
+"""How many independent nulls (permuted draws) a run has, which can be fewer than its permuted
+cells.
 
-Under seed scope every arm in a seed shares one permuted draw. A draw that happens to sit a little
-above chance then lifts every arm's permuted cell in that seed at once, which looks like a leak.
+Under seed scope (`permutation_scope: seed`) every arm at a seed shares one permuted draw. A draw
+that happens to sit a little above chance then lifts every arm's permuted cell at that seed at
+once, which looks like a leak.
 """
 
 from __future__ import annotations
@@ -41,8 +43,8 @@ def test_cell_scope_gives_each_arm_its_own_draw():
 
 
 def test_cell_scope_is_reproducible_across_processes():
-    """The key is hashed with `sha256`. Python's `hash()` is salted per process, so a rerun would
-    not match."""
+    """The key is hashed with `sha256`, because Python's `hash()` is salted per process and a rerun
+    would not match."""
     key = permutation_key("cell", ARMS[0])
     assert key == "xgboost/positional"
     assert np.array_equal(permutation_rng(42, key).permutation(labels()),
@@ -63,8 +65,8 @@ def test_permuting_keeps_the_labels_and_only_reorders_them():
 
 
 def test_cell_scope_refuses_to_run_without_something_to_tell_cells_apart():
-    """Cell scope needs the cell's arm, a model's name and a pool's. Without it the draw would
-    fall back to a shared one while claiming independent ones."""
+    """Cell scope needs the cell's arm (a model's name and a pool's). Without it the draw would fall
+    back to a shared one while claiming independent ones."""
     for arm in (None, ("xgboost", ""), ("", "positional")):
         with pytest.raises(ValueError, match="permutation_scope='cell' needs"):
             permutation_key("cell", arm)
@@ -106,9 +108,9 @@ def test_a_real_cell_chooses_against_the_real_validation_labels_whatever_the_key
 
 
 def test_a_control_chooses_against_the_validation_labels_shuffled_as_its_training_labels_are():
-    """An arm that chooses on the validation rows is scored against their real labels, and on a
-    control arm chooses against them shuffled, by the draw its training labels take, so the run's
-    scope decides which arms share it."""
+    """An arm that makes choices on the validation rows is scored against their real labels. In a
+    control cell it chooses against those labels shuffled by the draw its training labels take, so
+    the run's permutation scope decides which arms share the shuffle."""
     frame = pd.DataFrame({"sequence": ["ACGT"] * 200, "y": labels().astype(int)})
     columns = Columns("sequence", "y", None, (), BINARY)
 

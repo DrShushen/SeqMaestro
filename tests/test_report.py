@@ -1,8 +1,8 @@
 """The report layer: names, placeholders, the headline rule, concepts, model internals, and a run
 built end to end into report inputs.
 
-The figures need matplotlib, which the Core environment does not include. What they draw is tested
-here through `figure_inputs.json`, and a static check confirms that nothing outside
+The figures need matplotlib, which the Core environment does not include, so what they draw is
+tested here through `figure_inputs.json`. A static check confirms that nothing outside
 `seqmaestro/report/figures/` imports matplotlib.
 """
 
@@ -26,6 +26,7 @@ from seqmaestro.models.sparse import LeastSquares
 from seqmaestro.report import (
     concepts,
     facts,
+    files,
     internals,
     markdown,
     naming,
@@ -33,7 +34,7 @@ from seqmaestro.report import (
     spreadsheet,
     tables,
 )
-from tests.planted import ANALYSES, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, planted_dataset
 
 REPO = Path(__file__).resolve().parents[1]
 ANALYSIS = REPO / "experiments" / "analysis"
@@ -49,7 +50,7 @@ def test_an_arm_is_named_for_a_reader():
     configuration = naming.parse("ebm/llm_generated_iterative")
     assert configuration.label == "EBM · written, iterative"
     assert configuration.is_interpretable and configuration.writes_features
-    assert naming.parse("l1_logistic/positional+kmer").label == "L1 Logistic Regression · positions + motifs"
+    assert naming.parse("l1_logistic/positional+kmer").label == "L1 Logistic Regression · positions + k-mers"
     assert naming.slug("l1_logistic/positional+kmer") == "l1_logistic__positional+kmer"
 
 
@@ -62,19 +63,20 @@ def test_a_pool_is_named_from_its_members_so_covariates_need_no_entry_of_their_o
         "positions + written per split + covariates"
     assert naming.parse("deft_or_cart/positional+covariates").source_short == "positions + covariates"
     assert naming.parse("l1_logistic/positional+kmer+covariates").source_long == (
-        "single-base position indicators, short-motif counts and measurements supplied with "
+        "single-base position indicators, k-mer counts and measurements supplied with "
         "each sequence, used as they are")
+    assert naming.parse("xgboost/motif_known").source_short == "known motifs"
     assert not naming.parse("l1_logistic/covariates").writes_features
 
 
 
 def test_a_written_source_handed_a_vocabulary_beside_it_is_named_for_both():
     beside = naming.parse("l1_logistic/kmer+llm_generated_iterative")
-    assert beside.label == "L1 Logistic Regression · motifs + written, iterative"
+    assert beside.label == "L1 Logistic Regression · k-mers + written, iterative"
     assert beside.label != naming.parse("l1_logistic/llm_generated_iterative").label
     assert beside.writes_features
     assert naming.parse("l1_logistic/positional+kmer+llm_generated").source_short == \
-        "positions + motifs + written"
+        "positions + k-mers + written"
     assert naming.parse("igsr/llm_generated_joint+covariates").source_short == \
         "written terms + covariates"
 
@@ -85,6 +87,14 @@ def test_the_key_mentions_the_covariates_only_where_an_arm_was_given_them():
 
     assert "covariates" not in sources(["ebm/positional", "l1_logistic/llm_generated"])
     assert "covariates" in sources(["ebm/positional", "ebm/positional+covariates"])
+
+
+def test_the_key_names_only_the_models_and_sources_the_run_used():
+    rows = naming.key_table(["l1_linear/positional", "igsr/llm_generated_joint"], "continuous")
+    assert [row["short"] for row in rows if row["kind"] == "model"] == \
+        ["L1 Linear Regression", "IGSR"]
+    assert [row["short"] for row in rows if row["kind"] == "feature source"] == \
+        ["positions", "written terms"]
 
 
 def test_the_key_describes_the_joint_source_once_for_each_model_that_wrote_it():
@@ -143,7 +153,7 @@ def test_a_component_with_twins_is_the_one_for_the_runs_kind(sources):
 
 
 def test_every_component_with_twins_has_one_for_each_kind_and_no_plain_file():
-    components = REPO / "docs" / "report" / "components"
+    components = files.COMPONENTS_DIR
     names = {path.name.split(".")[0] for path in components.glob("*.md")}
     for name in sorted(names):
         twins = sorted(path.name for path in components.glob(f"{name}.*.md"))
@@ -183,8 +193,8 @@ def test_the_headline_set_is_one_per_interpretable_class_the_best_enumerated_and
 
 
 def test_a_continuous_headline_set_takes_the_least_squares_model_and_scores_below_zero():
-    """An R-squared below zero is still a score to rank by, and the sparse linear slot is the
-    least-squares model."""
+    """An R-squared below zero is still a score to rank by. For a continuous target, the sparse
+    linear slot is the least-squares model."""
     scores = {"ebm/positional": -0.05, "l1_linear/positional": 0.03,
               "l1_linear/llm_generated": -0.2, "xgboost/positional": -0.1}
     assert facts.headline_set(scores, "continuous") == {
@@ -207,7 +217,7 @@ def test_a_class_nobody_reduced_has_no_headline():
 # --------------------------------------------------------------------------------------------
 
 
-#: Tier 2's association and the value of it that means none, for a binary target.
+#: Tier 2's association measure for a binary target, and its value when there is no association.
 AUC = ("auc", 0.5)
 
 
@@ -255,8 +265,9 @@ def test_a_concept_whose_members_disagree_on_a_sign_carries_no_direction():
 
 
 def test_a_concepts_strongest_association_is_the_furthest_from_the_value_meaning_none():
-    """A rank correlation means none at 0, where an AUROC does at a half, so -0.4 is stronger
-    than +0.3 for the one and weaker than 0.3 for the other."""
+    """A rank correlation means no association at 0, whereas an AUROC means none at a half, so
+    -0.4 is the stronger of the correlations -0.4 and 0.3, and 0.1 the stronger of the AUROCs 0.1
+    and 0.7."""
     rng = np.random.default_rng(1)
     signal = rng.normal(size=200)
     arms = [arm_columns("ebm/llm_generated", {"gc": signal}, {"gc": 0.4}, {"gc": {"rho": -0.4}}),
@@ -268,7 +279,7 @@ def test_a_concepts_strongest_association_is_the_furthest_from_the_value_meaning
 
 
 # --------------------------------------------------------------------------------------------
-# Printing numbers, and what is inside a model
+# Printing numbers and what is inside a model
 # --------------------------------------------------------------------------------------------
 
 
@@ -278,6 +289,88 @@ def test_a_table_cell_holds_one_line_and_every_row_its_columns():
         markdown.render(["a"], [["two\nlines"]])
     with pytest.raises(ValueError, match="1 cells for 2 headers"):
         markdown.render(["a", "b"], [[1]])
+
+
+def test_a_table_gives_its_columns_the_widths_it_is_asked_for():
+    assert markdown.render(["a", "b"], [[1, 2]], widths=[2, 5]) == "| a | b |\n|--|-----|\n| 1 | 2 |"
+    for widths in ([2], [2, 0]):
+        with pytest.raises(ValueError, match="positive widths"):
+            markdown.render(["a", "b"], [[1, 2]], widths=widths)
+
+
+def test_a_description_reaches_its_table_whole_on_one_line_with_its_pipes_escaped():
+    # A specification of the kind DEFT writes, which says what it counts only after the stretch it
+    # measures and runs longer than any length a cell could be truncated to.
+    description = ("For each sequence, take the 50 nt immediately upstream of the exon's 3' splice "
+                   "site, at positions 150 to 199 of the window.\nCount the bases that are C or "
+                   "T | U there, and divide by 50. " + "The value is a fraction. " * 10)
+    cell = tables.what_it_computes({"description": description})
+    assert "\n" not in cell and cell.endswith("The value is a fraction.")
+    assert "Count the bases that are C or T \\| U there" in cell
+    row = markdown.render(["feature", "what it computes"], [["x", cell]]).splitlines()[-1]
+    assert len(re.split(r"(?<!\\)\|", row)) == 4, "two cells between three unescaped pipes"
+
+
+AZURE_CALLS = {"provider": "azure", "model": "azure/a-deployment", "api_version": "v1",
+               "base_model": "azure/gpt-5.4", "reasoning_effort": "minimal", "retries": 5,
+               "timeout_seconds": 120}
+
+
+def a_cell(record: dict) -> SimpleNamespace:
+    return SimpleNamespace(run=record)
+
+
+def test_the_facts_name_each_model_the_run_called_and_what_each_part_called_it_for():
+    """Every record of the calls is gathered: a proposer's inside its featuriser (twice in an
+    iterative cell), a vendored cell's at the top of its record, the judge's and the grouping's.
+    One model under one setting makes one entry, whereas a second setting makes a second entry,
+    which the report has to explain."""
+    proposer = {"featuriser": {"kind": "composed", "parts": [
+        {"kind": "positional"}, {"kind": "generated", "proposer": {"language_model": AZURE_CALLS}}]}}
+    iterative = {"featuriser": {"pool": {"proposer": {"language_model": AZURE_CALLS}},
+                                "proposer": {"language_model": AZURE_CALLS}}}
+    effortful = {**AZURE_CALLS, "reasoning_effort": "high"}
+    run = SimpleNamespace(
+        suite={"l1_logistic/positional+llm_generated": {"real": {1: a_cell(proposer)}},
+               "ebm/llm_generated_iterative": {"real": {1: a_cell(iterative)},
+                                               "permuted": {1: a_cell(iterative)}},
+               "deft_or_cart/positional+llm_generated_joint": {
+                   "real": {1: a_cell({"language_model": effortful})}},
+               "deft_or_cart/positional": {"real": {1: a_cell({"model": "deft_or_cart"})}}},
+        analyses={"judge": {"language_model": AZURE_CALLS}, "concept_recurrence": None,
+                  "stability": pd.DataFrame()})
+    found = facts.language_models(run)
+    assert found == [
+        {**AZURE_CALLS, "used_for": ["llm_generated", "llm_generated_iterative", "judge"],
+         "n_records": 4},
+        {**effortful, "used_for": ["llm_generated_joint/deft_or_cart"], "n_records": 1}]
+    assert facts.language_models(SimpleNamespace(suite={}, analyses={})) == []
+
+
+def test_the_table_of_language_models_names_each_model_as_a_reader_knows_it():
+    table = tables.language_models([
+        {**AZURE_CALLS, "used_for": ["llm_generated", "judge"], "n_records": 2},
+        {"provider": "claude", "model": "anthropic/claude-x", "reasoning_effort": None,
+         "retries": 5, "timeout_seconds": 120, "used_for": ["recurrence"], "n_records": 1}])
+    rows = table.splitlines()[2:]
+    assert rows[0] == ("| gpt-5.4 (the deployment a-deployment, on Azure OpenAI) | minimal | Wrote "
+                       "features in one round; rated how meaningful the features look |")
+    assert rows[1] == ("| claude-x (through the Claude API) | none stated | Grouped the written "
+                       "features into ideas, to count those found again |")
+    assert "No part of this run called a language model" in tables.language_models([])
+    with pytest.raises(KeyError, match=r"naming\.PROVIDERS"):
+        naming.language_model({"provider": "another", "model": "x/y"})
+
+
+def test_the_table_of_agents_gives_one_row_to_each_agent_and_model_with_its_stages():
+    table = tables.agents([
+        {"agent": "Claude Code", "model": "claude-opus-5-5", "stages": ["1", "2"]},
+        {"agent": "Claude Code", "model": "claude-sonnet-5-5", "stages": ["3A"]},
+        {"agent": "Claude Code", "model": "claude-opus-5-5", "stages": ["3B", "report"]}])
+    assert table.splitlines()[2:] == [
+        "| Claude Code | claude-opus-5-5 | Carried out Stages 1, 2 and 3B, and wrote this report |",
+        "| Claude Code | claude-sonnet-5-5 | Carried out Stage 3A |"]
+    assert "No agent recorded itself in this run" in tables.agents([])
 
 
 def test_numbers_are_printed_at_the_precision_they_are_worth():
@@ -294,7 +387,7 @@ def test_a_model_that_does_not_reproduce_its_cell_is_refused():
 
 def test_a_model_that_used_no_feature_is_exported_as_such_and_draws_nothing():
     """A reduction can end with a model that uses no feature. It predicts one value for every row,
-    so its export holds that value, and the report builds no figure and no equation for it."""
+    so its export holds that value and the report builds neither a figure nor an equation for it."""
     from seqmaestro.reduction.arm import NoFeatures
 
     y = np.array([0, 1, 1, 1])
@@ -378,7 +471,7 @@ def imported(path: Path) -> set[str]:
 
 
 def test_only_the_figures_import_matplotlib():
-    """Core produces results and has no plotting stack. The figures are drawn under
+    """Core produces results and has no plotting stack, so the figures are drawn under
     `SeqMaestro_LocalUtils`."""
     for path in (REPO / "seqmaestro").rglob("*.py"):
         if FIGURES in path.parents:
@@ -392,6 +485,29 @@ def test_the_figures_read_nothing_but_what_they_are_handed():
         assert ours <= {"seqmaestro.report.figures"}, (path, ours)
 
 
+def test_the_figures_are_drawn_without_a_display():
+    """`style.apply` selects Agg, which needs no display, and every drawer calls it before it makes a
+    figure. Where a display is available, matplotlib would otherwise choose an interactive backend and
+    open a window for each figure. Core has no matplotlib, so the source is checked."""
+
+    def calls(node: ast.AST, names: set[str]) -> list[int]:
+        return [call.lineno for call in ast.walk(node)
+                if isinstance(call, ast.Call) and ast.unparse(call.func) in names]
+
+    style = ast.parse((FIGURES / "style.py").read_text())
+    apply = next(node for node in style.body if isinstance(node, ast.FunctionDef) and node.name == "apply")
+    assert "mpl.use('Agg')" in {ast.unparse(call) for call in ast.walk(apply) if isinstance(call, ast.Call)}
+    drawers = 0
+    for path in FIGURES.glob("*.py"):
+        for function in ast.walk(ast.parse(path.read_text())):
+            if isinstance(function, ast.FunctionDef) and (made := calls(function, {"plt.figure", "plt.subplots"})):
+                drawers += 1
+                applied = calls(function, {"style.apply"})
+                assert applied and min(applied) < min(made), (
+                    f"{path.name}: {function.name} makes a figure before it calls style.apply()")
+    assert drawers, "no drawer was found, so the check above checked nothing"
+
+
 # --------------------------------------------------------------------------------------------
 # A run, end to end: cells, reduced, profiled, revealed, then its report inputs
 # --------------------------------------------------------------------------------------------
@@ -399,7 +515,7 @@ def test_the_figures_read_nothing_but_what_they_are_handed():
 
 def planted_config(dataset, linear: str, continuous: bool, others, judge: bool = False,
                    n_bootstrap: int = 10) -> dict:
-    """The run config of a planted run, with the sparse linear model and `others` on positions."""
+    """The config of a planted run, with the sparse linear model and `others` on positions."""
     return {
         "name": "planted",
         "dataset": {"task": "planted", "splits": str(dataset.directory), "blinded": False},
@@ -409,7 +525,8 @@ def planted_config(dataset, linear: str, continuous: bool, others, judge: bool =
                  **({} if continuous else {"class_weight": "balanced"}),
                  "permutation_repeats": 0, "judge": judge, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": [linear, *others]}},
         "reduction": {"n_features": 3},
@@ -474,6 +591,7 @@ def test_a_revealed_run_becomes_its_report_inputs(runners, tmp_path, capsys):
     report = run_dir / "report"
     found = json.loads((report / "facts.json").read_text())
     assert found["classes"]["positive"] == dataset.classes[1].name == "motif"
+    assert found["stage1"]["feature_guidance"] is None, "the run's config gives no guidance"
     assert found["stage1"]["blinding"] == {"blinded": False, "withheld": None}
     assert set(found["stage2"]["arms"]) == {"l1_logistic/positional", "xgboost/positional"}
     assert found["headline_set"] == {"best_l1_logistic": "l1_logistic/positional",
@@ -498,11 +616,15 @@ def test_a_revealed_run_becomes_its_report_inputs(runners, tmp_path, capsys):
     assert found["parameters"]["n_features"] == "three"
     assert found["parameters"]["positive_class"] == "motif"
 
-    tables = {path.stem for path in (report / "tables").glob("*.md")}
+    written = {path.stem for path in (report / "tables").glob("*.md")}
     assert {"key", "baseline", "stage2_all_arms", "stage2_headline", "stage3a_all_arms",
             "features_l1_logistic__positional", "features_xgboost__positional",
-            "evidence_l1_logistic__positional", "stage3b_summary", "concepts"} <= tables
-    assert "evidence_xgboost__positional" not in tables
+            "evidence_l1_logistic__positional", "stage3b_summary", "concepts",
+            "language_models", "agents"} <= written
+    assert found["language_models"] == [], "no arm of the run writes features, and no judge ran"
+    assert "No part of this run called a language model" in (
+        report / "tables" / "language_models.md").read_text()
+    assert "evidence_xgboost__positional" not in written
     assert "motif" in (report / "tables" / "features_l1_logistic__positional.md").read_text()
 
     weights = json.loads((report / "internals" / "l1_logistic__positional.json").read_text())
@@ -516,9 +638,44 @@ def test_a_revealed_run_becomes_its_report_inputs(runners, tmp_path, capsys):
 
 
 
+def test_the_report_names_the_agent_that_recorded_itself_for_it_after_its_inputs_were_built(
+        runners, tmp_path, capsys):
+    """An agent records itself when it starts the report, after the driver has built the report's
+    inputs. Assembling the report therefore renders the table of agents again, and warns while no
+    agent is recorded for the report."""
+    import importlib.util
+
+    from seqmaestro.pipeline import agents
+
+    _, run_dir = a_revealed_run(tmp_path, runners, others=())
+    assert runners.reveal.main(["--run-dir", str(run_dir)]) == 0
+    assert runners.reliability.main(["--run-dir", str(run_dir), "--after-reveal"]) == 0
+    agents.record(run_dir, "Claude Code", "claude-opus-5-5", ["1", "2"])
+    assert runners.report.main(["--run-dir", str(run_dir)]) == 0
+    report = run_dir / "report"
+    assert "Carried out Stages 1 and 2 |" in (report / "tables" / "agents.md").read_text()
+
+    spec = importlib.util.spec_from_file_location(
+        "assemble_report_under_test", Path(__file__).resolve().parents[1] / "experiments" / "analysis"
+        / "assemble_report.py")
+    assemble = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(assemble)
+    (report / "figures.json").write_text(json.dumps({"figures": {}}))
+    (report / "REPORT.src.md").write_text("{{table:language_models}}\n\n{{table:agents}}\n")
+    assert assemble.main(["--report-dir", str(report)]) == 0
+    assert "no agent recorded itself for the report" in capsys.readouterr().err
+
+    agents.record(run_dir, "Claude Code", "claude-opus-5-5", ["report"])
+    assert assemble.main(["--report-dir", str(report)]) == 0
+    assert "no agent recorded itself" not in capsys.readouterr().err
+    written = (report / "REPORT.md").read_text()
+    assert "| Claude Code | claude-opus-5-5 | Carried out Stages 1 and 2, and wrote this report |" in written
+    assert "No part of this run called a language model" in written
+
+
 def test_a_run_scored_without_bootstrap_draws_reports_no_interval(runners, tmp_path):
-    """`grid.n_bootstrap: 0` scores a cell without intervals, which a quick run sets. Its report
-    states each reduced model's score with no interval beside it, and draws no whiskers."""
+    """A quick run sets `grid.n_bootstrap: 0`, which scores each cell without intervals. Its report
+    then states each reduced model's score with no interval beside it and draws no whiskers."""
     _, run_dir = a_revealed_run(tmp_path, runners, others=(), n_bootstrap=0)
     assert runners.reveal.main(["--run-dir", str(run_dir)]) == 0
     assert runners.reliability.main(["--run-dir", str(run_dir), "--after-reveal"]) == 0
@@ -534,9 +691,10 @@ def test_a_run_scored_without_bootstrap_draws_reports_no_interval(runners, tmp_p
 
 
 def test_the_spreadsheet_takes_test_numbers_from_a_finished_reveal_alone(runners, tmp_path):
-    """While a reveal is under way some cells hold a test block and others none, so the sheet
-    stays on validation until the reveal's record says it finished. A cell the reveal did not
-    score, as one the config no longer names, then counts towards no test mean."""
+    """While a reveal is under way, some cells hold a test block and others none, so the sheet
+    stays on validation until the reveal's record says the reveal finished. A cell the reveal did
+    not score (such as one whose arm the config does not name) then does not count towards any test
+    mean."""
     _, run_dir = a_revealed_run(tmp_path, runners, others=())
     assert runners.reveal.main(["--run-dir", str(run_dir)]) == 0
     record = run_dir / "reveal.json"
@@ -556,7 +714,8 @@ def test_the_spreadsheet_takes_test_numbers_from_a_finished_reveal_alone(runners
 
 
 def test_a_blinded_runs_facts_name_what_the_models_were_not_told(runners, tmp_path, monkeypatch):
-    """From the task description's `judge_only`, which the driver checked agrees with the flag."""
+    """The withheld fact comes from the task description's `judge_only` field, which the driver has
+    checked agrees with the config's `dataset.blinded` flag."""
     datasets = tmp_path / "datasets"
     datasets.mkdir()
     (datasets / "planted.json").write_text(json.dumps(
@@ -567,8 +726,8 @@ def test_a_blinded_runs_facts_name_what_the_models_were_not_told(runners, tmp_pa
                                                "withheld": "The planted motif is GGCGCC."}
 
 def test_a_revealed_continuous_run_becomes_its_report_inputs(runners, tmp_path):
-    """The facts, tables and figure inputs of a continuous run carry its metric, its target and
-    its words, and its sparse linear model is the least-squares one."""
+    """The facts, tables and figure inputs of a continuous run use its metric, its target's name and
+    the wording of a continuous direction. Its sparse linear model is the least-squares one."""
     _, run_dir = a_revealed_run(tmp_path, runners, continuous=True)
     assert runners.reveal.main(["--run-dir", str(run_dir)]) == 0
     assert runners.reliability.main(["--run-dir", str(run_dir), "--after-reveal"]) == 0
@@ -596,7 +755,7 @@ def test_a_revealed_continuous_run_becomes_its_report_inputs(runners, tmp_path):
     features = (tables / "features_l1_linear__positional.md").read_text()
     assert "rank correlation on its own" in features
     assert "the target" in features, "a continuous direction is printed as which way it moves"
-    assert "cost of removing it, in R²" in (tables / "evidence_l1_linear__positional.md").read_text()
+    assert "fall in R² without it" in (tables / "evidence_l1_linear__positional.md").read_text()
 
     weights = json.loads((report / "internals" / "l1_linear__positional.json").read_text())
     assert weights["scale"] == internals.SCALE["continuous"]
@@ -617,8 +776,8 @@ def test_a_long_product_in_an_equation_breaks_between_its_factors_and_never_insi
 
 def test_a_left_side_too_long_to_share_a_line_stands_on_its_own():
     """A target whose name leaves the terms less than half the line would squeeze them into a column
-    a feature's name overruns, so the left side takes a row of its own and the terms the whole width
-    below it, indented. A short left side keeps the terms beside it."""
+    that a feature's name overruns. Such a left side takes a row of its own, with the indented terms
+    across the whole width below it, whereas a short left side keeps the terms beside it."""
     terms = [r"\text{first\_feature\_with\_a\_long\_name}", r"- \text{second\_feature}"]
     assert tables._aligned_lines(r"\text{predicted y}", terms) == [
         r"\text{predicted y} ={} & \text{first\_feature\_with\_a\_long\_name}",
@@ -631,8 +790,8 @@ def test_a_left_side_too_long_to_share_a_line_stands_on_its_own():
 
 
 def test_a_factor_too_long_for_a_line_breaks_before_a_sign_inside_its_brackets():
-    """At the shallowest bracket holding a sign, closed and opened again invisibly, since LaTeX pairs
-    each `\\left` with a `\\right` on the same line."""
+    """The break comes at the shallowest bracket that holds a sign, which is closed and opened again
+    invisibly, because LaTeX pairs each `\\left` with a `\\right` on the same line."""
     term = r"+ \left(\text{first\_name} + \log\left(\text{second\_name} + \text{first\_name}\right)\right)"
     lines = tables._wrapped(term, 45)
     assert lines == [r"+ \left(\text{first\_name} \right.",
@@ -698,9 +857,9 @@ def test_a_symbolic_model_is_drawn_as_its_equation_its_shapley_values_and_its_fr
     assert figures["stage3a_pysr_front"]["draw"] == "equation_front"
     assert "pysr/positional" in found["stage3b"]["arms"]
     # An equation's reduction can keep fewer columns than the budget, and its figure says how
-    # many it was cut to.
+    # many it kept.
     own = found["stage3a"]["arms"]["pysr/positional"]["n_final"]
-    assert (f"equation cut to {markdown.word(own)} features"
+    assert (f"equation reduced to {markdown.word(own)} features"
             in figures["stage3a_pysr"]["caption"])
 
 

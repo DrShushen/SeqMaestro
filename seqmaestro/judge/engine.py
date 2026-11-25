@@ -1,11 +1,11 @@
-"""Where a score comes from. One interface, one real backend, one test double.
+"""The backends a score comes from: an interface, the real backend and a test double.
 
-The scoring backend is kept apart from the protocol (selection, blinding, ordering, repeats and
-aggregation), so the protocol can be tested exhaustively without a network call or a credential,
-and a different model can be swapped in without touching it.
+The scoring backend is kept apart from the protocol (selection, hiding the arms, ordering,
+repeats and aggregation), so that the protocol can be tested exhaustively without a network call
+or a credential, and a different model can be swapped in without changing it.
 
-**A refusal is not a score.** A call that fails, times out, or returns something unparseable
-yields `None`, and `None` is carried through to the summary and counted. Treating a failure as a
+**A failed call gives no score.** A call that fails, times out, or returns something unparseable
+yields `None`, which is passed through to the summary and counted. Treating a failure as a
 middling score would pull every arm towards the mean, and would flatter most the arms whose
 features are hardest to parse.
 """
@@ -18,7 +18,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from seqmaestro.judge.rubric import MAX_SCORE, MIN_SCORE, Rendered
-from seqmaestro.llm import LiteLLMClient
+from seqmaestro.llm import CallSettings, LiteLLMClient
+
+#: The tokens a judgement's reply may take. The reply is one integer and one sentence, so the limit
+#: is short, whereas a proposal's reply of several features in code needs far more.
+REPLY_TOKENS = 512
 
 
 @dataclass(frozen=True)
@@ -36,13 +40,13 @@ class ScoringEngine(Protocol):
 
 
 def parse_reply(item_id: str, text: str) -> Judgement:
-    """Pull a score out of a reply, tolerantly but not credulously.
+    """Pull a score out of a reply, tolerating how it is wrapped but inventing nothing.
 
-    Models wrap JSON in prose or fences often enough that insisting on clean JSON would discard
-    good answers, but inventing a score from a reply that contains none would be worse. So this
-    takes the JSON object wherever it sits in the reply, or a reply that is the score alone, and
-    otherwise gives up. A number picked out of a sentence is no rating: a reply that restates the
-    scale before answering would be scored by the scale's first number.
+    Models wrap JSON in prose or code fences often enough that insisting on clean JSON would
+    discard good answers, but inventing a score from a reply that contains none would be worse.
+    The parser therefore takes the JSON object wherever it is in the reply, or a reply that is the
+    score alone, and otherwise gives up. It never picks a number out of a sentence, because a reply
+    that restates the scale before answering would then be scored by the scale's first number.
     """
     if not text or not text.strip():
         return Judgement(item_id, None, error="empty reply")
@@ -75,23 +79,23 @@ class LiteLLMEngine:
 
     Repeats are separate calls instead of `n>1` on one call, so they are independent samples of the
     judge. Their spread is then a property of the instrument, which is what is being characterised.
-
-    The completion bound is set short here because the reply is one integer and one sentence, and
-    the same client class serves the proposer, which needs far more.
+    Every call is made under the run's `settings`, as the proposer's are, and its reply may take up
+    to `REPLY_TOKENS`.
     """
 
-    def __init__(self, max_completion_tokens: int = 512, **client_options):
-        self.client = LiteLLMClient(max_completion_tokens=max_completion_tokens, **client_options)
-
-    @property
-    def model(self) -> str:
-        return self.client.model
+    def __init__(self, settings: CallSettings):
+        self.client = LiteLLMClient(settings)
 
     def judge(self, rendered: Rendered) -> Judgement:
-        completion = self.client.complete(rendered.system, rendered.user)
+        completion = self.client.complete(rendered.system, rendered.user,
+                                          max_completion_tokens=REPLY_TOKENS)
         if not completion.ok:
             return Judgement(rendered.item_id, None, error=completion.error)
         return parse_reply(rendered.item_id, completion.text)
+
+    def describe(self) -> dict[str, object]:
+        """Which model the judgements were asked of, and how (`LiteLLMClient.describe`)."""
+        return self.client.describe()
 
     def usage(self) -> dict:
         return self.client.usage()
@@ -100,13 +104,15 @@ class LiteLLMEngine:
 class ScriptedEngine:
     """A deterministic stand-in, so the protocol can be tested without a network or a bill.
 
-    Takes a callable from the rendered prompt to a reply string, or a fixed reply, which lets a
-    test simulate a well-behaved judge, a malformed one, or an outright failure (by returning an
-    exception instance).
+    It takes a callable from the rendered prompt to a reply string, or a fixed reply, so a test can
+    simulate a well-behaved judge, a malformed one, or an outright failure (by returning an
+    exception instance). `described` is the record it gives of the model it stands for, which a
+    test can vary to check what is stored under that record.
     """
 
-    def __init__(self, reply):
+    def __init__(self, reply, described: dict[str, object] | None = None):
         self.reply = reply
+        self.described = dict(described) if described is not None else {"model": "scripted"}
         self.seen: list[Rendered] = []
 
     def judge(self, rendered: Rendered) -> Judgement:
@@ -115,6 +121,9 @@ class ScriptedEngine:
         if isinstance(text, BaseException):
             return Judgement(rendered.item_id, None, error=str(text))
         return parse_reply(rendered.item_id, text)
+
+    def describe(self) -> dict[str, object]:
+        return dict(self.described)
 
     def usage(self) -> dict:
         return {"model": "scripted", "calls": len(self.seen)}

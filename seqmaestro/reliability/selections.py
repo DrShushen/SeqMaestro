@@ -1,43 +1,44 @@
-"""Tier 1's selections: the arm's procedure on every half-sample, in parallel and resumably.
-**numpy and the standard library only.**
+"""Tier 1's selections: a parallel, resumable sweep of the arm's procedure over every half-sample.
+**This module imports only numpy and the standard library.**
 
 One half-sample selection is one full pass of the procedure that produced the arm's reduced model
 (fit on the candidates, keep what the model used, eliminate to N). Under each label set an arm
-therefore costs 2B whole eliminations, which makes Tier 1 the panel's main cost. This shapes four
-things.
+therefore needs 2B whole eliminations, which makes Tier 1 the slowest part of the panel and shapes
+the four design choices below.
 
-**Resume.** The finished selections are written to disk with a `done` flag beside each, every
+**A sweep resumes.** The finished selections are written to disk, each with a `done` flag, every
 half minute and at the end, so an interrupted sweep restarts where it stopped. The file holds the
-selection matrix itself, a (2B, p) boolean array, which is what Tier 1's statistics read, so there
+selection matrix itself (a (2B, p) boolean array), which is what Tier 1's statistics read, so there
 is no second format. A write compresses every half-sample's rows, which is slow on a large D, so
-the sweep hands the workers that finished their next half-sample before it writes.
+the sweep gives the workers that finished their next half-sample before it writes.
 
-**Fork, not pickle.** Workers are forked and inherit the candidate matrix and the fitter
-copy-on-write, and each worker copies only the rows of its half-sample. Sending a pickled copy
-of a large matrix to each of twenty workers would cost more than the fits. Inheriting the fitter is
-also what lets the vendored tree's side pass in a closure over its tree. A worker runs one
-selection after another until the sweep ends, so what it starts once, such as a PySR worker's
-search process, serves every selection it runs.
+**Workers are forked rather than sent pickled data.** They inherit the candidate matrix and the
+fitter copy-on-write, and each worker copies only the rows of its half-sample, whereas sending a
+pickled copy of a large matrix to each of twenty workers would take longer than the fits.
+Inheriting the fitter also lets DEFT's side pass in a closure over its tree. A worker runs one
+selection after another until the sweep ends, so what it starts once (such as a PySR worker's
+search process) serves every selection it runs.
 
-**Memory decides how many workers run.** Each worker holds its half-sample's rows and its fits,
-which on many candidates over many rows run to gigabytes, so as many workers as there are threads
-could take more memory than the machine has. Given the memory the panel may hold, the sweep runs its
-first selection alone in one worker and measures what that worker holds that no other process
-shares, its descendants included (a PySR worker's search process). It then runs as many workers as
-fit beside what the panel itself holds, each expected to hold a quarter more than the one measured,
-and never more than the threads it may use. The memory is read from `/proc`, so on a system without
-it the sweep runs as many workers as it has threads.
+**The available memory decides how many workers run.** Each worker holds its half-sample's rows and
+its fits, which on many candidates over many rows run to gigabytes, so as many workers as there are
+threads could take more memory than the machine has. Given the memory the panel may hold, the sweep
+runs its first selection alone in one worker and measures the memory that worker holds and no other
+process shares, including that of its descendants (such as a PySR worker's search process). It then
+runs as many workers as fit beside what the panel itself holds, each expected to hold a quarter more
+than the one measured, and never more than the threads it may use. The memory is read from
+`/proc`, so on a system without it the sweep runs as many workers as it has threads.
 
-**The threads it may use change while it runs.** The driver starts a panel on the threads free at
-the time, and may hand it a file that holds the number it may use (`threads_file`). It raises the
-number as other processes end, and lowers it when a process whose turn comes takes threads back.
-The sweep looks at the file before it starts each selection, and every few seconds while none ends,
-and starts a selection only while fewer run than the file holds, within what fits in memory.
+**The threads a sweep may use change while it runs.** The driver starts a panel on the threads free
+at the time, and may give it a file that holds the number of threads it may use (`threads_file`).
+The driver raises the number as other processes end, and lowers it when a process whose turn comes
+takes threads back. The sweep checks the file before it starts each selection, and every few
+seconds while none ends, and starts a selection only while fewer run than the file allows, within
+what fits in memory.
 
-**Why numpy only.** The vendored tree's side runs the same sweep for its arms without importing
-`seqmaestro`. It loads this file by path, as it loads the elimination loop, and hands the loop in as
-`eliminate_run`. `tests/test_reduction.py` fails if this file imports anything but numpy and the
-standard library.
+**DEFT's side shares this module**, which is why the module imports only numpy. DEFT's side runs
+the same sweep for its arms without importing `seqmaestro`: it loads this file by path, as it loads
+the elimination loop, and passes the loop in as `eliminate_run`. `tests/test_reduction.py` fails if
+this file imports anything but numpy and the standard library.
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ _STATE: dict = {}
 #: A worker is expected to hold this many times what the measured one held.
 WORKER_MARGIN = 1.25
 
-#: How often a sweep looks again at the threads it may use while no selection ends.
+#: How often, in seconds, a sweep checks again the threads it may use while no selection ends.
 RECHECK_SECONDS = 5.0
 
 #: How often a sweep writes the selections it has finished: at most once in this many seconds, and
@@ -70,9 +71,9 @@ def selector(eliminate_run, names: list[str], n_target: int):
 
     A survivor the final model does not use holds its place by the tie-break alone, and counting it
     would give the first columns in record order a selection frequency near one whenever the model
-    uses fewer than `n_target`. The elimination loop predicts on the validation split it is handed at
-    every step. Tier 1 uses only the surviving set, so one row stands in for that split and the loop
-    itself runs unchanged.
+    uses fewer than `n_target`. The elimination loop predicts on the validation split it is given at
+    every step, whereas Tier 1 uses only the surviving set, so one row stands in for that split and
+    the loop itself runs unchanged.
     """
     def select(fit_step, X: np.ndarray, y: np.ndarray) -> list[str]:
         result = eliminate_run(fit_step, X, y, X[:1], names, n_target)
@@ -97,8 +98,9 @@ def _run_one(index: int) -> tuple[int, np.ndarray, float]:
 
 
 def unshared_bytes(pid: int) -> int:
-    """What process `pid` and the processes below it hold that no other process shares, from
-    `/proc`; 0 where `/proc` cannot say. For a forked worker this is what it added to the panel."""
+    """The memory that process `pid` and its descendants hold and no other process shares, from
+    `/proc`, or 0 where `/proc` cannot tell. For a forked worker, this is what it added to the
+    panel."""
     total, pending = 0, [pid]
     while pending:
         current = pending.pop()
@@ -117,7 +119,7 @@ def unshared_bytes(pid: int) -> int:
 
 
 def resident_bytes() -> int:
-    """What this process holds now, from `/proc`; 0 where `/proc` cannot say."""
+    """The memory this process holds now, from `/proc`, or 0 where `/proc` cannot tell."""
     try:
         return int(Path("/proc/self/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
     except (OSError, ValueError, IndexError):
@@ -126,15 +128,15 @@ def resident_bytes() -> int:
 
 def workers_for(memory: int, beside: int, held: int, workers: int) -> int:
     """How many workers fit in `memory` beside the `beside` bytes the panel holds, when one was
-    measured to hold `held`: never more than `workers`, and at least one. A measurement of nothing
-    leaves `workers` as it was."""
+    measured to hold `held`: never more than `workers`, and at least one. A measurement of zero
+    leaves `workers` unchanged."""
     if held <= 0:
         return workers
     return max(1, min(workers, int((memory - beside) // (held * WORKER_MARGIN))))
 
 
 def threads_in(path: str | Path | None, given: int) -> int:
-    """The selections that may run at once: the number in the file at `path`, which the driver
+    """How many selections may run at once: the number in the file at `path`, which the driver
     changes as threads free up and are taken back, or `given` where there is no such file or it
     holds no number."""
     if path is None:
@@ -146,12 +148,13 @@ def threads_in(path: str | Path | None, given: int) -> int:
 
 
 def _serve(connection, inherited) -> None:
-    """A worker: each half-sample it is sent, selected and sent back, or the traceback where the
-    selection fails, until it is sent None or the sweep has gone.
+    """A worker's loop: it runs the selection of each half-sample it is sent and sends back the
+    result, or the traceback where the selection fails, until it is sent `None` or the sweep has
+    gone.
 
-    `inherited` holds the sweep's ends of the workers' pipes, this one's included, which the fork
+    `inherited` holds the sweep's ends of the workers' pipes (this one's included), which the fork
     copied here. They are closed, so that a worker sees its pipe end once the sweep's end closes,
-    and ends with a sweep that died."""
+    and so ends with a sweep that died."""
     for other in inherited:
         other.close()
     try:
@@ -167,13 +170,13 @@ def _serve(connection, inherited) -> None:
 
 class _Workers:
     """Forked workers, each running the half-samples it is sent one after another until the sweep
-    ends. A half-sample goes to a worker that waits, or to a new one, so there are as many workers
-    as the most selections that ran at once."""
+    ends. A half-sample goes to an idle worker, or to a new one, so there are as many workers as
+    the largest number of selections that ran at once."""
 
     def __init__(self) -> None:
         self.context = mp.get_context("fork")
-        #: Each worker, by the sweep's end of its pipe, the half-sample each busy one runs, and the
-        #: ones that wait.
+        #: The workers, keyed by the sweep's end of each one's pipe, then the half-sample each busy
+        #: worker runs, then the idle workers.
         self.processes: dict = {}
         self.busy: dict = {}
         self.idle: list = []
@@ -192,7 +195,7 @@ class _Workers:
         self.busy[connection] = index
 
     def finished(self, timeout: float) -> list[tuple[int, np.ndarray, float]]:
-        """The selections that end within `timeout` seconds. A failed one is raised."""
+        """The selections that end within `timeout` seconds. A failed one is raised as an error."""
         ended = []
         for connection in wait(list(self.busy), timeout):
             index = self.busy.pop(connection)
@@ -210,9 +213,9 @@ class _Workers:
         return ended
 
     def measured(self, index: int) -> tuple[tuple[int, np.ndarray, float], int]:
-        """Half-sample `index` run alone, and the most its worker held while it ran that no other
-        process shares. The first sample is taken as the worker starts, so a short selection is
-        still measured."""
+        """Half-sample `index` run alone, and the most memory its worker held while it ran that no
+        other process shares. The first measurement is taken as the worker starts, so a short
+        selection is still measured."""
         self.start(index)
         [connection] = self.busy
         pid, peak = self.processes[connection].pid, 0
@@ -223,8 +226,8 @@ class _Workers:
                 return ended[0], peak
 
     def close(self) -> None:
-        """Every worker ended: those that wait are told to end, and any still running a selection,
-        which only a failure leaves, are stopped."""
+        """End every worker: idle ones are told to end, and any still running a selection (which
+        only a failure leaves) are stopped."""
         for connection, worker in self.processes.items():
             if connection in self.busy:
                 worker.terminate()
@@ -245,12 +248,13 @@ def run(select, X: np.ndarray, y: np.ndarray, names: list[str], halves: np.ndarr
     """Selections for every half-sample, as a (2B, p) boolean matrix, and how long they took.
 
     `make_fit_step(weights)` builds a fitter for one half-sample from that half-sample's per-row
-    weights, or from None for an unweighted design. Each selection gets a separate fitter, so no
-    fitted state is shared between selections.
+    weights, or from `None` for an unweighted design. Each selection gets a separate fitter, so
+    selections share no fitted state.
 
-    `workers` selections run at once, or given `threads_file`, as many as it holds as each starts
-    (`threads_in`). `memory` is the bytes the panel may hold, workers included. Given it, the sweep
-    measures one selection first and runs no more workers than fit (the module docstring).
+    `workers` selections run at once, or, given `threads_file`, as many as the file holds when each
+    starts (`threads_in`). `memory` is the bytes the panel may hold, workers included, and when it
+    is given, the sweep measures one selection first and runs no more workers than fit (see the
+    module docstring).
     """
     # Flushed, because a sweep runs long with its output redirected to a file, and a block buffer
     # would hold the progress lines back.
@@ -311,8 +315,9 @@ def run(select, X: np.ndarray, y: np.ndarray, names: list[str], halves: np.ndarr
 
 def _sweep(pool: _Workers, todo: list[int], record, *, workers: int, memory: int | None,
            threads_file: str | Path | None, log) -> int:
-    """Every half-sample of `todo` through `pool`'s workers, each handed to `record` as it ends, as
-    many at once as the threads allow and the memory fits. Returns the most that ran at once."""
+    """Run every half-sample of `todo` through `pool`'s workers, as many at once as the threads
+    allow and the memory fits, and hand each to `record` as it ends. Returns the largest number
+    that ran at once."""
     waiting = list(todo)
     measured = None
     if memory is not None and len(waiting) > 1:

@@ -1,23 +1,25 @@
 """One fit of one model on one pool of features, written as a cell.
 
-Everything except the model itself lives here, so that every arm gets the same subsample,
-featurisation discipline, threshold selection, metrics and files. A model implements the `Model`
-protocol in `seqmaestro.models.base`, and this module does the rest.
+Everything except the model lives here, so that every arm gets the same subsample of training
+rows, the same rules for fitting its featuriser, and the same threshold selection, metrics and
+files. A model implements the `Model` protocol in `seqmaestro.models.base`, and this module does
+the rest.
 
 The cell is the interface to everything downstream, and to the arms that cannot import this
 package at all. `seqmaestro.harness.cell` names its files and writes them. A cell fitted in this
-process also keeps `fitted.pkl`, the fitted featuriser and model. A cell that arrived as a bundle
-keeps the model its method saved.
+process also keeps `fitted.pkl` (the fitted featuriser and model), whereas a cell that arrived as a
+bundle keeps the model its method saved.
 
-**No setting of the grid has a default here.** The seed, the share of training rows a seed fits on,
+**The grid's settings have no defaults here.** The seed, the share of training rows a seed fits on,
 the bootstrap count and how a control's labels are drawn are what make two cells comparable, so
 every caller states them, and a run states them once, in its config.
 
-**Nothing here reads the test split.** A cell is fitted and scored on validation. The test split
-is opened once, by the reveal (see `seqmaestro.harness.heldout`), which predicts with the saved
-model and adds a `test` block to `metrics.json` and the test arrays to `predictions.npz`. The
+**This module does not read the test split.** A cell is fitted and scored on validation, and the
+test split is opened once, by the reveal (see `seqmaestro.harness.heldout`), which predicts with the
+saved model and adds a `test` block to `metrics.json` and the test arrays to `predictions.npz`. The
 reveal scores with a binary target's threshold chosen here and the seed and bootstrap count
-recorded in `run.json`, so its numbers are the ones scoring inline would have produced.
+recorded in `run.json`, so its numbers are the ones that scoring at fit time (inline) would have
+produced.
 """
 
 from __future__ import annotations
@@ -52,27 +54,28 @@ if TYPE_CHECKING:
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Where features are evaluated for stability matching. Matching uses no labels, and validation is
-#: already the split used for model selection, so evaluating features there exposes nothing new.
+#: The split on which features are evaluated for stability matching. Matching uses no labels, and
+#: validation is already the split used for model selection, so evaluating features there exposes
+#: nothing new.
 REFERENCE_SPLIT = cells.VALIDATION
 
-#: Where `marginal_effect` is measured. It answers a different question from `REFERENCE_SPLIT`, so
-#: it uses a different split. It asks what a feature does in the data the model learned from, so it
-#: is measured there: on **every** training row, against the **real** labels.
+#: The split on which `marginal_effect` is measured. It answers a different question from
+#: `REFERENCE_SPLIT`, namely what a feature does in the data the model learned from, so it is
+#: measured there: on **every** training row, against the **real** labels.
 #:
-#: Validation is too small to carry the sign of a small effect reliably, so a disagreement with
-#: `direction` there would describe the estimator instead of the feature. The training split is
-#: usually several times larger. `docs/analyses/direction.md` explains the reasoning.
+#: Validation is too small to estimate the sign of a small effect reliably, so a disagreement with
+#: `direction` there would describe the estimator instead of the feature, whereas the training split
+#: is usually several times larger. `docs/developer/analyses/direction.md` explains the reasoning.
 #:
-#: The *fitted* rows are not used either, although they are what the model saw. `train_fraction`
-#: subsamples them per seed, and a control arm's fitted rows carry the shuffled labels. Measuring
-#: against those would make `marginal_effect` agree with `direction` under shuffled labels for the
-#: same reason it does under real ones, and the permuted control for that comparison would stop
-#: working. Real labels on every training row give one number per feature per dataset, and keep
-#: the null.
+#: The *fitted* rows are not used either, although they are what the model saw, because
+#: `train_fraction` subsamples them per seed and a permuted cell's fitted rows hold the shuffled
+#: labels. Measuring against those would make `marginal_effect` agree with `direction` under
+#: shuffled labels for the same reason it does under real ones, so the permuted control for that
+#: comparison would stop working. Real labels on every training row give one number per feature per
+#: dataset and keep the null.
 #:
 #: **This is in-sample.** It measures the association the model was fitted on, which has not been
-#: shown to generalise. `docs/analyses/direction.md` describes what follows from that.
+#: shown to generalise. `docs/developer/analyses/direction.md` describes what follows from that.
 EFFECT_SPLIT = "train"
 
 #: Rows per block when evaluating features across a whole split. Only the used columns are kept, so
@@ -82,12 +85,12 @@ EVALUATION_CHUNK = 20_000
 
 def evaluate_columns(featuriser: Featuriser, inputs, names: list[str],
                      chunk: int = EVALUATION_CHUNK) -> np.ndarray:
-    """`names` evaluated over every row of `inputs`, in blocks. Takes what `Featuriser.transform`
-    takes: `Inputs`, or the sequences alone.
+    """The columns `names` evaluated over every row of `inputs`, in blocks. Takes what
+    `Featuriser.transform` takes: `Inputs`, or the sequences alone.
 
-    The featuriser produces its whole vocabulary, and the caller wants a handful of columns from it.
-    On a large split the whole vocabulary matrix takes many times the memory of the kept columns,
-    so the split is transformed in blocks instead of in one `transform`.
+    The featuriser produces its whole vocabulary, whereas the caller wants a handful of columns from
+    it. On a large split the whole vocabulary matrix takes many times the memory of the kept
+    columns, so the split is transformed in blocks instead of in one `transform`.
     """
     inputs = as_inputs(inputs)
     if not names:
@@ -105,7 +108,7 @@ def run_model(
     train: pd.DataFrame,
     val: pd.DataFrame,
     *,
-    # No default, here or anywhere else in this package. Which column holds the sequence, the
+    # No default, here or anywhere else in this package. Which columns hold the sequence, the
     # label, the weight and the covariates are facts about a dataset, recorded in its
     # `dataset.json`, and a default naming one dataset's columns would be applied silently to the
     # next dataset's frames.
@@ -123,43 +126,43 @@ def run_model(
 ) -> dict:
     """Fit, score on validation, extract features, and write the cell. Returns the manifest.
 
-    `arm` is the model's name and the pool's name the cell reports under, which `run.json` records
-    as `model` and `pool`. It is given apart from `model`, the object that is fitted, because the
-    composition baseline reports under a name of its own.
+    `arm` gives the model's and the pool's names that the cell reports under, which `run.json`
+    records as `model` and `pool`. It is passed separately from `model` (the object that is fitted),
+    because the composition baseline reports under a name other than its model's.
 
-    There is no test frame to pass. The test split is scored once, at the reveal, from the model
-    this function saves, which is why the model is saved whenever `out_dir` is given.
+    The function takes no test frame, because the test split is scored once, at the reveal, from the
+    model this function saves. That is why the model is saved whenever `out_dir` is given.
 
-    `columns` says which column of `train` and `val` is which (`seqmaestro.dataset.Columns`). The
-    featuriser is handed `columns.inputs` of each frame, so of a frame's columns it reads the
-    sequences and the covariates `columns` names, and never the label or the weight. Its `fit` is
-    handed the labels this seed trains against and the fitting weights as arguments.
+    `columns` names the role of each column of `train` and `val` (`seqmaestro.dataset.Columns`). The
+    featuriser is given `columns.inputs` of each frame, so it reads only the sequences and the
+    covariates that `columns` names, never the label or the weight. Its `fit` receives the labels
+    this seed trains against and the fitting weights as arguments.
 
-    `train_fraction` draws a stratified subsample of the training rows for this seed. This matters:
-    most of the models here are deterministic given their data, so with the full training set
-    every seed would produce identical output and stability would be 1 by construction, measuring
-    nothing. The perturbation has to be shared by every arm for the stability axis to compare
-    anything. Pass None to fit on all of the training rows and give up that axis.
+    `train_fraction` draws a stratified subsample of the training rows for this seed. It matters
+    because most of the models here are deterministic given their data: on the full training set
+    every seed would produce identical output, and stability would be 1 by construction, measuring
+    nothing. Every arm must share the perturbation for the stability axis to compare anything. Pass
+    `None` to fit on all the training rows and give up that axis.
 
-    `permute_labels` shuffles the training labels. This is the control arm, and the source of the
-    judge's negative examples. The validation labels it is scored against are never touched, so a
-    permuted cell should score at chance, and if it does not, something leaks. An arm that also
-    chooses on the validation rows chooses against `labels_to_choose_on`.
+    `permute_labels` shuffles the training labels, which makes the cell a permuted one: the control,
+    and the source of the judge's negative examples. The validation labels it is scored against are
+    never touched, so a permuted cell should score at chance, and if it does not, something leaks.
+    An arm that also makes choices on the validation rows makes them against `labels_to_choose_on`.
 
     `permutation_scope` decides how many independent nulls a run has. `"seed"` gives every arm in a
     seed the same shuffled labels, so a run with 9 arms and 3 seeds has 3 draws, and one lucky draw
     shows up as an offset in all 9 arms. `"cell"` derives the draw from the arm as well, giving 27
-    draws, which is what lets the null be quoted with an interval. See `permutation_rng`.
+    draws, so that the null can be quoted with an interval (see `permutation_rng`).
 
     **Give the same seed to the model and to this call.** They are separate arguments because this
-    function does not construct models. Passing the seed to only one of them is an easy mistake
-    that goes unnoticed: an L1 fit is deterministic given its data, so a model seed on its own
-    changes nothing. Both seeds are written to `run.json` (the cell's under `seed`, the model's
-    inside `model_settings`), so a mismatch is at least visible afterwards.
+    function does not construct models. Passing the seed to only one of them is an easy mistake that
+    goes unnoticed, because an L1 fit is deterministic given its data, so a model seed alone changes
+    nothing. Both seeds are written to `run.json` (the cell's under `seed`, the model's inside
+    `model_settings`), so a mismatch is at least visible afterwards.
 
-    `reports` gathers further JSON files of the cell, by file name, once the model is fitted and
-    every row is transformed: what a proposal cost, for an arm whose features a language model
-    wrote. They are written with the cell, before its marker.
+    `reports` is called once the model is fitted and every row transformed, and returns further JSON
+    files of the cell, by file name, such as what a proposal cost for an arm whose features a
+    language model wrote. They are written with the cell, before its marker.
     """
     target_column, weight_column = columns.target, columns.weight
     target = target_for(columns.target_kind)
@@ -169,14 +172,14 @@ def run_model(
         permutation_key=permutation_key(permutation_scope, arm),
     )
 
-    # Per-row fitting weights, if the split carries them. They are taken from `fit_rows`, not from
-    # `train`, so the seed's subsample selects rows and their weights together. Reading them from
-    # the unsubsampled frame would misalign them silently, and every arm would fit noise.
+    # Per-row fitting weights, if the split has them. They are taken from `fit_rows`, not from
+    # `train`, so that the seed's subsample selects rows and their weights together. Reading them
+    # from the unsubsampled frame would misalign them silently, and every arm would fit noise.
     #
     # **Weights are not recomputed under `permute_labels`.** A weight is a property of the sampling
-    # design, not of the label a row happens to carry, so the control arm gets the same weights with
+    # design, not of the label a row happens to have, so the permuted cell gets the same weights with
     # shuffled labels. Recomputing them from permuted labels would give the control a different
-    # design from the arm it controls for.
+    # design from the real cell it controls for.
     w_fit = None
     if weight_column is not None:
         if weight_column not in fit_rows.columns:
@@ -189,9 +192,9 @@ def run_model(
 
     # The featuriser is fitted on the rows the model trains on, not on all of `train`, because it is
     # part of the pipeline and a vocabulary learned from rows the model never saw is a leak. It gets
-    # the labels this seed trains against, which are permuted for a control arm. Most featurisers
-    # ignore labels, but a language-model proposer shown real labels while the model fits permuted
-    # ones would give the control arm real features, and there would be no null.
+    # the labels this seed trains against, which are shuffled in a permuted cell. Most featurisers
+    # ignore labels, but the proposer, shown real labels while the model fits shuffled ones, would
+    # give the permuted cell real features, and there would be no null.
     X_fit = featuriser.fit_transform(columns.inputs(fit_rows), y_fit, sample_weight=w_fit)
     X_val = featuriser.transform(columns.inputs(val))
 
@@ -200,21 +203,21 @@ def run_model(
 
     importances = model.importances()
     used = [record for record in featuriser.records if record.name in importances]
-    # One importance computed the same way for every arm, beside each model's. It is measured
-    # on the same rows the behavioural matcher uses, so the two see identical data. It costs one
-    # prediction pass per feature per repeat, which on a vocabulary-sized pool is the expensive part
-    # of a cheap arm, and `permutation_repeats=0` turns it off.
+    # An importance computed in the same way for every arm, beside each model's. It is measured on
+    # the rows the behavioural matcher uses, so that the two see the same data. It takes one
+    # prediction pass per feature per repeat, which on a vocabulary-sized pool is the slowest part
+    # of an otherwise fast arm, and `permutation_repeats=0` turns it off.
     permuted_importances = permutation_importance(
         model, X_val, val[target_column].to_numpy(),
         columns=[record.name for record in used],
         repeats=permutation_repeats,
         rng=permutation_rng(seed, f"permutation-importance/{model.name}"),
     )
-    # Which class the model uses each feature to argue for, or which way it moves a continuous
-    # target, taken from the model's machinery on the same rows as every other cross-arm measure.
-    # It is free for L1 and EBM, and costs one prediction pass for XGBoost and one Shapley
-    # computation for PySR, so unlike the permutation importance it has no flag to turn it off. The
-    # marginal counterpart is computed in `score_arm`, its only writer.
+    # The direction of each feature in the model (which class it favours, or which way it moves a
+    # continuous target), taken from the model's internals on the same rows as every other measure
+    # compared across arms. It is free for L1 and EBM, and takes one prediction pass for XGBoost and
+    # one Shapley computation for PySR, so unlike the permutation importance it has no flag to turn
+    # it off. Its marginal counterpart is computed in `score_arm`, its only writer.
     directions = model.directions(X_val)
     records = [
         replace(record, importance=importances[record.name],
@@ -224,11 +227,11 @@ def run_model(
     ]
     names = [record.name for record in records]
 
-    # Saved before the results are written, so a cell that cannot be saved fails outright instead
-    # of leaving a record that looks complete but could never be revealed, since the reveal predicts
-    # with this and nothing else. The featuriser is saved with the model because a model alone
-    # cannot turn a sequence into the columns it was fitted on. DEFT's and IGSR's arms do not come
-    # through here. Each saves its model into the bundle it hands back.
+    # Saved before the results are written, so that a cell that cannot be saved fails outright
+    # instead of leaving a record that looks complete but could never be scored at the reveal (the
+    # reveal predicts with this and nothing else). The featuriser is saved with the model because a
+    # model alone cannot turn a sequence into the columns it was fitted on. DEFT's and IGSR's arms
+    # do not pass through here, because each saves its model into the bundle it hands back.
     if out_dir is not None:
         save_fitted(out_dir, featuriser, model, sequence_column=columns.sequence)
 
@@ -237,9 +240,9 @@ def run_model(
         p_val=p_val,
         records=records,
         reference_values=X_val[names].to_numpy() if names else np.zeros((len(X_val), 0)),
-        # Every training row and the real labels, whatever this cell was fitted on. See
-        # `EFFECT_SPLIT`. The featuriser is already fitted, so this transforms rows it did not
-        # learn from, which is what a held-out transform does everywhere else here.
+        # Every training row and the real labels, whatever this cell was fitted on (see
+        # `EFFECT_SPLIT`). The featuriser is already fitted, so this also transforms rows outside
+        # the ones it learned from, as a held-out transform does everywhere else here.
         effect_values=evaluate_columns(featuriser, columns.inputs(train), names),
         y_effect=train[target_column].to_numpy(),
         importance_kind=model.importance_kind,
@@ -280,15 +283,15 @@ def reported_under(arm: Arm | None) -> dict[str, Any]:
 
 
 def pool_sources(pool: str | None) -> list[str] | None:
-    """The sources a pool holds, as a list instead of the pool's name.
+    """The feature sources a pool holds, as a list instead of the pool's name.
 
-    Recorded so that "were these two arms given the same features?" can be answered from what a
-    cell records instead of from the name of its directory. A name is only a label, and a label can
-    change meaning between runs, so an analysis comparing arms by name could compare two different
-    inputs.
+    The list is recorded so that whether two arms were given the same features can be answered from
+    what a cell records, instead of from the name of its directory. A name is only a label, and a
+    label can change meaning between runs, so an analysis that compared arms by name could compare
+    two different inputs.
 
-    Returns `None` for a name that is not a pool's, which is allowed: the composition baseline
-    reports under one, and a reader can fall back to the name.
+    Returns `None` for a name that is not a pool's, which is allowed, because the composition
+    baseline reports under such a name and a reader can fall back to it.
     """
     if not pool:
         return None
@@ -302,11 +305,11 @@ PERMUTATION_SCOPES = ("seed", "cell")
 
 
 def permutation_key(scope: str, arm: Arm | None) -> str | None:
-    """The `permutation_rng` key implied by a scope, or None for one draw per seed.
+    """The `permutation_rng` key implied by a scope, or `None` for one draw per seed.
 
-    The key is the cell's arm, so a scope of `cell` cannot be asked for without naming one. A
-    missing arm falling back to a shared draw would leave every arm on one draw while the run
-    claimed otherwise, and the run would look fine.
+    The key is the cell's arm, so the scope `cell` requires one. If a missing arm fell back to a
+    shared draw, every arm would share one draw while the run claimed otherwise, and nothing would
+    look wrong.
     """
     if scope not in PERMUTATION_SCOPES:
         raise ValueError(f"Unknown permutation_scope {scope!r}; expected one of {PERMUTATION_SCOPES}.")
@@ -321,18 +324,18 @@ def permutation_key(scope: str, arm: Arm | None) -> str | None:
 
 
 def permutation_rng(seed: int, key: str | None = None) -> np.random.Generator:
-    """The generator that shuffles a control arm's labels.
+    """The generator that shuffles a permuted cell's labels.
 
-    With `key` None, every arm sharing a seed draws the **same** permutation. That compares all arms
-    under one identical null, but it has a cost that is easy to miss: the null's *level* is then
+    With `key` set to `None`, every arm sharing a seed draws the **same** permutation. All arms are
+    then compared under one null, but with a drawback that is easy to miss: the null's *level* is
     estimated from as many draws as there are seeds, not as many as there are cells. A run with 9
-    arms and 3 seeds has 3 draws, not 27, so a permutation that happens to land a little above
-    chance lands there in all 9 arms at once. The permuted scores then separate by seed instead of
+    arms and 3 seeds has 3 draws, not 27, so a permutation that happens to fall a little above
+    chance does so in all 9 arms at once. The permuted scores then separate by seed instead of
     by arm, which shows as a systematic offset and can look like a leak.
 
     Passing a `key` that identifies the cell makes each draw independent, so the null level can be
-    averaged down and quoted with an interval. The generator is seeded through `sha256` because
-    `hash()` is salted per process, so the same run would not reproduce.
+    averaged down and quoted with an interval. The generator is seeded through `sha256`, because
+    `hash()` is salted per process and the same run would not reproduce.
     """
     if key is None:
         return np.random.default_rng(seed)
@@ -354,17 +357,18 @@ def subsample_training_rows(
     This is a shared function because it defines the experimental protocol. Most of the models here
     are deterministic given their data, so without a common perturbation every seed would produce
     identical output and the stability axis would compare nothing. An arm running in another
-    environment has to train on exactly these rows, so it is handed the frame this returns.
-    Reproducing the subsample from a seed on the other side would implement the same rule twice,
-    and the two copies would eventually drift apart.
+    environment must train on these same rows, so it is handed the frame this returns. Reproducing
+    the subsample from a seed on the other side would implement the same rule twice, and the two
+    copies would eventually drift apart.
 
     The subsample is stratified on what the target's kind keeps in proportion
     (`seqmaestro.target`): the classes of a binary target, and the quantile bins of a continuous
     one, so that every seed fits on the target's whole range.
 
-    `permutation_key` is the run's scope of the shuffle for this arm (`permutation_key`), and has
-    no default: a caller that shuffled without it would draw once per seed under a run that asks
-    for a draw per cell. A call that shuffles nothing passes None.
+    `permutation_key` is this arm's key under the run's scope of the shuffle (from
+    `permutation_key`), and has no default, because a caller that shuffled without it would draw
+    once per seed in a run configured for a draw per cell. A call that shuffles nothing passes
+    `None`.
     """
     target_column = columns.target
     fit_rows = train
@@ -382,18 +386,18 @@ def subsample_training_rows(
 
 def labels_to_choose_on(val: pd.DataFrame, *, seed: int, columns: Columns, permute_labels: bool,
                         permutation_key: str | None) -> np.ndarray:
-    """The labels an arm chooses against on the validation rows: the real ones, or on a control arm
-    the real ones shuffled.
+    """The labels an arm makes its choices against on the validation rows: the real ones, or in a
+    permuted cell the real ones shuffled.
 
-    Every cell is scored against the real validation labels. An arm that also chooses on the
-    validation rows (a round's features, the iteration a search keeps, the terms it prunes) would
-    otherwise choose against the real target on a control arm too, and the control would carry
-    real signal. A control arm therefore chooses against the validation labels shuffled, drawn as
-    its training labels are (`permutation_rng` under the same seed and key), so the draw follows the
-    run's `permutation_scope`.
+    Every cell is scored against the real validation labels. Without this function, an arm that
+    also makes choices on the validation rows (a round's features, the iteration a search keeps, the
+    terms it prunes) would choose against the real target in a permuted cell too, and the control
+    would hold real signal. A permuted cell therefore chooses against shuffled validation labels,
+    drawn as its training labels are (`permutation_rng` under the same seed and key), so that the
+    draw follows the run's `permutation_scope`.
 
-    Nothing here has a default: a forgotten `permute_labels` would hand a control the real labels,
-    and nothing would fail.
+    The arguments have no defaults, because a forgotten `permute_labels` would give a control the
+    real labels and nothing would fail.
     """
     y_val = val[columns.target].to_numpy()
     if not permute_labels:
@@ -424,24 +428,25 @@ def score_arm(
 
     Both paths into a Stage 2 cell end here: `run_model` for an in-process arm, and
     `ingest_bundle` for an arm that ran in another interpreter. With one writer the output
-    structure is identical by construction, where two writers would have to be kept in step by
-    hand. The analyses downstream read every arm the same way and cannot tell which path produced
-    it.
+    structure is identical by construction, whereas two writers would have to be kept in step by
+    hand. The analyses downstream read every arm in the same way and cannot tell which path
+    produced it.
 
-    **This is the only writer of `marginal_effect`**, on either path: the association of the kind of
-    target (`seqmaestro.target`), rank-biserial for a binary target and Spearman's rho for a
+    **This is the only writer of `marginal_effect`**, on either path: the rank association of the
+    target's kind (`seqmaestro.target`), rank-biserial for a binary target and Spearman's rho for a
     continuous one. It needs no model, only the effect values and their labels, which every arm
-    hands over here. Computing it in one place makes it mean the same thing for an arm fitted in
-    this process and one that arrived from another environment. An adapter that computed its own
+    hands over here. Computing it in one place gives it the same meaning for an arm fitted in this
+    process and one that arrived from another environment, whereas an adapter that computed its own
     would be a second definition.
 
-    `effect_values` are the used features over the **training** rows, and `y_effect` their real
-    labels. `reference_values` are the same features over the **validation** rows, and are what
-    gets written for the behavioural matchers. The two splits do two jobs (see `EFFECT_SPLIT`).
+    `effect_values` are the used features over the **training** rows, with `y_effect` their real
+    labels, whereas `reference_values` are the same features over the **validation** rows and are
+    written for the behavioural matchers. The two splits serve different purposes (see
+    `EFFECT_SPLIT`).
 
-    **Validation only.** A binary target's threshold is chosen here and written into the validation
-    block, and `seed`, `n_bootstrap` and `target_kind` into `run.json`: those are everything the
-    reveal needs to score the test split exactly as this would have.
+    **Only validation is scored here.** A binary target's threshold is chosen here and written into
+    the validation block, and `seed`, `n_bootstrap` and `target_kind` are written into `run.json`,
+    which is everything the reveal needs to score the test split as this function would have.
 
     `filled` is how many validation rows took the model's constant prediction, for a model that
     can be undefined on a row (`seqmaestro.models.base.filled_rows`). It is written beside the
@@ -467,8 +472,8 @@ def score_arm(
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "git_sha": git_sha(REPO),
         "seed": seed,
-        # With `seed`, the kind and a binary target's validation threshold, what the reveal scores
-        # the test split with.
+        # With `seed`, the target's kind and a binary target's validation threshold, this is what
+        # the reveal scores the test split with.
         "n_bootstrap": int(n_bootstrap),
         "target_kind": target_kind,
         "reference_split": REFERENCE_SPLIT,
@@ -494,8 +499,9 @@ def score_arm(
 
 
 def score_validation(y_val, p_val, *, target_kind: str, seed: int, n_bootstrap: int) -> dict:
-    """A cell's `metrics.json` before the reveal: the validation block, scored by the target's kind,
-    and for a binary target the threshold chosen on validation that the block is scored at.
+    """A cell's `metrics.json` before the reveal: the validation block, scored by the metrics of the
+    target's kind, and for a binary target the threshold chosen on validation that the block is
+    scored at.
 
     Every cell (an arm's, the baseline's, a reduced model's) is scored through this, so all cells
     share one threshold rule and one interval method, and the reveal can score each cell's test
@@ -523,11 +529,11 @@ def ingest_bundle(
     arm: Arm | None = None,
     **manifest: Any,
 ) -> dict:
-    """Score an arm that ran in another environment, into a cell. `arm` is the model's name and
-    the pool's name the cell reports under (`reported_under`).
+    """Score an arm that ran in another environment and write it as a cell. `arm` gives the model's
+    and the pool's names that the cell reports under (`reported_under`).
 
-    The validation frame is passed so that the bundle's labels can be checked against it. Without
-    that check, a foreign adapter that returns rows in a different order would produce a number that
+    The validation frame is passed so that the bundle's labels can be checked against it, because
+    without that check an adapter that returns rows in a different order would produce a number that
     looks believable and means nothing.
     """
     bundle = read_bundle(bundle_dir, target_kind, y_val=val[target_column].to_numpy())

@@ -1,21 +1,21 @@
 """One palette and one set of defaults, so the figures of a report look like one system.
 
 The colours are the validated light-mode reference palette from the project's data-visualisation
-guidance, checked with its validator. Three of the choices encode meaning:
+guidance, checked with its validator. Three of the choices encode meaning.
 
-**Two categorical hues carry the project's central contrast**: features a language model wrote
+**Two categorical hues show the project's central contrast**: features a language model wrote
 against features enumerated in advance. A third hue marks the simple reference baselines. A palette
-of three clears every colour-vision gate on the all-pairs test, which one hue for each feature
-source would not. How the features arose is also the split that carries meaning.
+of three passes every colour-vision check of the all-pairs test, which one hue for each feature
+source would not. How the features arose is also the distinction that matters to a reader.
 
-**A diverging blue-red pair carries polarity**: blue for the positive class of a binary target, or a
+**A diverging blue-red pair shows polarity**: blue for the positive class of a binary target, or a
 higher value of a continuous one, and red for the other, with a grey midpoint at zero. Both poles
-are labelled wherever they appear, with the class names or with what a higher value does, so no
-reader has to remember which is which.
+are labelled wherever they appear, with the class names or with what a higher value does, so a
+reader never has to remember which is which.
 
-**A single blue ramp carries magnitude.** Light means near nothing, dark means strong.
+**A single blue ramp shows magnitude**, light for near nothing and dark for strong.
 
-Figures are rendered for print at one column width, so nothing here reads a viewer theme.
+Figures are rendered for print at one column width, so nothing here adapts to a viewer's theme.
 """
 
 from __future__ import annotations
@@ -45,12 +45,18 @@ MIDPOINT = "#f0efec"
 # -- sequential: magnitude ----------------------------------------------------------------------
 SEQUENTIAL = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 
-#: Neutral fill for a mark that carries no polarity, e.g. a density strip under a curve.
+#: Neutral fill for a mark that has no polarity, such as a density strip under a curve.
 NEUTRAL = "#c3c2b7"
 
 
 def apply() -> None:
-    """Set the defaults every figure in a report is drawn with."""
+    """Set the defaults every figure in a report is drawn with, and the backend that draws them.
+
+    Every figure is drawn into a file, so the backend is Agg, which needs no display. Where a display
+    is available (a Linux desktop, WSL with WSLg, a Mac), matplotlib would otherwise choose an
+    interactive backend and open a window for each figure, which can fail when the window is drawn.
+    """
+    mpl.use("Agg")
     mpl.rcParams.update(
         {
             "figure.facecolor": SURFACE,
@@ -103,7 +109,7 @@ def source_colour(writes_features: bool) -> str:
 
 
 def caption(heading: str, body: str, width: int = 110) -> str:
-    """A figure's heading and its explanatory line, wrapped.
+    """A figure's heading followed by its explanatory line, wrapped to `width` characters.
 
     Saving with a tight bounding box grows the canvas to hold whatever is widest, so an unwrapped
     explanatory line sets the figure's width and leaves the panels stranded in the middle of it.
@@ -116,10 +122,10 @@ def caption(heading: str, body: str, width: int = 110) -> str:
 
 
 def shorten(name: str, width: int = 34) -> str:
-    """A feature name that fits an axis, cut from the middle so both ends survive.
+    """A feature name that fits an axis, shortened in the middle so that both ends survive.
 
-    Feature names in this project are long and their informative parts are at both ends, so
-    truncating the tail alone leaves rows that all read alike.
+    Feature names are often long, with their informative parts at both ends, so truncating the tail
+    alone leaves rows that all look alike.
     """
     if len(name) <= width:
         return name

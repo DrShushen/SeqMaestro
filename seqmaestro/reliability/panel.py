@@ -4,42 +4,46 @@
         pool.npz                    a DEFT or an IGSR arm's candidates over D, as its method
                                     evaluated them
         prepare.json, prepare.npz   Step 0: the candidates, the prefilter, the clusters, the
-                                    half-samples, the fitting rows and the label sets on D; the
+                                    half-samples, the fitting rows and the labels on D; the
                                     column and reproduction checks
-        reproduction.json           a DEFT arm alone: what its side found in the reproduction checks
         planted.json                the check arm's planted-signal recipe
-        tier2_discovery[_planted]   Tier 2 in-sample, on D (supplementary, see below)
-        loco/<label>/               M* without one feature, or one cluster: standard cells
+        reproduction.json           a DEFT arm only: what its side found in the reproduction checks
         selections[_<labels>].npz   Tier 1's selections, resumable
         tier1[_<labels>]            pi-hat and the bound, at feature, cluster and position level
+        tier2_discovery[_planted]   Tier 2 in-sample, on D
+        loco/<label>/               M* without one feature, or one cluster: standard cells
         reliability.json            the arm's record, written last: what the reveal seals
       at the reveal
-        tier2_test[_null|_planted]  Tier 2 on the test split
+        tier2_test[_null|_planted]  Tier 2 on the held-out split
       after it
-        tier3.json, checks.json, profile_features.csv, profile_clusters.csv, profile_curves.csv
+        tier3.json, checks.json     Tier 3, and the global-null and planted-signal checks
+        profile_features.csv        one row per candidate: kind, prefilter, cluster, pi-hat at three
+                                    levels, the association (auc or rho) and every Tier 2
+                                    adjustment, and the result of Tier 3 in the kind's loss
+        profile_clusters.csv        one row per cluster
+        profile_curves.csv          |S_tau| and the bound per tau; the features called per q and
+                                    method; the plug-in FDR per cutoff
+    reliability/summary.csv         one row per arm
 
-(`tier1` and `tier2` stand for a `.json` summary and a `.npz` of per-feature arrays.)
+`tier1` and `tier2` stand for a `.json` summary and a `.npz` of per-feature arrays, and `<labels>` for
+`null` or `planted` where the selections were made under those labels. M* is the arm's reduced
+model, and D the training and validation rows. `docs/developer/reliability.md` explains each part.
 
-**Before the reveal the panel uses only D = train + val.** Step 0 never looks at a label, and
-Tier 1 resamples D. The LOCO refits are fitted on the arm's fitting rows and, like every cell,
+**Before the reveal the panel uses only D.** Step 0 never looks at a label, and Tier 1 resamples D.
+The LOCO (leave-one-covariate-out) refits are fitted on the arm's fitting rows and, like every cell,
 scored on validation only, so that the reveal can score them. The test split reaches the panel only
-as the rows the reveal hands to `reveal_tier2`, and after the reveal the panel reads revealed
+as the rows the reveal hands to `reveal_tier2`, and after the reveal the panel takes the revealed
 predictions.
 
 **Each part before the reveal and at it writes its files and is skipped when they exist**, so an
-interrupted panel resumes. The part after the reveal is computed again on every call. Tier 1, the
-panel's main cost, runs last before the reveal, so every cheaper part has already had the chance to
-fail.
+interrupted panel resumes, whereas the part after the reveal is computed again on every call.
+Tier 1, the slowest part of the panel, runs last before the reveal, so that every quicker part has
+already had the chance to fail.
 
-**The in-sample Tier 2** is the same statistic and null computed on D. Every feature in it was
-selected by a model fitted on those rows, or proposed by a language model shown examples from them,
-so it is anticonservative by an amount nothing here estimates. It gives an upper bound on power, so
-a reader can tell "no association" from "not enough rows". The test split's number is the one that
-counts.
-
-**Seeds.** Every random draw the panel makes is seeded from the configured seed, and a model's fit
-keeps its arm's seed. The constants below are the offsets added for each kind of draw, and the
-correlation subsample of Step 0 takes the seed itself, so each draw can be reproduced alone.
+**Every random draw is seeded.** Each draw the panel makes is seeded from the configured seed,
+whereas a model's fit keeps its arm's seed. The constants below are the offsets added for each kind
+of draw, and the correlation subsample of Step 0 takes the seed itself, so that each draw can be
+reproduced on its own.
 """
 
 from __future__ import annotations
@@ -84,7 +88,7 @@ from seqmaestro.reliability.files import (
 
 if TYPE_CHECKING:
     from seqmaestro.dataset import Columns
-from seqmaestro.reliability.pool import RECORDED_CAVEAT, RECORDED_FEATURES, Pool
+from seqmaestro.reliability.pool import Pool
 from seqmaestro.target import target_for
 
 RECORD_VERSION = 1
@@ -98,10 +102,11 @@ PLANTED_RECIPE_SEED = 707
 PLANTED_ON_D_SEED = 808
 LABELS_AT_REVEAL_SEED = 909
 
-#: Why the reproduction check is not run for an arm whose model is not reproducible, as recorded.
-#: Every number the panel reports comes from a fit it saved, and what the check would show (that
-#: the panel's candidates, model and rows are the reduction's) still rests on the checks of the
-#: inputs: the candidates' values against the cell's, and the model's description against a rebuild.
+#: The recorded reason the reproduction checks are not run for an arm whose model is not
+#: reproducible. Every number the panel reports comes from a fit it saved, and what the checks would
+#: show (that the panel's candidates, model and rows are the reduction's) still rests on the checks
+#: of the inputs: the candidates' values against the cell's, and the model's description against a
+#: rebuild.
 NOT_REPRODUCIBLE = ("the arm's model is not reproducible (its search does not repeat itself under "
                     "one seed), so the reduction rerun on its own rows need not return M*; the "
                     "pool's values and the model's description are checked instead")
@@ -154,13 +159,13 @@ class Prepared:
 
 
 class Fits(Protocol):
-    """The fits, made wherever an arm's model lives: in this process for our own arms and for an
-    IGSR arm, whose terms IGSR evaluates on its side, and on DEFT's side of the environment boundary
-    for its tree. The panel computes every statistic from what these return, with the same code for
-    every arm."""
+    """The fits, made wherever an arm's model lives: in this process for an arm fitted in Core and
+    for an IGSR arm (whose terms IGSR evaluates on its side), and on DEFT's side of the environment
+    boundary for DEFT's tree. The panel computes every statistic from what these return, with the
+    same code for every arm."""
 
     #: Whether refitting on the same rows, weights and seed returns the same model. The reproduction
-    #: check is run only when it does (`Panel.reproduction`).
+    #: checks are run only when it does (`Panel.reproduction`).
     reproducible: bool
 
     def pool(self, arm_dir: Path) -> Pool:
@@ -175,19 +180,21 @@ class Fits(Protocol):
                n_target: int, workers: int, force: bool, memory: int | None = None,
                threads_file: Path | None = None) -> dict[str, np.ndarray]:
         """Tier 1's (2B, p) selections over the kept candidates, per label set, each left on disk
-        as `selections_file(label_set)` so a sweep resumes. At most `workers` at once, or as many
-        as `threads_file` holds as each starts, and fewer where `memory`, the bytes the panel may
-        hold, fits fewer (`selections.run`)."""
+        as `selections_file(label_set)` so that a sweep resumes. At most `workers` selections run
+        at once, or as many as `threads_file` holds when each starts, and fewer where `memory` (the
+        bytes the panel may hold) fits fewer (`selections.run`)."""
 
     def refit(self, arm_dir: Path, pool: Pool, prepared: Prepared,
               plan: list[dict]) -> dict[str, tuple[np.ndarray, dict[str, Any]]]:
-        """Each planned model fitted on the fitting rows with their weights, and saved in its cell:
-        per label, its validation scores and what its `run.json` says about its model. For a model
-        that can be undefined on a row, that also holds `FILLED_ROWS`, how many validation rows
-        took its constant prediction, which goes beside the cell's metrics instead."""
+        """Each planned model fitted on the fitting rows with their weights and saved in its cell.
+        Returns, per label, its validation scores and what its `run.json` says about its model. For
+        a model that can be undefined on a row, the latter also holds `FILLED_ROWS` (how many
+        validation rows took its constant prediction), which is written beside the cell's metrics
+        instead."""
 
     def evaluate(self, names: list[str], inputs: Inputs) -> np.ndarray:
-        """Candidates on other rows (the test split's, at the reveal), by the same functions."""
+        """The candidates evaluated on other rows (the test split's, at the reveal) by the same
+        functions."""
 
 
 # ------------------------------------------------------------------------------ reading back
@@ -207,14 +214,14 @@ def read_record(arm_dir: str | Path) -> dict:
 
 
 def is_revealed(arm_dir: str | Path) -> bool:
-    """Whether the reveal has computed every Tier 2 result the arm's record asks of it."""
+    """Whether the reveal has computed every Tier 2 result that the arm's record lists for it."""
     arm_dir = Path(arm_dir)
     return all((arm_dir / f"{tier2_name(TEST_SPLIT, label_set)}.json").exists()
                for label_set in read_record(arm_dir)["tier2"]["label_sets_at_reveal"])
 
 
 def procedure() -> dict:
-    """What `select` is, in a form a record can carry."""
+    """The procedure `select` runs, identified in a form that a record can hold."""
     source = Path(eliminate.__file__)
     return {"eliminate_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "keep_fraction": eliminate.KEEP_FRACTION, "fine_below": eliminate.FINE_BELOW}
@@ -226,8 +233,9 @@ class Panel:
     """One arm's panel: where it lives, what it profiles, and where its fits are made.
 
     `discovery` is D (train then val, re-indexed) with the dataset's columns, and its first
-    `n_train` rows are the training split. M*, its size and the arm's seed are the reduction's:
-    `reduction` is its record and `reduced_cell` the cell holding M* itself.
+    `n_train` rows are the training split. M* (the arm's reduced model), its size and the arm's
+    seed come from the reduction: `reduction` is the reduction's record, and `reduced_cell` the
+    cell holding M* itself.
     """
 
     def __init__(self, arm_dir: str | Path, *, run_dir: str | Path, reduction: dict,
@@ -249,7 +257,8 @@ class Panel:
 
     @property
     def label_sets(self) -> list[str]:
-        """What Tier 1 runs under: the real labels, and on the check arm the two checks as well."""
+        """The label sets Tier 1 runs under: the real labels, plus the two checks' labels on the
+        check arm."""
         return [REAL, NULL, PLANTED] if self.is_check_arm else [REAL]
 
     def tier2_refusal(self) -> str | None:
@@ -271,10 +280,10 @@ class Panel:
 
     def before_reveal(self, *, workers: int, memory: int | None = None,
                       threads_file: Path | None = None, force: bool = False, log=print) -> dict:
-        """Everything the reveal needs from this arm, then its record. Returns the record. An arm
-        with a record is finished and is left as it is, unless `force`. Tier 1 runs at most
-        `workers` selections at once, or as many as `threads_file` holds as each starts, and fewer
-        where `memory`, the bytes the panel may hold, fits fewer."""
+        """Compute everything the reveal needs from this arm, then write and return its record. An
+        arm that has a record is finished and is left as it is, unless `force` is set. Tier 1 runs
+        at most `workers` selections at once, or as many as `threads_file` holds when each starts,
+        and fewer where `memory` (the bytes the panel may hold) fits fewer."""
         if not force and is_ready(self.arm_dir):
             log("    already profiled")
             return read_record(self.arm_dir)
@@ -313,8 +322,8 @@ class Panel:
             "settings": asdict(self.settings),
             "is_check_arm": self.is_check_arm,
             "label_sets": self.label_sets,
-            # The arm's candidates, as Step 0 found them. Named apart from `pool`, which a
-            # record uses for the pool of sources its arm was handed.
+            # The arm's candidates, as Step 0 found them. They are named `candidates` because a
+            # record uses `pool` for the pool of feature sources its arm was given.
             "candidates": read_json(self.arm_dir / PREPARE_FILE)["candidates"],
             "tier2": {"refused": refused,
                       "label_sets_at_reveal": [] if refused
@@ -329,8 +338,8 @@ class Panel:
         return record
 
     def prepare(self, log=print) -> dict:
-        """Step 0, the half-samples, the label sets, and the proof that `select` is the procedure
-        that produced M*."""
+        """Run Step 0, draw the half-samples and the label sets, and check that `select` is the
+        procedure that produced M*."""
         started = time.time()
         pool = self.pool()
         settings, seed = self.settings, self.settings.seed
@@ -399,7 +408,7 @@ class Panel:
         payload = {
             "candidates": {
                 "source": pool.source,
-                "caveat": RECORDED_CAVEAT if pool.source == RECORDED_FEATURES else None,
+                "caveat": pool.caveat(),
                 "p": pool.p, "p_after_prefilter": len(kept_index),
                 "prefilter": f"constant, or one value covering more than "
                              f"{settings.max_modal_share} of D",
@@ -425,14 +434,15 @@ class Panel:
     def reproduction(self, prepared: Prepared) -> dict:
         """Whether the selection, run on the rows M* was fitted on, returns M*.
 
-        It runs from two starting points, which test different things. **From the recorded
-        features** is the reduction itself: the same starting features, rows, weights and loop.
-        It must return M* exactly. If it does not, the candidates' values, the model or the loop
-        differ from what the reduction used, and the panel stops. **From every candidate**
-        (`from_pool`) is the composed procedure Tier 1 resamples: fit on the candidates, keep what
-        the model used, eliminate. The two starting points differ only by columns the model gives
-        no importance to, so a different answer here is not a fault. It means the elimination is
-        sensitive to columns its model ignores, which is the kind of fact Tier 1 measures.
+        It runs from two starting points, which test different things. **Started from the recorded
+        features** (`from_recorded`), it is the reduction itself, with the same starting features,
+        rows, weights and loop, so it must return M* exactly. If it does not, the candidates'
+        values, the model or the loop differ from what the reduction used, and the panel stops.
+        **Started from every candidate** (`from_pool`), it is the composed procedure that Tier 1
+        resamples: fit on the candidates, keep what the model used, then eliminate. The two starting
+        points differ only by columns the model gives no importance to, so a different answer here
+        is not a fault: it means the elimination is sensitive to columns its model ignores, which is
+        the kind of fact Tier 1 measures.
         """
         started = time.time()
         found = self.fits.reproduce(self.arm_dir, self.pool(), prepared, self.source.names,
@@ -461,8 +471,9 @@ class Panel:
         return summary
 
     def loco_plan(self, prepared: Prepared) -> list[dict]:
-        """M* without each of its features, and without each cluster holding several of them. A
-        reported feature the prefilter removed belongs to no cluster, and is dropped alone."""
+        """The planned refits: M* without each of its features, and without each cluster that holds
+        several of them. A reported feature that the prefilter removed belongs to no cluster and is
+        dropped alone."""
         cluster_of = {}
         for name in self.reported:
             label = int(prepared.cluster[prepared.names.index(name)])
@@ -488,7 +499,8 @@ class Panel:
 
     def tier1(self, prepared: Prepared, label_sets: list[str], *, workers: int, force: bool,
               memory: int | None = None, threads_file: Path | None = None, log=print) -> None:
-        """2B selections per label set, then pi-hat and the bound at all three levels."""
+        """Make the 2B selections per label set, then compute pi-hat and the bound at all three
+        levels (feature, cluster and position)."""
         selected = self.fits.select(self.arm_dir, self.pool(), prepared, label_sets, self.n_target,
                                     workers, force, memory, threads_file)
         groups = load_arrays(self.arm_dir / PREPARE_ARRAYS)["position_group"]
@@ -503,8 +515,9 @@ class Panel:
     # ------------------------------------------------------------------------ at the reveal
 
     def reveal_tier2(self, inputs: Inputs, y: np.ndarray, log=print) -> None:
-        """Tier 2 on the test split, handed its rows by the reveal: the real labels, the null on
-        every arm, the planted signal on the check arm. Each result is skipped when already there."""
+        """Tier 2 on the test split, whose rows the reveal hands over: under the real labels and the
+        null on every arm, and under the planted signal on the check arm. A result already on disk
+        is skipped."""
         record = read_record(self.arm_dir)
         prepared = Prepared.load(self.arm_dir)
         X = self.fits.evaluate(prepared.kept_names, inputs)
@@ -584,7 +597,7 @@ class Panel:
 
 def _tier1_statistics(selected: np.ndarray, prepared: Prepared,
                       groups: np.ndarray) -> tuple[dict, dict[str, np.ndarray]]:
-    """pi-hat and the bound for features, clusters and positions, and the arrays behind them."""
+    """Pi-hat and the bound for features, clusters and positions, with the arrays behind them."""
     kept_index = prepared.kept_index
     cluster = prepared.cluster[kept_index]
     kept_groups = np.array([str(group) for group in groups[kept_index]])

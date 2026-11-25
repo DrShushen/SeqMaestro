@@ -1,7 +1,7 @@
 """Checks on a dataset before it is modelled.
 
 These answer questions about the data: whether the strand convention is what the column says,
-whether the sequence matches the genome build it claims, whether windows cut around an exon carry
+whether the sequence matches the genome build it claims, whether windows cut around an exon have
 its splice sites where they should, and how much of each feature a split's grouping variable
 explains (`group_dependence`, which is also a command). They are in the package because they are
 logic worth testing, and because every new dataset has to be checked again: the answer for one

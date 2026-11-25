@@ -1,8 +1,8 @@
 """The files a judged run keeps under its `judge/` directory.
 
-Imports nothing, because two environments use the names: Core writes the files
-(`seqmaestro.pipeline.analyses.judge`), and the spreadsheet of a run's features, written under
-`SeqMaestro_LocalUtils`, reads the scores.
+This module imports nothing, because two environments use these names: Core writes the files
+(`seqmaestro.pipeline.analyses.judge`), and the spreadsheet of a run's features, which is written
+under `SeqMaestro_LocalUtils`, reads the scores.
 """
 
 #: Each arm's mean rating, with the settings the panel was rated under and what the calls cost.
@@ -13,5 +13,6 @@ SUMMARY = "judge_summary.json"
 #: got and the reason given with each.
 SCORES = "judge_scores.json"
 
-#: For each blinded item of the panel, the arm, label condition, seed and feature it was.
+#: What each item of the panel stands for: the arm, label condition and seed it came from,
+#: and the feature's name and importance.
 PANEL_KEY = "panel_key.json"

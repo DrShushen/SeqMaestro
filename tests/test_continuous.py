@@ -1,9 +1,9 @@
 """A continuous target through a run: the models, the metrics, the target's arithmetic, what the
-proposer is shown, the bundle contract, and the stages on a planted continuous dataset, the panel
-and the reveal among them.
+proposer is shown, the bundle contract, and the stages (the reliability panel and the reveal among
+them) on a planted continuous dataset.
 
-The binary path is covered by every other test module. These check what differs for a continuous
-target, and that nothing written for labels runs on one unnoticed.
+Every other test module covers the binary path, whereas these tests check what differs for a
+continuous target and that code written for labels does not run on one unnoticed.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from seqmaestro.models import make_model, models_for
 from seqmaestro.proposer.prompt import Example, render_request, sample_examples
 from seqmaestro.reduction.arm import NoFeatures, rebuild_model
 from seqmaestro.target import BINARY, CONTINUOUS, target_for
-from tests.planted import ANALYSES, SEQUENCE, TARGET, planted_dataset, run_cell
+from tests.planted import ANALYSES, LANGUAGE_MODEL, SEQUENCE, TARGET, planted_dataset, run_cell
 
 
 def planted_frame(n: int = 400, seed: int = 0) -> tuple[pd.DataFrame, np.ndarray]:
@@ -55,8 +55,8 @@ def test_each_continuous_model_predicts_values_and_points_the_right_way(name):
 
 
 def test_the_lasso_penalty_scales_with_the_target():
-    """A fraction of the penalty that zeroes everything keeps the same features whatever the
-    target's units, where a fixed alpha would not."""
+    """A penalty set as a fraction of the one that zeroes every coefficient keeps the same features
+    whatever the target's units, whereas a fixed alpha would not."""
     X, y = planted_frame()
     small = make_model("l1_linear", target_kind=CONTINUOUS).fit(X, y / 1000)
     large = make_model("l1_linear", target_kind=CONTINUOUS).fit(X, y * 1000)
@@ -75,17 +75,17 @@ def test_a_continuous_model_rebuilds_from_its_description_and_the_kind_is_checke
     X, y = planted_frame()
     fitted = make_model("l1_linear", target_kind=CONTINUOUS, seed=2).fit(X, y)
     description = fitted.describe()
-    # The fitted alpha is not a setting: a rebuild derives it again from its own rows.
+    # The fitted alpha is not a setting: a rebuild derives it again from the rows it fits on.
     assert rebuild_model(description, 2, CONTINUOUS).describe()["strength"] == description["strength"]
     with pytest.raises(ValueError):
         rebuild_model(description, 2, BINARY)
 
 
 def test_xgboost_stops_early_on_its_own_rows_and_keeps_only_the_trees_up_to_the_best_round():
-    """On a heavy-tailed target that nothing predicts, the trees stop long before the ceiling; on a
-    planted one they grow further. The contributions TreeSHAP reads add up to the predictions, so
-    they come from the trees kept. The fit is fixed by its seed, and equal weights reproduce the
-    unweighted fit, the part set aside included."""
+    """On a heavy-tailed target that nothing predicts, the trees stop long before the ceiling,
+    whereas on a planted one they grow further. The contributions TreeSHAP computes add up to the
+    predictions, so they come from the trees kept. The seed fixes the fit, and equal weights
+    reproduce the unweighted fit, with the same rows set aside for stopping early."""
     rng = np.random.default_rng(0)
     X = pd.DataFrame(rng.normal(size=(400, 3)), columns=["up", "down", "idle"])
     noise = make_model("xgboost", target_kind=CONTINUOUS, seed=1).fit(X, rng.standard_t(2, 400))
@@ -243,7 +243,8 @@ def a_continuous_config(tmp_path, dataset, arms: dict, **sections) -> Path:
                  "n_bootstrap": 10, "permutation_scope": "seed", "permutation_repeats": 0,
                  "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms, **sections}))
     return source

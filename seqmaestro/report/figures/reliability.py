@@ -1,12 +1,10 @@
-"""The reliability panel, drawn.
-
-There are three figures.
+"""Draw the three figures of the reliability panel.
 
 **The evidence grid** puts the three tiers side by side for every feature a model reported, so the
 common cases are visible at a glance: strong on all three, strong on selection but absent from the
 held-out rows, or reached only once.
 
-**The threshold sweep** addresses the most common misunderstanding of the panel. Calling a feature
+**The threshold sweep** addresses a common misunderstanding of the panel. Calling a feature
 "reproducible" needs a cut-off, and no single cut-off is the right one, so the count is shown at
 every cut-off from a bare majority up to unanimity. A finding that survives the whole sweep is
 stronger than one that survives only at the loosest cut-off.
@@ -15,7 +13,8 @@ stronger than one that survives only at the loosest cut-off.
 ideas that several configurations reached under different names, and the map shows which
 configuration reached which idea, beside the evidence attached to each idea.
 
-Each draws from what `seqmaestro.report.figure_inputs` wrote for it; nothing here reads a run.
+Each figure is drawn from what `seqmaestro.report.figure_inputs` wrote for it, and nothing here
+reads a run.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from seqmaestro.report.figures import style
 
 
 #: How a q-value or a selection frequency is turned into a shade. In both, stronger evidence is
-#: darker, so each is mapped onto [0, 1] before the ramp sees it.
+#: darker, so each is mapped onto [0, 1] before it is passed to the ramp.
 def _shade_frequency(value: float | None) -> str:
     return style.MIDPOINT if value is None else style.ramp(float(value))
 
@@ -72,7 +71,7 @@ def draw_evidence_grid(
 ) -> Path:
     """One panel per configuration, one row per reported feature and three columns of evidence.
 
-    Each panel carries `label`, `subtitle` and `features`, where a feature carries `feature`,
+    Each panel has `label`, `subtitle` and `features`, where a feature has `feature`,
     `cluster_pi_hat`, `q_bh` and `p_holm`.
     """
     import matplotlib.pyplot as plt
@@ -168,15 +167,15 @@ def draw_threshold_sweep(
     n_word: str,
     title: str,
 ) -> Path:
-    """How many features survive at every cut-off, drawn as one grid.
+    """Draw how many features survive at every cut-off, as one grid.
 
-    One row per configuration, one column per cut-off. The large number in a cell is how many of
-    the features the configuration reported clear that cut-off. `n_reported` is the most a
-    configuration reports, the run's budget, and sets the scale of the shade. The small number
-    beneath it is how many of all the candidates it could have used clear it, near-duplicates
-    counted as one, which shows whether the pool held anything stable for the selection to find. A
-    cell is ringed when that pool count is above the bound on how many candidates the cut-off would
-    admit by chance.
+    The grid has one row per configuration and one column per cut-off. The large number in a cell
+    is how many of the features the configuration reported clear that cut-off. `n_reported` is the
+    most a configuration reports (the run's budget), and it sets the scale of the shade. The small
+    number beneath it is how many of all the candidates the configuration could have used clear the
+    cut-off (near-duplicates counted as one), which shows whether the pool held anything stable for
+    the selection to find. A cell is ringed when that pool count is above the bound on how many
+    candidates the cut-off would admit by chance.
 
     The three quantities share one grid, instead of three panels side by side, because a reader
     compares them cell by cell and separate panels would spread that comparison across a page.
@@ -267,9 +266,9 @@ def draw_concept_map(
     n_word: str,
     title: str,
 ) -> Path:
-    """Which configurations reached each idea, and what evidence the idea carries.
+    """Which configurations reached each idea, and what evidence the idea has.
 
-    `columns` names the configurations; each concept carries `label`, the indices of the columns it
+    `columns` names the configurations. Each concept has `label`, the indices of the columns it
     `reached`, its `direction`, and its `best_stability`, `strongest_association` and
     `best_association_q`. `legend` says what a dot of each direction means, positive first, and
     `association` names the association's column and gives its `centre` and the distance from it
@@ -301,9 +300,9 @@ def draw_concept_map(
                 axis.plot([column + 0.5], [y + 0.5], marker=".", markersize=2.5, color=style.AXIS,
                           linestyle="none", zorder=2)
 
-        # The association sits beside the q-value. On a large held-out set every q reaches the
-        # floor the permutations allow, and the association is then the only one of the two that
-        # still orders the ideas.
+        # The association sits beside the q-value. On a large held-out set the q-values can all
+        # reach the floor the permutations allow, and the association is then the only one of the
+        # two that still orders the ideas.
         cells = [
             (_shade_frequency(concept["best_stability"]),
              _frequency_text({"cluster_pi_hat": concept["best_stability"]})),
@@ -350,7 +349,7 @@ def draw_concept_map(
         style.caption(
             title,
             "One row per idea and one column per model configuration. A filled dot means that "
-            f"configuration kept a feature computing this idea when it was cut to at most "
+            f"configuration kept a feature computing this idea when it was reduced to at most "
             f"{n_word}, whatever it called it.",
             width=104,
         ),

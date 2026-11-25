@@ -1,25 +1,25 @@
-"""What the model is asked for, and how its reply is read back.
+"""What the language model is asked for and how its reply is parsed.
 
-Kept apart from the proposer so the wording can be inspected, diffed and dry-run without a
-credential: `run_arm.py --show-prompt` prints what would be sent.
+This is kept apart from the proposer, so that the wording can be inspected, compared with `diff`
+and tried out without a credential: `run_arm.py --show-prompt` prints what would be sent.
 
-**The model is shown labelled rows as well as the task.** The labels ground a proposal in this
-dataset instead of in sequence biology generally, and they give a permuted-label arm its meaning.
-Shown shuffled labels, the model proposes features that discriminate shuffled labels, which makes
-that arm a negative control. A proposer that never saw a label would hand the control arm the
-features it hands the real one.
+**The language model is shown labelled rows as well as the task.** The labels ground a proposal in
+this dataset instead of in sequence biology generally, and they give a permuted cell its meaning.
+Shown shuffled labels, the language model proposes features that tell the shuffled labels apart,
+which makes the permuted cell a negative control. A proposer that never saw a label would give the
+permuted cell the features it gives the real one.
 
-**What the request adds for covariates renders only where the rows carry some.** It lists the
-columns (`seqmaestro.llm.columns`), shows the examples' covariate values as one table after their
-sequences, and tells the model the frame holds them. Rows with no covariates and one length get a
-request with none of these additions.
+**The request mentions covariates only where the rows have some.** It then lists the columns
+(`seqmaestro.llm.columns`), shows the examples' covariate values as one table after their
+sequences, and tells the language model that the frame holds them. Rows with no covariates and a
+single length get a request with none of these additions.
 
 **A repair request says how to correct each kind of failure** (`REPAIR_GUIDANCE`). Code that fails,
 or runs too slowly for these sequences, is fixed without changing what the feature measures. A
-feature that cannot work on these rows, one constant on all of them or undefined on too many, can
-only be corrected by measuring something a little different, and the model is asked to name and
-describe it for what it then measures, so no record's name says one thing while its code computes
-another.
+feature that cannot work on these rows (one constant on all of them, or undefined on too many) can
+only be corrected by measuring something a little different, and the language model is asked to
+name and describe it for what it then measures, so a record's name never says one thing while its
+code computes another.
 """
 
 from __future__ import annotations
@@ -35,16 +35,18 @@ import numpy as np
 
 from seqmaestro.features.base import as_inputs
 from seqmaestro.llm.columns import render_columns
-from seqmaestro.proposer.checks import CONSTANT, RAISED, SLOW, UNDEFINED, WRONG_SHAPE, Check
+from seqmaestro.llm.context import TaskContext
+from seqmaestro.proposer.checks import CONSTANT, FAILURES, RAISED, SLOW, UNDEFINED, WRONG_SHAPE, Check
 from seqmaestro.target import BINARY, CONTINUOUS, target_for
 
-#: The role only. Nothing about the data belongs here, including which nucleic acid it is.
+#: The system prompt states the role only. Nothing about the data belongs here, including which
+#: nucleic acid it is.
 #:
 #: **The molecule is stated by the dataset**, in its `sequence_layout`, because it differs between
 #: datasets and this string does not. Naming one here would contradict the description of every
-#: dataset of the other kind, and the contradiction does harm: a model told it is looking at DNA
-#: proposes fewer of the features that only make sense for RNA, and on an RNA dataset those are
-#: most of what the run is meant to find.
+#: dataset of the other kind, and the contradiction does harm: a language model told it is looking
+#: at DNA proposes fewer of the features that only make sense for RNA, and on an RNA dataset those
+#: are most of what the run is meant to find.
 SYSTEM_PROMPT = (
     "You are an expert computational molecular biologist. You propose interpretable features of "
     "nucleic acid sequence that might predict a biological outcome, and you write each one as a "
@@ -55,18 +57,19 @@ SYSTEM_PROMPT = (
 )
 
 #: What the features are asked to do, by the kind of target: tell the classes apart, or predict the
-#: number. The binary phrasing is the one every cached proposal on a binary dataset was asked with.
+#: number.
 REQUEST = {
     BINARY: "distinguish the classes",
     CONTINUOUS: "predict the target's value",
 }
 
-#: The contract the generated code must satisfy, stated as a worked example because a model follows
-#: a demonstrated shape more reliably than a described one. Every rejected function costs twice:
-#: once in tokens, and once in a candidate pool that is smaller than it looks.
+#: The contract the generated code must satisfy, stated as a worked example because a language
+#: model follows a demonstrated shape more reliably than a described one. Every rejected function
+#: wastes tokens and leaves the candidate pool smaller than it looks.
 #:
-#: The example says nothing about any dataset: it reads a window at the start of the sequence, whose
-#: size is taken from the rows it is shown with (`example_window`), so the code is right for them.
+#: The example says nothing about any dataset: it measures a window at the start of the sequence,
+#: whose size is taken from the rows it is shown with (`example_window`), so the code is correct for
+#: them.
 CODE_CONTRACT = '''\
 def gc_fraction_first_{window}nt(X):
     """Fraction of G or C in the first {window} nt of the sequence."""
@@ -74,20 +77,20 @@ def gc_fraction_first_{window}nt(X):
     return (seqs.str.count("G") + seqs.str.count("C")) / {window}.0\
 '''
 
-#: The most positions the worked example's window covers.
+#: The largest number of positions the worked example's window covers.
 EXAMPLE_WINDOW = 20
 
 
 def example_window(length: int) -> int:
-    """The window the worked example reads, for sequences of one `length`: `EXAMPLE_WINDOW`
+    """The window the worked example measures, for sequences of one `length`: `EXAMPLE_WINDOW`
     positions, or half the sequence where that is shorter."""
     return max(1, min(EXAMPLE_WINDOW, length // 2))
 
 
 #: The worked example where sequences differ in length, or their length is not known. It has the
 #: same shape, and it shows the two things such code must do: work for any length, and return NaN
-#: where a row lacks what the feature reads, rather than raise or measure a shorter window without
-#: saying so.
+#: where a row lacks what the feature measures, instead of raising or measuring a shorter window
+#: without saying so.
 CODE_CONTRACT_ANY_LENGTH = '''\
 def gc_fraction_last_40nt(X):
     """Fraction of G or C in the last 40 nt, or NaN where the sequence is shorter than 40 nt."""
@@ -133,25 +136,45 @@ def wording_digest() -> str:
     """A digest of the wording every proposal is made under, for the cache key.
 
     `ProposalCache` promises that anything which would change a proposal is in its key. Without
-    this digest, editing the strings above would change what a model is asked while the cache went
-    on serving replies to the older question. Only a resume can hit that, because a cache lives
-    inside one run directory and a new run starts empty. But a stale proposal is hardest to notice
-    after a resume that follows an edit. The repair wording is among them, since a cached proposal
-    holds the corrected code.
+    this digest, editing the wording of a request would change what a language model is asked
+    while the cache went on serving replies to the older question. Only a resumed run can meet that
+    problem, because a cache lives inside one run directory and a new run starts empty, but a stale
+    proposal is hardest to notice after a resume that follows an edit.
 
-    The surrounding request template is **not** covered. It is assembled in `render_request`
-    instead of being named as a constant, and digesting a function's source would invalidate the
-    cache on every comment edit.
+    **The digest is taken over requests rendered from fixed stand-in inputs**
+    (`_stand_in_requests`), which between them show every part of the wording that only some
+    requests show, with the system prompt that is sent beside each of them. Any change to what a
+    language model is asked, whether in a constant of this module or in the code that assembles a
+    request, therefore changes the digest, whereas a change to a comment or a docstring does not.
     """
-    repair = "".join(text for _, text in REPAIR_GUIDANCE) + REPAIR_NAMING
-    return hashlib.sha256((SYSTEM_PROMPT + CODE_CONTRACT + CODE_CONTRACT_ANY_LENGTH + repair
-                           ).encode()).hexdigest()[:16]
+    text = "\n\n".join([SYSTEM_PROMPT, *_stand_in_requests()])
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _stand_in_requests() -> list[str]:
+    """The requests `wording_digest` is taken over: one for a binary target on rows of one length,
+    long enough for the worked example to measure `EXAMPLE_WINDOW` positions;
+    one for a continuous target on rows of several lengths, with a covariate, guidance, earlier
+    proposals, a fit's report and a shortened example; and the repair of one function for every
+    kind of failure. The inputs are stand-ins, since only the wording around them matters here."""
+    context = TaskContext(task="T", sequence_layout="L", notes="N")
+    one_length = {"sequence": {"name": "s", "length": 100}, "covariates": []}
+    several = {"sequence": {"name": "s", "length": {"min": 3, "max": 5}},
+               "covariates": [{"name": "c", "min": 0.0, "max": 1.0, "description": "D"}]}
+    rows = [Example("ACGT", 1), Example("TGCA", 0)]
+    measured = [Example("ACGTA", 0.5, (("c", 0.25),)), Example("TGC", -0.5, (("c", 0.75),))]
+    failures = [(f"f_{failure}", "def f(X): pass", Check(failure, "failed")) for failure in FAILURES]
+    return [render_request(context, 1, rows, [], "s", "y", BINARY, columns=one_length),
+            render_request(context, 1, measured, ["g"], "s", "y", CONTINUOUS, feedback={"k": 1},
+                           columns=several, max_example_length=4, guidance="G"),
+            render_repair_request(context, failures, "s", columns=several)]
 
 
 @dataclass(frozen=True)
 class Proposal:
-    """One feature as the model returned it, before it has been compiled or run. `replaces` is set
-    in the answer to a repair request: the name of the function this one corrects."""
+    """One feature as the language model returned it, before it has been compiled or run.
+    `replaces` is set in the answer to a repair request: the name of the function this one
+    corrects."""
 
     name: str
     description: str
@@ -162,7 +185,7 @@ class Proposal:
 
 @dataclass(frozen=True)
 class Example:
-    """One row shown to the model: its sequence, its label, and its covariates by name."""
+    """One row shown to the language model: its sequence, its label, and its covariates by name."""
 
     sequence: str
     label: int | float | None
@@ -171,14 +194,14 @@ class Example:
 
 def sample_examples(inputs, y: np.ndarray | None, n_examples: int, seed: int,
                     target_kind: str) -> list[Example]:
-    """A sample of rows to show the model, from `Inputs` or the sequences alone, balanced over the
-    strata of the target's kind: the classes of a binary target, and the quantile bins of a
+    """A sample of rows to show the language model, from `Inputs` or the sequences alone, balanced
+    over the strata of the target's kind: the classes of a binary target, and the quantile bins of a
     continuous one (`seqmaestro.target`).
 
-    Balanced instead of uniformly random, because at this sample size a random draw can be almost
-    all one class, and a model shown almost no positives proposes features about the negatives. A
-    continuous target's tails are thin in the same way, and a random draw of a heavy-tailed target
-    shows the model almost nothing but values near its centre.
+    The sample is balanced instead of uniformly random, because at this sample size a random draw
+    can be almost all one class, and a language model shown almost no positives proposes features
+    about the negatives. A continuous target's tails are thin in the same way, and a random draw of
+    a heavy-tailed target shows the language model almost nothing but values near its centre.
     """
     inputs = as_inputs(inputs)
     rng = np.random.default_rng(seed)
@@ -203,7 +226,8 @@ def sample_examples(inputs, y: np.ndarray | None, n_examples: int, seed: int,
         take = min(per_group, len(rows))
         picks.extend(int(i) for i in rng.choice(rows, size=take, replace=False))
 
-    # Interleaved rather than grouped by stratum, so position in the list carries no signal.
+    # The rows are interleaved instead of grouped by stratum, so a row's position in the list says
+    # nothing about its label.
     rng.shuffle(picks)
     return [example(i, y[i].item()) for i in picks]
 
@@ -212,7 +236,7 @@ def render_examples(examples: list[Example], target_column: str,
                     max_example_length: int | None) -> list[str]:
     """The example rows as a request shows them, one line per row: the sequence, then its label.
 
-    Rows that carry covariates are numbered, and their covariates follow as one table of
+    Rows that have covariates are numbered, and their covariates follow as one table of
     comma-separated values: the covariates are named once, in its header, and each row's values
     are on the line with its number. Naming each covariate once keeps the prompt short when a
     dataset has many of them, since names written beside every value would take several times the
@@ -247,6 +271,17 @@ def shown_sequence(sequence: str, max_length: int | None) -> str:
             f"  ({len(sequence):,} characters, the middle not shown)")
 
 
+#: How a request introduces the guidance the person running the analysis gave. DEFT's and IGSR's
+#: adapters use the same words in the prompts they build.
+GUIDANCE_INTRODUCTION = ("The person running this analysis gives this guidance on the form of the "
+                         "features:")
+
+
+def _guidance(guidance: str | None) -> list[str]:
+    """The lines of a request that show the guidance on the form of the features, or none."""
+    return ["", GUIDANCE_INTRODUCTION, guidance] if guidance else []
+
+
 def render_request(
     context,
     n_features: int,
@@ -258,13 +293,16 @@ def render_request(
     feedback: dict | None = None,
     columns: Mapping[str, Any] | None = None,
     max_example_length: int | None = None,
+    guidance: str | None = None,
 ) -> str:
     """The user message for one proposal round.
 
     `columns` is `seqmaestro.llm.columns.describe_columns` of the rows the examples come from. The
     columns block, the covariates in the examples and the requirements, and what the requirements
-    say about sequences of different lengths, render only where they say something the task's
-    description does not. An example longer than `max_example_length` is shown cut.
+    say about sequences of different lengths, appear only where they add something the task
+    description does not say. An example longer than `max_example_length` is shown shortened
+    (`shown_sequence`). `guidance` is what the person running the analysis asks of the form of the
+    features, shown word for word after the request, and nothing is shown where there is none.
     """
     parts = [*_task(context, columns),
              f"Below are {len(examples)} example rows from the training data.",
@@ -272,6 +310,7 @@ def render_request(
              "",
              f"Propose {n_features} candidate features that might {REQUEST[target_kind]}. For each, "
              f"write a Python function computing it for every row of a pandas DataFrame.",
+             *_guidance(guidance),
              "",
              *_code_requirements(sequence_column, columns)]
 
@@ -305,8 +344,8 @@ def render_repair_request(context, failures: list[tuple[str, str, Check]], seque
     """The user message sending back functions that failed on the training rows.
 
     `failures` holds each function's name, the code last tried for it, and how that code failed
-    (`seqmaestro.proposer.checks.Check`). The model is told how to correct each kind of failure
-    (`REPAIR_GUIDANCE`) and how to name a correction (`REPAIR_NAMING`), under the same task,
+    (`seqmaestro.proposer.checks.Check`). The language model is told how to correct each kind of
+    failure (`REPAIR_GUIDANCE`) and how to name a correction (`REPAIR_NAMING`), under the same task,
     columns and code requirements as the request that produced the functions.
     """
     present = {checked.failure for _, _, checked in failures}
@@ -369,8 +408,8 @@ def _code_requirements(sequence_column: str, columns: Mapping[str, Any] | None) 
 
 
 def _answer_format(repair: bool = False) -> list[str]:
-    """How the model is to answer: a JSON array of named functions and nothing else. In a repair,
-    each entry also names the function it corrects."""
+    """How the language model is to answer: a JSON array of named functions and nothing else. In a
+    repair, each entry also names the function it corrects."""
     entry = {
         **({"replaces": "<the name of the function this entry corrects>"} if repair else {}),
         "name": "<identifier>",
@@ -382,11 +421,12 @@ def _answer_format(repair: bool = False) -> list[str]:
 
 
 def parse_proposals(text: str) -> tuple[list[Proposal], str | None]:
-    """Read a reply into proposals. Returns what parsed, and why the rest did not.
+    """Parse a reply into proposals, returning what parsed and why the rest did not.
 
     Prose and code fences around the JSON are tolerated, because insisting on a clean reply would
     discard good features for a formatting slip. A proposal missing its code or its name is dropped
-    without repair, since guessing at either produces a feature nobody can attribute.
+    without repair, because a guessed name or code would give a feature the language model did not
+    write.
     """
     if not text or not text.strip():
         return [], "empty reply"

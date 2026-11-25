@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Markdown to PDF. Needs no conda environment: `pandoc` and `xelatex` are system binaries and
-# DejaVu is a system font.
+# Render a report's markdown to PDF. It needs no conda environment, because `pandoc` and `xelatex`
+# are system binaries and DejaVu is a system font.
 #
 #     bash experiments/analysis/render_pdf.sh <run>/report/REPORT.md
 #
@@ -12,14 +12,14 @@
 # `REPORT_ORIENTATION=landscape` renders the whole document landscape instead, for a dataset whose
 # tables are too wide for portrait.
 #
-# `--columns` is set explicitly. Pandoc gives a pipe table explicit column widths only when the
-# table's source is wider than this value, and otherwise leaves it at its natural width. A table at
-# its natural width runs off the page when its cells hold long monospace names, because a character
-# of `feature_name_like_this` is far wider than a character of `0.998`. So the value sits below the
-# widest table known to fit unaided: every wider table is scaled to the text block and wraps inside
-# its cells, and only narrow tables stay compact. Setting it too low has a cosmetic cost (a narrow
-# table is stretched to the full width), and setting it too high has a correctness cost (a table
-# runs into the margin), so it errs low.
+# `--columns` is set explicitly, because pandoc gives a pipe table explicit column widths only when
+# the table's source is wider than this value, and otherwise leaves it at its natural width. A table
+# at its natural width runs off the page when its cells hold long monospace names, because a
+# character of `feature_name_like_this` is far wider than a character of `0.998`. So the value sits
+# below the widest table known to fit unaided: every wider table is scaled to the text block and
+# wraps inside its cells, and only narrow tables stay compact. Too low a value only stretches a
+# narrow table to the full width, whereas too high a value lets a table run into the margin, so the
+# value errs low.
 set -euo pipefail
 
 ORIENTATION="${REPORT_ORIENTATION:-portrait}"
@@ -33,15 +33,17 @@ else
     COLUMNS=100
 fi
 
-HEADER="$(mktemp --suffix=.tex)"
+# pandoc takes the header by its content, so the file needs no `.tex` suffix, which macOS's mktemp
+# cannot add.
+HEADER="$(mktemp "${TMPDIR:-/tmp}/seqmaestro_header.XXXXXX")"
 trap 'rm -f "$HEADER"' EXIT
 cat > "$HEADER" <<'TEX'
 \usepackage{booktabs}
 \usepackage{longtable}
 \usepackage{array}
 \usepackage{ragged2e}
-% Tables carry a lot of the substance and there are many of them; one step down in size and a little
-% more leading between rows is the difference between a readable page and a wall.
+% Tables hold much of the report's substance, and there are many of them, so they are set one step
+% down in size with a little more leading between rows, which keeps a page of them readable.
 \AtBeginEnvironment{longtable}{\footnotesize}
 \renewcommand{\arraystretch}{1.18}
 \setlength{\tabcolsep}{3.5pt}
@@ -64,9 +66,9 @@ cat > "$HEADER" <<'TEX'
 % and leaves the heading alone at the foot of this one. Each heading therefore starts a new page
 % when too few lines are left: six above prose, and twelve at the lowest level, which heads each
 % configuration's tables, whose rows wrap to nine lines in the narrow description column. A
-% lowest-level heading placed straight under another heading makes no check: the check leaves a
-% place where the page may break, and there that place is between the two headings, so on a page
-% with no better break the upper heading was left alone at its foot.
+% lowest-level heading placed straight under another heading skips the check, because the check
+% leaves a place where the page may break, which there would fall between the two headings, so on a
+% page with no better break the upper heading would be left alone at its foot.
 \usepackage{etoolbox}
 \usepackage{needspace}
 \pretocmd{\section}{\needspace{6\baselineskip}}{}{}
@@ -74,8 +76,8 @@ cat > "$HEADER" <<'TEX'
 \makeatletter
 \pretocmd{\subsubsection}{\if@nobreak\else\needspace{12\baselineskip}\fi}{}{}
 \makeatother
-% Block quotes carry the marked interpretation blocks, so they need to read as a distinct object
-% rather than as indented prose.
+% Block quotes hold the marked interpretation blocks, so they must look like a distinct object
+% rather than like indented prose.
 \usepackage{framed}
 \usepackage{xcolor}
 \definecolor{noteedge}{HTML}{2A78D6}

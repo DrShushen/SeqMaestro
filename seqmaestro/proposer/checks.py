@@ -1,26 +1,26 @@
 """What a generated function did on the rows, and whether a model can use the result.
 
-A function a language model wrote can fail in five ways once it meets real rows: it raises, it does
-not finish within its time limit, it returns something other than one number per row, it is
+A function a language model wrote can fail in five ways once it runs on real rows: it raises, it
+does not finish within its time limit, it returns something other than one number per row, it is
 undefined (NaN or infinite) on too many rows, or it returns one value for every row. `check` runs a
-function on a frame and says which, in words a language model can act on.
+function on a frame and says which of these happened, in words a language model can act on.
 
 Both places that run generated code use it. The proposer checks each candidate on the rows it
-proposed from, so a failure can go back to the model with its failure attached (`Proposer`'s repair
-round). `GeneratedFeaturiser` checks again when it fits, as a second guard. One definition means the
-two cannot disagree about what is usable.
+proposed from, so a failing function can go back to the language model with its failure attached
+(`Proposer`'s repair round). `GeneratedFeaturiser` checks again when it fits, as a second guard.
+Because both use one definition, the two cannot disagree about what is usable.
 
-**How much undefined is too much** is a setting, `max_undefined_share`. Below it the feature is
-kept and its undefined rows are filled with its median, as a model needs a number in every row.
-Above it the feature is mostly a statement about which rows it cannot measure, and is dropped. A
-feature undefined on every row is never kept.
+**The share of rows on which a feature may be undefined** is a setting, `max_undefined_share`. Up
+to it, the feature is kept and its undefined rows are filled with its median, because a model needs
+a number in every row. Above it, the feature mostly says which rows it cannot measure, and is
+dropped. A feature undefined on every row is never kept.
 
-**How long is too long** is a setting too, `max_seconds`: the longest one function may run on the
-rows it is checked on. Generated code can cost time that grows with the square or the cube of a
-sequence's length, which finishes in seconds on sequences of a few hundred bases and takes days on
-sequences of several thousand. The limit turns such a function into a failure like any other, so
-the proposer can send it back to the model. On more rows than it was checked on, a function is
-given proportionally more time (`scaled_limit`).
+**The time a function may run** is a setting too, `max_seconds`: the longest one function may run
+on the rows it is checked on. Generated code can take time that grows with the square or the cube
+of a sequence's length, so a function that finishes in seconds on sequences of a few hundred bases
+can take days on sequences of several thousand. The limit turns such a function into a failure like
+any other, so the proposer can send it back to the language model. On more rows than it was checked
+on, a function is given proportionally more time (`scaled_limit`).
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ def as_float_column(values, n_rows: int) -> np.ndarray:
     """Coerce whatever a generated function returned into one float per row, or raise.
 
     Generated functions return Series, arrays, lists and occasionally a scalar. A scalar is refused
-    instead of broadcast, because a feature that is the same for every row carries no information,
-    and widening it into a constant column would hide that behind a column that looks real.
+    instead of broadcast, because a feature that is the same for every row is uninformative, and
+    widening it into a constant column would hide that behind a column that looks real.
     """
     if np.isscalar(values):
         raise ValueError(f"returned a scalar, expected one value per row ({n_rows}).")
@@ -87,10 +87,10 @@ class TimeLimitUnavailable(RuntimeError):
 class _OutOfTime(BaseException):
     """Raised inside a generated function when its time runs out.
 
-    A `BaseException`, so that generated code catching `Exception` to handle its own edge cases
-    cannot catch this too and run on, row after row, with no limit left. A bare `except:` would
-    catch it, which is why the guard compiles one as `except Exception:`. It never leaves
-    `time_limit`, which raises `FeatureTimeout` in its place.
+    It is a `BaseException`, so that generated code catching `Exception` to handle edge cases cannot
+    catch this too and run on, row after row, with no limit left. A bare `except:` would catch it,
+    which is why the guard compiles one as `except Exception:`. It never leaves `time_limit`, which
+    raises `FeatureTimeout` in its place.
     """
 
 
@@ -141,9 +141,9 @@ def time_limit(seconds: float | None) -> Iterator[None]:
 
 def scaled_limit(max_seconds: float | None, checked_rows: int | None, rows: int) -> float | None:
     """The time limit on `rows` rows for a function allowed `max_seconds` on the `checked_rows` it
-    was checked on: longer in proportion to the rows, and never shorter than `max_seconds`, since a
-    few rows still pay the function's fixed costs. None where either is unknown, which sets no
-    limit."""
+    was checked on: longer in proportion to the rows, and never shorter than `max_seconds`, because
+    a few rows still take the function's fixed time. It is None where either is unknown, which sets
+    no limit."""
     if max_seconds is None or checked_rows is None:
         return None
     return max_seconds * max(1.0, rows / max(checked_rows, 1))
@@ -151,10 +151,11 @@ def scaled_limit(max_seconds: float | None, checked_rows: int | None, rows: int)
 
 @dataclass(frozen=True)
 class Check:
-    """One function on one set of rows: its values where it ran, and why it cannot be used, if not."""
+    """The check of one function on one set of rows: its values where it ran, and why it cannot be
+    used, if it cannot."""
 
     failure: str | None
-    #: The failure in words, for the model asked to repair it, and for a log.
+    #: The failure in words, for the language model asked to repair it, and for a log.
     detail: str
     #: One float per row, rounded as a model would be given them. None where the function did not
     #: return one value per row.
@@ -172,9 +173,9 @@ class Check:
 
 def run(function, frame: pd.DataFrame, significant_digits: int | None,
         max_seconds: float | None) -> np.ndarray:
-    """One generated function on these rows, within `max_seconds`: a float per row, to the kept
-    precision. Raises what the function raises, `FeatureTimeout` where it runs out of time, and
-    `ValueError` where it returns other than one number per row."""
+    """Run one generated function on these rows, within `max_seconds`, and return a float per row
+    at the kept precision. It raises what the function raises, `FeatureTimeout` where it runs out
+    of time, and `ValueError` where it returns anything but one number per row."""
     with time_limit(max_seconds):
         returned = function(frame)
     values = as_float_column(returned, len(frame))

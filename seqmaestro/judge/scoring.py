@@ -1,17 +1,18 @@
-"""Running the panel, and summarising its scores.
+"""Running the panel and summarising its scores.
 
 The summary answers two questions, the second only when a control was judged:
 
-**What did each arm score?** A mean over its features, each feature itself a mean over repeats.
+**What did each arm score?** An arm's score is the mean over its features, each of which is
+itself a mean over repeats.
 
-**What did the noise score?** When features from permuted-label runs are on the panel, they are
-blinded identically and `control_gap` reports how far each arm sits above their mean. Judging them
-is off by default, for the reasons in the docstring of `seqmaestro.pipeline.analyses.judge`. Without
-them the summary omits `control_gap`, so an arm's mean describes its features and is compared with
-the other arms.
+**What did the noise score?** When features from permuted-label cells are on the panel, they are
+shown in the same way, and `control_gap` reports how far each arm sits above their mean. Judging
+them is off by default, for the reasons `docs/developer/analyses/judge.md` gives. Without them the
+summary omits `control_gap`, so an arm's mean describes its features and is compared with the
+other arms.
 
-Unanswered items are counted, never imputed. A refusal folded into the mean would pull every arm
-towards the middle and flatter whichever arm is hardest to parse.
+Unanswered items are counted and never imputed, because a failed call folded into the mean would
+pull every arm towards the middle and flatter whichever arm's features are hardest to parse.
 """
 
 from __future__ import annotations
@@ -28,7 +29,8 @@ DEFAULT_REPEATS = 3
 
 @dataclass
 class ItemScore:
-    """One feature's judgements. `scores` excludes refusals; `n_failed` counts them."""
+    """One feature's judgements. `scores` leaves out the calls that gave no score, which
+    `n_failed` counts."""
 
     item_id: str
     arm: str
@@ -57,10 +59,11 @@ def score_panel(
     include_direction: bool = False,
     progress=None,
 ) -> list[ItemScore]:
-    """Judge every entry `repeats` times. Independent calls, so the spread is a real measurement.
+    """Judge every entry `repeats` times, in independent calls, so that the spread is a real
+    measurement.
 
-    `context` is required: a feature described in coordinates the judge cannot interpret is not
-    being judged on its biology.
+    `context` is required, because a feature described in coordinates the judge cannot interpret
+    is not being judged on its biology.
     """
     if repeats < 1:
         raise ValueError(f"repeats must be at least 1; got {repeats}.")
@@ -129,9 +132,9 @@ def summarise(items: list[ItemScore], context: TaskContext | None = None) -> dic
     }
     if control:
         control_block["why"] = (
-            "Features from permuted-label runs, blinded identically. If these score as highly "
-            "as the real ones, the judge is scoring how a feature is written rather than what "
-            "produced it, and no arm mean above is interpretable."
+            "Features from permuted-label cells, shown to the judge in the same way. If these "
+            "score as highly as the real ones, the judge is scoring how a feature is written "
+            "rather than what produced it, and no arm mean above is interpretable."
         )
 
     return {

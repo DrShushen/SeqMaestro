@@ -1,10 +1,10 @@
-"""`install.sh`, run against a stand-in for conda: which environments it builds and from what, what
-its checks report, and that it prints no secret.
+"""Tests of `install.sh` against a stand-in for conda: which environments it builds and from what,
+what its checks report, and that it prints no secret.
 
-Nothing is installed. The script is copied into a folder that looks like the repository, beside a
-`conda` that lists the environments a test names and records every call, so the script's real
+The tests install nothing. The script is copied into a folder that looks like the repository,
+beside a `conda` that lists the environments a test names and records every call, so the real
 `conda`, the real environments and the real `.env` are never touched. What the script builds for
-real is tested by running it (`ENVIRONMENTS.md`).
+real is tested by running it (see `ENVIRONMENTS.md`).
 """
 
 from __future__ import annotations
@@ -20,13 +20,14 @@ import pytest
 from seqmaestro import arms
 from seqmaestro.llm.client import AZURE, ENV_DEPLOYMENT, ENV_ENDPOINT, ENV_KEY, ENV_PROVIDER, PROVIDERS
 from seqmaestro.models import symbolic
+from seqmaestro.motifs.discovery import MEME_ENVIRONMENT
 from seqmaestro.pipeline import driver
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "install.sh"
 
-#: The environments a run needs, as the code that starts them names them, by the script's short
-#: name for each.
+#: Each environment a run needs: the script's short name for it, mapped to the name that the code
+#: starting it uses.
 NEEDED = {
     "core": arms.CORE_ENVIRONMENT,
     "deft": arms.DEFT_ENVIRONMENT,
@@ -49,7 +50,8 @@ fi
 
 @pytest.fixture
 def machine(tmp_path):
-    """A folder that looks like the repository, with the script in it, and a home with nothing."""
+    """A folder that looks like the repository with the script in it, beside a stand-in `conda`
+    and an empty home directory."""
     repo = tmp_path / "repo"
     (repo / "methods" / "deft").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "install.sh")
@@ -64,12 +66,13 @@ def machine(tmp_path):
 
 
 def install(machine: Path, *arguments: str, built: str = "", conda: bool = True):
-    """Run the script there. `built` names the environments the stand-in conda lists."""
+    """Run the script in the folder `machine` made. `built` names the environments the stand-in
+    conda lists."""
     path = f"{machine / 'bin'}:/usr/bin:/bin" if conda else "/usr/bin:/bin"
     return subprocess.run(
         ["bash", str(machine / "repo" / "install.sh"), *arguments], capture_output=True, text=True,
         stdin=subprocess.DEVNULL, check=False,
-        # A session of its own has no terminal, so the script cannot stop to ask a question.
+        # A new session has no controlling terminal, so the script cannot stop to ask a question.
         start_new_session=True,
         env={"PATH": path, "HOME": str(machine / "home"), "FAKE_ENVS": built,
              "FAKE_LOG": str(machine / "conda.log"), "TMPDIR": str(machine)})
@@ -102,7 +105,7 @@ def test_a_dry_run_builds_the_environments_the_code_starts(machine):
     for environment in NEEDED.values():
         assert (f"create -y -n {environment} --override-channels -c conda-forge python=3.12 pip"
                 in printed)
-    assert "SeqMaestro_Core/bin/python -m pip install -e .[models,llm,driver,dev]" in printed
+    assert "SeqMaestro_Core/bin/python -m pip install -e .[models,llm,driver,cli,dev,docs]" in printed
     assert ("SeqMaestro_Method_deft/bin/python -m pip install -e methods/deft[dev] scikit-learn"
             in printed)
     assert "SeqMaestro_Method_igsr/bin/python -m pip install -e methods/igsr[dev]" in printed
@@ -129,9 +132,41 @@ def test_the_environments_to_build_can_be_chosen(machine):
     assert created("--only", "core,pysr") == [NEEDED["core"], NEEDED["pysr"]]
     assert created("--skip=pysr") == [name for key, name in NEEDED.items() if key != "pysr"]
     assert created("--with-alphagenome")[-1] == "SeqMaestro_Method_alphagenome"
+    assert created("--with-motifs")[-1] == MEME_ENVIRONMENT
+    assert created("--with-motifs", "--with-alphagenome")[-2:] == [MEME_ENVIRONMENT,
+                                                                  "SeqMaestro_Method_alphagenome"]
 
     refused = install(machine, "--only", "everything")
     assert refused.returncode == 1 and "no environment is called 'everything'" in refused.stderr
+
+
+def test_the_environments_to_build_are_named_before_they_are_built(machine):
+    def named(*arguments: str) -> str:
+        printed = install(machine, "--dry-run", *arguments).stderr
+        return re.search(r"SeqMaestro: building (.*)", printed).group(1)
+
+    assert named() == " ".join(NEEDED)
+    assert named("--only", "meme") == "meme"
+    assert named("--skip", "core", "--with-motifs") == "deft igsr pysr localutils meme"
+
+
+def test_the_meme_suite_is_built_from_bioconda_only_when_asked_for(machine):
+    """The MEME Suite is published only on bioconda, so its environment takes that channel beside
+    conda-forge. Only a run that discovers motifs needs the suite, whose licence the script states
+    as it builds it."""
+    printed = commands(install(machine, "--dry-run", "--with-motifs"))
+
+    assert (f"create -y -n {MEME_ENVIRONMENT} --override-channels -c conda-forge -c bioconda "
+            f"python=3.12 meme=5.5.9") in printed
+    assert "non-profit" in printed
+    assert "bioconda" not in commands(install(machine, "--dry-run"))
+
+
+def test_the_check_of_the_meme_suite_runs_its_tools(machine):
+    result = install(machine, "--check", "--only", "meme", built=MEME_ENVIRONMENT)
+    assert f"PROBLEM  {MEME_ENVIRONMENT} cannot run STREME and Tomtom" in result.stderr
+    result = install(machine, "--check", "--only", "meme")
+    assert f"PROBLEM  {MEME_ENVIRONMENT} is not built. Run: ./install.sh --only meme" in result.stderr
 
 
 def test_an_environment_that_exists_is_kept_and_brought_up_to_date(machine):
@@ -143,8 +178,9 @@ def test_an_environment_that_exists_is_kept_and_brought_up_to_date(machine):
 
 
 def test_the_interpreters_are_printed_for_the_environments_that_exist(machine):
-    """`eval "$(./install.sh --interpreters)"` is how the pages get `$CORE` and the others, so the
-    assignments are all that goes to standard output."""
+    """`eval "$(./install.sh --interpreters)"` is how the documentation, the process pages and the
+    skill set `$CORE` and the other interpreters, so nothing but the assignments may go to standard
+    output."""
     result = install(machine, "--interpreters", built=f"{NEEDED['core']} {NEEDED['deft']}")
     assert result.returncode == 0
     assert result.stdout.splitlines() == [
@@ -176,8 +212,8 @@ def test_the_check_names_the_empty_credentials_and_prints_no_value(machine):
 
 @pytest.mark.parametrize("named", ["", "azure, openai", "gemini", "a-key-pasted-into-the-wrong-line"])
 def test_the_check_asks_for_a_provider_where_env_names_none_of_them(machine, named):
-    """The variable's value is never printed either: a key pasted into the wrong line stays out
-    of the output."""
+    """The variable's value is never printed, so a key pasted into the wrong line stays out of the
+    output."""
     (machine / "repo" / ".env").write_text(f"{ENV_PROVIDER}='{named}'\n{ENV_KEY}=x\n")
     result = install(machine, "--check")
     assert (f"{ENV_PROVIDER} in .env does not name the language model's provider. Set it to one of: "
@@ -186,8 +222,8 @@ def test_the_check_asks_for_a_provider_where_env_names_none_of_them(machine, nam
 
 
 def test_the_check_knows_each_providers_settings_as_the_client_does(machine):
-    """The script lists each provider's required variables itself, since its check must work
-    before any environment is built, so the two lists are held to each other here."""
+    """The script lists each provider's required variables itself, because its check must work
+    before any environment is built. This test keeps that list in step with the client's."""
     listed = re.search(r'^PROVIDERS="(.*)"$', SCRIPT.read_text(), re.MULTILINE).group(1).split()
     assert listed == list(PROVIDERS)
     env = machine / "repo" / ".env"
@@ -202,8 +238,9 @@ def test_the_check_knows_each_providers_settings_as_the_client_does(machine):
 
 
 def test_without_conda_the_script_says_so_and_can_install_miniforge(machine):
-    """Nothing is installed without the user's word: a check refuses, a build stops with the two
-    ways on, and `--install-miniforge` is the word."""
+    """Nothing is installed without the user's consent: a check refuses, a build stops and names the
+    two ways forward (installing conda, or `--install-miniforge`), and `--install-miniforge` gives
+    that consent."""
     assert "no conda was found" in install(machine, "--check", conda=False).stderr
 
     stopped = install(machine, conda=False)

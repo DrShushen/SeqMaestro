@@ -1,34 +1,20 @@
 """What a language model must be told about the problem to make sense of what it is shown.
 
-Shared by the proposer, the judge and the recurrence analysis. The first two fail the same way
-without it. "GC fraction of positions 41-49" cannot be judged without knowing the organism, the
-assay and what position 41 is measured from, and a judge given only the description scores the
-writing. A proposer given only a sequence column and a label column proposes generic string
-statistics, because that is all it has been told the problem is about.
+A judge given only a feature's description scores the writing, and a proposer given only a
+sequence column and a label column proposes generic string statistics, so every consumer requires a
+context. **Each dataset has one description, loaded from a file** (`load_task` reads the
+descriptions from a directory, and the library ships none), so that every consumer is told the same
+facts. `experiments/datasets/README.md` describes the fields, blinding (`judge_only`), and what a
+description leaves out.
 
-Every consumer requires a context, and **each dataset has one description, loaded from a file**.
-The facts are the same for every consumer, and a dataset described separately in each place will
-eventually be described differently in each place. `load_task` reads the descriptions from a
-directory of files. This library ships none (see `experiments/datasets/`).
+The blind rendering is the default: a caller that reaches for `render()` gets what the models that
+write features get, so a caller that picks the wrong one of the two discloses too little and never
+reveals the withheld fact.
 
-**One field may be told to the judge and withheld from the models**: `judge_only`. This is
-blinding, and carries no consumer-specific framing. The proposer and a generative method are what
-an experiment tests, so a fact they could *retrieve* instead of discover (the name of the protein
-whose loss defines the classes, say) makes the result uninterpretable if they are given it. The
-judge is not under test. It is the instrument that scores what they found, and it cannot say how
-significant a feature would be without knowing what the phenotype is. The field still lives in the
-same file, so the asymmetry is written down with everything else and not arranged by whoever
-assembles a prompt.
-
-The blind rendering is the default. A caller that reaches for `render()` gets what the models get,
-so picking the wrong one of the two under-discloses and never leaks.
-
-**A description is only part of what the models are told.** They also see the names of the columns
-they are handed (the target column's name ends every example row of a proposer's prompt), and each
-covariate's description from the dataset's declaration. A blinded run that withholds which
-cells were treated, and whose target column is `is_treated`, tells every model what its
-`judge_only` withholds. `blinding_leaks` finds where a withheld word shows in those names and
-descriptions, and a run set up as blinded is refused before it starts when one does.
+A description is only part of what the models are told, so `blinding_leaks` finds where a withheld
+word appears in the column names and covariate descriptions they are shown, and `guidance_leaks`
+where one appears in the guidance. A run set up as blinded is refused before it starts when either
+finds one.
 """
 
 from __future__ import annotations
@@ -39,17 +25,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-#: The fields a description file may carry. Unknown keys are refused rather than ignored, because a
-#: typo in a dataset description is otherwise a silently missing fact.
+#: The fields a description file may hold. Unknown keys are refused rather than ignored, because a
+#: typo in a dataset description would otherwise be a silently missing fact.
 FIELDS = ("task", "sequence_layout", "notes", "target_name", "judge_only")
 
-#: The fields a model consumer may see. Derived from `FIELDS` instead of listed again, so a field
-#: added there is disclosed to the models unless it is excluded here. `judge_only` is the one
-#: exclusion, and the reason for the split.
+#: The fields a model consumer may see. They are derived from `FIELDS` instead of listed again, so
+#: a field added there is disclosed to the models unless it is excluded here. `judge_only` is the
+#: only exclusion, and the reason for the split.
 BLIND_FIELDS = tuple(field for field in FIELDS if field != "judge_only")
 
-#: The shortest word that counts as withheld. Shorter words ("is", "a") are too common to give
-#: anything away, and a column name holds them by chance.
+#: The length of the shortest word that counts as withheld. Shorter words ("is", "a") are too
+#: common to give anything away, and a column name holds them by chance.
 MIN_WITHHELD_LENGTH = 3
 
 
@@ -62,36 +48,25 @@ def _words(text: str | None) -> set[str]:
 
 @dataclass(frozen=True)
 class TaskContext:
-    """The problem, in the terms a domain expert would state it.
+    """The problem, in the terms a domain expert would state it: what is predicted, the layout of the
+    sequences, any notes, and the fact told to the judge alone (`judge_only`).
 
-    **Factual about the task and silent about known confounds.** Telling the judge that GC content
-    is confounded in this dataset would have it mark GC features down, which is a judgement about
-    whether a feature is real, the question "if it were true" brackets off. Telling the proposer
-    would steer it away from a hypothesis the experiment is meant to let it reach. Such warnings
-    belong in the report. `notes` can carry one if you decide otherwise, but that is a different
-    experiment and should be recorded as one.
-
-    **No framing here is consumer-specific.** The judge knows it is judging and the proposer knows
-    it is proposing, and that framing belongs in their own prompts. Putting it in the description
-    of the data is how two consumers of one dataset drift apart.
-
-    `judge_only` does not break that rule, because it is a fact about the data like every other
-    field. It is disclosed to one consumer and withheld from the others, and which consumers are
-    blind is a property of the experiment and not of any prompt.
+    `experiments/datasets/README.md` says what each field holds, why a description states facts and no
+    known confounds, and why it holds no framing specific to one consumer.
     """
 
     task: str
     sequence_layout: str | None = None
     notes: str | None = None
     #: A short noun phrase for the prediction target, for consumers whose prompt templates
-    #: interpolate one (DEFT's do). It is **not** part of `render()`: it exists so a config can be
-    #: generated from this description, and rendering it would change prompts that have already
-    #: been measured.
+    #: interpolate one (DEFT's do). It is **not** part of `render()`: it exists so that a config can
+    #: be generated from this description, and rendering it would change prompts whose results have
+    #: already been measured.
     target_name: str | None = None
-    #: The blinded fact: told to the judge by `render_for_judge`, and reaching no model consumer
-    #: through any path. Set it only for what a proposer could look up instead of finding, and say
-    #: in the run report that the run was blinded and to what. A blinding nobody records cannot be
-    #: told apart afterwards from a description that was simply thin.
+    #: The blinded fact: told to the judge by `render_for_judge`, and never reaching a model
+    #: consumer by any path. Set it only for what a proposer could look up instead of finding, and
+    #: say in the run's report that the run was blinded, and to what. A blinding that is not
+    #: recorded cannot be told apart afterwards from a description that was simply thin.
     judge_only: str | None = None
 
     @classmethod
@@ -108,8 +83,8 @@ class TaskContext:
         return cls(**payload)
 
     def render(self) -> str:
-        """What a model consumer in this package is told (the proposer, the recurrence analysis). It
-        never carries `judge_only` (see the module doc)."""
+        """What a model consumer in this package (the proposer, the recurrence analysis) is told. It
+        never includes `judge_only` (see the module docstring)."""
         parts = [f"Task: {self.task}"]
         if self.sequence_layout:
             parts.append(f"Sequence layout: {self.sequence_layout}")
@@ -120,21 +95,21 @@ class TaskContext:
     def render_for_judge(self) -> str:
         """`render`'s text, plus whatever this dataset withholds from the models.
 
-        Built on top of `render`, so a field added there appears in both. The disclosure is
-        appended as plain context, with no label saying it was withheld. The judge is asked what a
-        feature would mean if it held, and telling it that the systems were working blind invites
-        it to score the achievement instead of the biology.
+        It is built on top of `render`, so a field added there appears in both. The disclosure is
+        appended as plain context, without a label saying it was withheld, because the judge is
+        asked what a feature would mean if it held, and telling it that the systems were working
+        blind invites it to score the achievement instead of the biology.
         """
         if not self.judge_only:
             return self.render()
         return f"{self.render()}\nAdditional context: {self.judge_only}"
 
     def as_dict(self) -> dict:
-        """Every field, for recording beside the output. A result is comparable only to another
-        asked the same way.
+        """Every field, for recording beside the output, because a result is comparable only to
+        another asked the same way.
 
-        Carries `judge_only`, because a record that omits what was withheld cannot be told apart
-        from a run that withheld nothing. This dict is a record and never goes into a prompt.
+        It includes `judge_only`, because a record that omits what was withheld cannot be told
+        apart from a run that withheld nothing. This dict is a record and never goes into a prompt.
         """
         return {field: getattr(self, field) for field in FIELDS}
 
@@ -142,21 +117,24 @@ class TaskContext:
         """Every field except `judge_only`, for keying anything that only the models answer.
 
         A proposal cache is keyed on everything that would change the reply. `judge_only` cannot
-        change it, since no model consumer is ever shown it, so including it would discard cached
-        proposals whenever the judge's context was edited and pay again for identical answers.
+        change it, since a model consumer is never shown it, so including it would discard the
+        cached proposals whenever the judge's context was edited, and pay again for identical
+        answers.
         """
         return {field: getattr(self, field) for field in BLIND_FIELDS}
 
     def withheld_words(self) -> frozenset[str]:
-        """The words of `judge_only` that no field the models are told holds, in lower case: what
-        the description withholds, word by word. Empty where it withholds nothing."""
+        """The words of `judge_only`, in lower case, that are in none of the fields the models are
+        told: what the description withholds, word by word. The set is empty where it withholds
+        nothing."""
         told = set().union(*(_words(getattr(self, field)) for field in BLIND_FIELDS))
         return frozenset(_words(self.judge_only) - told)
 
 
 def blinding_leaks(context: TaskContext, columns: Mapping[str, str | None]) -> list[str]:
-    """Each place a word `context` withholds shows in what the models are told about the columns,
-    in words. Empty where there is none, or where the description withholds nothing.
+    """Each place where a word that `context` withholds appears in what the models are told about
+    the columns, as a sentence. The list is empty where there is none, or where the description
+    withholds nothing.
 
     `columns` maps each column name the models are shown to its description, or to None where it
     has none. **A name holds a word** where the word appears anywhere in it once everything but its
@@ -164,9 +142,9 @@ def blinding_leaks(context: TaskContext, columns: Mapping[str, str | None]) -> l
     holds a word** only as a whole word, since prose holds short words inside longer ones by chance
     ("cap" in "capture").
 
-    Every withheld word counts, the common ones too, so a name can be refused for holding a word
-    such as "line" by chance. The remedy is to rename the column, or to reword `judge_only` so the
-    word is not in it.
+    Every withheld word counts, including the common ones, so a name can be refused for holding a
+    word such as "line" by chance. The remedy is to rename the column, or to reword `judge_only` so
+    the word is not in it.
     """
     withheld = sorted(context.withheld_words())
     leaks = []
@@ -179,11 +157,26 @@ def blinding_leaks(context: TaskContext, columns: Mapping[str, str | None]) -> l
     return leaks
 
 
-def load_task(directory: str | Path, name: str) -> TaskContext:
-    """Load `<directory>/<name>.json`. A name with no file is refused with a list of those there.
+def guidance_leaks(context: TaskContext, guidance: str | None) -> list[str]:
+    """Each word that `context` withholds and `guidance` (the guidance on the form of the features)
+    contains, as a sentence. The list is empty where there is no guidance, or where the description
+    withholds nothing.
 
-    A run's task describes the same dataset to the proposer, the judge and a vendored method,
-    because all three read this file.
+    Every model that writes features is shown the guidance word for word, so on a blinded run it
+    must not name anything withheld. Because the guidance is prose, it holds a word only as a whole
+    word, as a covariate's description does (`blinding_leaks`).
+    """
+    held = _words(guidance)
+    return [f"the feature guidance holds the withheld word {word!r}"
+            for word in sorted(context.withheld_words()) if word in held]
+
+
+def load_task(directory: str | Path, name: str) -> TaskContext:
+    """Load `<directory>/<name>.json`. A name without a file is refused, with a list of the files
+    there.
+
+    The proposer, the judge and a vendored method are told the same task description, because all
+    three read this file.
     """
     directory = Path(directory)
     path = directory / f"{name}.json"

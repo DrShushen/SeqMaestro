@@ -1,8 +1,8 @@
-"""`seqmaestro.models.symbolic`: PySR's search in its own process, and the model Core makes of it.
+"""`seqmaestro.models.symbolic`: PySR's search in a separate process, and the model Core makes of it.
 
-Most tests search with the stand-in (`tests/fixtures/fake_symbolic_search.py`), which speaks the
-real protocol and returns a front without Julia. The `crossenv` tests at the end run the real
-search in `SeqMaestro_Method_pysr`.
+Most tests search with the stand-in (`tests/fixtures/fake_symbolic_search.py`), which follows the
+real protocol and returns a front of equations without Julia. The `crossenv` tests at the end run
+the real search in `SeqMaestro_Method_pysr`.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from seqmaestro.target import BINARY, CONTINUOUS
 
 FAKE = Path(__file__).parent / "fixtures" / "fake_symbolic_search.py"
 PYSR_PYTHON = environment_python(symbolic.ENVIRONMENT)
-#: A placeholder name of the search's, anywhere in a text a reader could see.
+#: A placeholder name the search gives a column (x0, x1, ...), anywhere in a text a reader could see.
 PLACEHOLDER = re.compile(r"\bx\d+\b")
 
 
@@ -63,7 +63,7 @@ def col(i):
 
 @pytest.fixture
 def searches(tmp_path, monkeypatch):
-    """A copy of the stand-in that can be given a front, and that keeps the last request."""
+    """A copy of the stand-in that can be given a front and keeps the last request."""
     home = tmp_path / "search"
     home.mkdir()
     shutil.copy(FAKE, home / FAKE.name)
@@ -85,7 +85,7 @@ def last_request(home: Path) -> dict:
         return {key: saved[key] for key in saved.files}
 
 
-# ------------------------------------------------------------------------------ the choice
+# ------------------------------------------------------------------------------ the choice of equation
 
 def test_a_fit_searches_most_rows_and_keeps_an_equation_over_the_planted_features():
     X, y = planted()
@@ -199,8 +199,8 @@ def test_threads_reach_the_search_process(searches):
 
 
 def test_a_search_takes_the_threads_its_process_was_given(searches, monkeypatch):
-    """A model built with no thread count searches on the threads the process was given, and one
-    built with a count keeps it, as Tier 1's one-core fits do."""
+    """A model built with no thread count searches on the threads the process was given, whereas
+    one built with a count keeps it, as Tier 1's one-core fits do."""
     home = searches()
     X, y = planted()
     monkeypatch.setenv(THREADS_VARIABLE, "2")
@@ -217,8 +217,8 @@ def _fit_in_child(X: pd.DataFrame, y: np.ndarray) -> tuple[list[int], str]:
 
 
 def test_a_forked_child_starts_its_own_search_process_which_cleans_up_after_it():
-    """A forked worker exits without running exit handlers, so its search process removes its own
-    working directory when the worker's end closes the request pipe."""
+    """A forked worker exits without running exit handlers, so its search process removes its
+    working directory once the worker's exit closes the request pipe."""
     X, y = planted()
     SymbolicRegression(seed=0).fit(X, y)
     parent = [key[0] for key in symbolic._PROCESSES]
@@ -323,7 +323,7 @@ def load_search_module():
 
 
 def test_the_search_process_imports_numpy_sympy_pysr_and_the_standard_library_only():
-    """It runs in PySR's environment, which has no `seqmaestro`."""
+    """The search process runs in PySR's environment, which has no `seqmaestro`."""
     tree = ast.parse(Path(symbolic.__file__).with_name("symbolic_search.py").read_text())
     imported = set()
     for node in ast.walk(tree):
@@ -376,8 +376,8 @@ def test_a_real_search_recovers_a_planted_equation_and_writes_nothing_home():
     y = 2.5 * X["alpha"] - 1.5 * X["beta"] + rng.normal(0, 0.01, 400)
     try:
         model = SymbolicRegression(seed=0, niterations=20).fit(X, y)
-        # A second search in the same process, which Julia's hold on the standard streams once
-        # stopped.
+        # A second search in the same process, which would fail if the requests travelled on the
+        # standard streams that Julia takes over.
         again = SymbolicRegression(seed=1, niterations=20).fit(X, y)
     finally:
         symbolic.close_search_processes()
@@ -424,8 +424,8 @@ print(json.dumps(out))
 @pytest.mark.crossenv
 @pytest.mark.skipif(not PYSR_PYTHON.exists(), reason="the PySR environment is not installed here")
 def test_sympy_forms_are_exported_as_they_come():
-    """PySR parses its equations unevaluated, so a subtraction is a sum with a product of -1 and a
-    division a product with a power of -1; the tree keeps both as they are."""
+    """PySR parses its equations unevaluated, so a subtraction arrives as a sum with a product of -1,
+    and a division as a product with a power of -1. The tree keeps both as they come."""
     texts = ["x0 - 0.6221292", "x1 / (x0 + 2.5)", "exp(x2) * log(x0)", "sin(x0)", "x5"]
     result = subprocess.run(
         [str(PYSR_PYTHON), "-c", EXPORT_CHECK, str(Path(symbolic.__file__).with_name(

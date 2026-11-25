@@ -2,21 +2,21 @@
 
     python experiments/runners/run_reduction.py --run-dir experiments/runs/<date>_<name>
 
-For every arm the run's config reduces, the real-label cell with the best validation headline
-(AUROC for a binary target, R-squared for a continuous one) is taken, and its model is eliminated
-down to N of the features it used by the loop in `seqmaestro.reduction.eliminate`. The elimination
-is made wherever the arm's model lives (`seqmaestro.pipeline.sides`): in this process for a Core
-model, on DEFT's side for its tree, which evaluates its features there, and in this process for an
-IGSR arm, on the values of its terms as IGSR's side evaluates them. Each arm leaves three models
-(the full refit, the reduced one, and the top-N control) as standard cells under `reduction/`,
-scored on validation. The reveal scores them on the test split with the rest. `docs/reduction.md`
-says what is computed and why.
+For every arm the run's config reduces, the real-label cell with the best validation score on the
+headline metric (AUROC for a binary target, R-squared for a continuous one) is taken, and the loop
+in `seqmaestro.reduction.eliminate` eliminates features from its model until N of those it used
+remain. The elimination runs wherever the arm's model lives (`seqmaestro.pipeline.sides`): in this
+process for a Core model, on DEFT's side for DEFT's tree (whose features are evaluated there), and
+in this process for an IGSR arm, on the values of its terms as IGSR's side evaluates them. Each arm
+leaves three models (the full refit, the reduced one, and the top-N control) as standard cells
+under `reduction/`, scored on the validation split. The reveal scores them on the held-out split
+with the rest. `docs/developer/reduction.md` says what is computed and why.
 
 An arm with a `reduction.json` is skipped unless `--force` is given. A revealed run is refused.
 
-The driver runs this once per arm (`--arms`), each call as soon as its arm's cells are there,
-several at once. `reduction/summary.csv` is written from every arm reduced so far, so whichever
-call writes it last leaves it whole.
+The driver runs this once per arm (`--arms`), several calls at once, each as soon as its arm's cells
+exist. `reduction/summary.csv` is written from every arm reduced so far, so whichever call writes it
+last leaves it complete.
 """
 
 from __future__ import annotations
@@ -57,8 +57,8 @@ SUMMARY_FILE = "summary.csv"
 def source_cell(run_dir: Path, arm: Arm, seeds, headline: str) -> Path:
     """The real-label cell an arm is reduced from: its best validation seed.
 
-    Every seed of the grid must be there, since a best seed chosen among only some of them may not
-    be the one the run would have chosen.
+    Every seed of the grid must have finished, because a best seed chosen among only some of them
+    may not be the one the run would have chosen.
     """
     found = {seed: cell_dir(run_dir, *arm, cells.REAL, seed) for seed in seeds}
     missing = [str(cell) for cell in found.values() if not cells.is_finished(cell)]
@@ -69,7 +69,7 @@ def source_cell(run_dir: Path, arm: Arm, seeds, headline: str) -> Path:
 
 
 def reduce_one(run_dir: Path, arm: Arm, config: ExperimentConfig, rows: Rows) -> dict:
-    """Reduce one arm and write its outputs. Returns its record."""
+    """Reduce one arm, write its outputs and return its record."""
     dataset, n_target = rows.dataset, config.reduction.n_features
     source = Source.read(source_cell(run_dir, arm, config.grid.seeds,
                                      target_for(dataset.target_kind).headline))
@@ -103,7 +103,7 @@ def summary_row(run_dir: Path, arm: Arm, headline: str) -> dict:
 
 
 def write_summary(run_dir: Path, config: ExperimentConfig, headline: str) -> None:
-    """`reduction/summary.csv`, from every arm of the config that is reduced by now."""
+    """Write `reduction/summary.csv` from every arm of the config reduced so far."""
     reduced = [arm for arm in config.reduced_arms()
                if outputs.is_reduced(reduction_dir(run_dir, *arm))]
     if reduced:
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             try:
                 record = reduce_one(run_dir, arm, config, rows)
-            except Exception:  # one arm must not take the others with it
+            except Exception:  # a failure in one arm must not stop the others
                 failures.record(arm_name(*arm))
                 continue
         row = summary_row(run_dir, arm, headline)

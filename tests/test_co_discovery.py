@@ -25,17 +25,17 @@ def witnesses(arms: set[str]) -> int:
 
 
 def test_linked_arms_count_as_one_witness():
-    """Arms that consumed one cached proposal were handed the same candidate features, so their
-    agreement is definitional. They match on most features under both real and shuffled labels,
-    and counting them as two witnesses would make every proposed feature look corroborated at no
-    cost."""
+    """Arms that used one cached proposal were handed the same candidate features, so they agree by
+    construction. Because they match on most features under both real and shuffled labels,
+    counting them as two witnesses would make every proposed feature look corroborated without any
+    evidence from the data."""
     shared = frozenset({"ebm/llm_generated", "xgboost/llm_generated"})
     assert CO.independent_witnesses(set(shared), [shared]) == 1
 
 
 def test_two_models_on_one_written_pool_are_two_witnesses():
     """Each arm's proposal is made for that arm, so two models on one written pool were handed
-    different features and found what they found apart."""
+    different features and found what they found independently."""
     assert witnesses({"ebm/llm_generated", "xgboost/llm_generated"}) == 2
 
 
@@ -55,11 +55,11 @@ def test_a_single_arm_is_one_witness():
 
 
 def test_the_tree_with_and_without_written_candidates_counts_as_one_witness():
-    """CART and DEFT share the tree, the naive candidate pool and, under `permutation_scope=seed`,
-    the shuffled labels. On shuffled labels the written candidates win no splits, so DEFT's tree is
-    close to a copy of CART's, and the two agree far more under the null than under real labels.
-    Counting them as two witnesses would inflate the tree's chance level and push its corrected
-    figure strongly negative for a reason unrelated to the data."""
+    """CART and DEFT share the tree, its naive candidates and, under `permutation_scope=seed`, the
+    shuffled labels. On shuffled labels the written candidates do not win any split, so DEFT's
+    tree is close to a copy of CART's and agrees with it far more on shuffled labels than on real
+    ones. Counting them as two witnesses would inflate the tree's chance level and push its
+    corrected share far below zero, for a reason unrelated to the data."""
     cart, deft = "deft_or_cart/positional", "deft_or_cart/positional+llm_generated_joint"
     assert witnesses({cart, deft}) == 1
     assert witnesses({cart, deft, "ebm/positional"}) == 2
@@ -71,7 +71,7 @@ def test_the_tree_with_and_without_written_candidates_counts_as_one_witness():
 
 def test_the_arms_linked_by_their_fit_follow_from_the_arms_and_no_list_names_them():
     """The pair is found for any pool the tree is fitted on with and without the source it writes,
-    so a pool added to a config needs no entry anywhere."""
+    so a pool added to a config does not need to be listed anywhere."""
     arms = ["deft_or_cart/positional+kmer", "deft_or_cart/positional+kmer+llm_generated_joint",
             "ebm/positional+kmer", "l1_logistic/llm_generated", "l1_logistic/llm_generated_iterative",
             "igsr/llm_generated_joint", "igsr/llm_generated_joint+covariates"]
@@ -103,8 +103,8 @@ def test_arms_that_shared_a_proposal_do_not_replace_the_arms_linked_by_their_fit
     """A group that shared a proposal and a group linked by its fit must both apply.
 
     Returning the first kind whenever any exists would drop the tree's pair on every run a
-    proposer took part in. Nothing reports this: the analysis completes, and only the tree's arms
-    are scored wrongly.
+    proposer took part in. Nothing would report this: the analysis would complete, and only the
+    tree's arms would be scored wrongly.
     """
     _run_with_proposal_key(tmp_path, "ebm/positional", "shared")
     _run_with_proposal_key(tmp_path, "xgboost/positional", "shared")
@@ -121,7 +121,8 @@ def test_arms_that_shared_a_proposal_do_not_replace_the_arms_linked_by_their_fit
 
 def test_a_shared_proposal_is_found_wherever_a_pool_records_it(tmp_path):
     """A pool that holds more than the proposal records its proposer inside one of its parts, and
-    the iterative source records the blind proposal inside its pool."""
+    the iterative source records its blind first round (the proposal made before any fit) inside
+    its pool."""
     described = {
         "ebm/kmer+llm_generated": {"kind": "composed", "parts": [
             {"kind": "kmer"}, {"kind": "llm_generated", "proposer": {"proposal_key": "blind"}}]},
@@ -168,8 +169,9 @@ def test_different_pools_are_counted_apart():
 
 
 def test_the_recorded_pool_beats_the_directory_name():
-    """Pools are read from the run, because a directory name is only a label. Two arms whose runs
-    record the same members were handed the same features, whatever their directories say."""
+    """Pools are read from each cell's record, because a directory name is only a label. Two arms
+    whose records name the same sources were handed the same features, whatever their directories
+    say."""
     pools = {"deft_or_cart/positions": frozenset({"positional"}),
              "ebm/positional": frozenset({"positional"})}
     assert CO.distinct_pools(set(pools), pools) == 1
@@ -227,8 +229,8 @@ def test_per_arm_shares_and_correction():
 
 
 def test_a_label_set_where_no_arm_used_a_feature_is_reported_and_not_divided_by():
-    """On shuffled labels a sparse model, or a symbolic one that chose its constant, can use no
-    feature at all, so the permuted label set has no concepts."""
+    """On shuffled labels a sparse model, or a symbolic one whose chosen equation is a constant, may
+    use no feature at all, so the permuted label set has no concepts."""
     lines = CO.shares_by_label_set(frame()[lambda rows: rows.labels == "real"])
 
     assert "  permuted : no arm used a feature" in lines
@@ -260,8 +262,8 @@ def test_two_arms_using_a_concept_the_same_way_agree():
 
 def test_a_feature_and_its_negation_are_one_property_pointing_one_way():
     """The matcher clusters on absolute correlation, so a GC fraction and an AT fraction over the
-    same window land in one concept, with opposite directions that describe the same finding.
-    Compared without aligning their signs, they would read as total disagreement."""
+    same window fall into one concept, with opposite directions that describe the same finding.
+    Compared without aligning their signs, they would count as total disagreement."""
     values = np.arange(20.0)
     direction, agreement = CO.agreed_direction(
         [("higher_in_positive", values), ("higher_in_negative", -values)])

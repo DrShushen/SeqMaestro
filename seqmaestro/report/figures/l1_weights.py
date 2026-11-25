@@ -1,4 +1,4 @@
-"""A linear model's weights, drawn beside what each feature does on its own.
+"""Draw a linear model's weights beside what each feature does on its own.
 
 A linear model adds up one weighted term per feature, so the whole model is a list of weights. Each
 weight is exported per standard deviation of its feature on the fitting rows, for a sparse linear
@@ -10,8 +10,8 @@ continuous one).
 
 The right panel answers a different question in the same row order: how far each feature goes with
 the target on its own, with no model involved (its marginal effect, a rank correlation). The two
-panels can point opposite ways for a feature. That is a finding, not an error: it is what a model
-looks like when it uses one feature to correct another.
+panels can point opposite ways for a feature. That is a finding rather than an error: it is what a
+model looks like when it uses one feature to correct another.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ DISAGREEMENT_FLOOR = 0.05
 def draw(internals: dict, path: Path, note: str, alone_label: str, title: str,
          decimals: int) -> Path:
     """Every weight, per standard deviation, and the marginal effect beside it where the record has
-    one. `note` says which way the bars point, `alone_label` names the marginal effect's axis, and
-    `decimals` is how many a weight's label shows."""
+    one. `note` says what a bar to the right or to the left means, `alone_label` names the marginal
+    effect's axis, and `decimals` is how many decimals a weight's label shows."""
     import matplotlib.pyplot as plt
 
     style.apply()

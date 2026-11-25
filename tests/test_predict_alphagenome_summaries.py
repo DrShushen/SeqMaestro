@@ -1,11 +1,13 @@
-"""AlphaGenome's predictions summarised over each element, tested with stand-ins for its outputs.
+"""Tests of `experiments/prepare/predict_alphagenome_summaries.py`, which summarises AlphaGenome's
+predictions over each element.
 
 The script runs in a separate environment and imports AlphaGenome's client only where it calls it,
-so everything that decides a number can be tested here: the scaffold's shuffle, where the element
-sits in its window, which bins of a track cover it, and which fold model predicts it. Each test
-guards against a failure that would pass silently downstream. A window one base off moves every
-summary a little, a slice computed at the wrong resolution summarises the wrong part of the genome,
-and a model chosen from the wrong fold predicts a locus it was trained on.
+so everything that decides a number can be tested here on stand-ins for AlphaGenome's outputs: the
+scaffold's shuffle, where the element sits in its window, which bins of a track cover it, and which
+fold's model predicts it. Each test guards against a failure that would pass unnoticed downstream:
+a window one base off moves every summary a little, a slice computed at the wrong resolution
+summarises the wrong part of the genome, and a model chosen from the wrong fold predicts a locus it
+was trained on.
 """
 
 from __future__ import annotations
@@ -84,8 +86,8 @@ def test_the_native_window_is_centred_as_alphagenome_resize_centres_it(start, en
 
 
 def test_coordinates_spanning_another_length_than_the_sequence_are_found():
-    # The same 200 bp element, once one-based with an inclusive end and once zero-based with an
-    # exclusive end, as a BED file gives it. The second spans 201 bases.
+    # A 200 bp element given twice: one-based with an inclusive end, and zero-based with an
+    # exclusive end, as a BED file gives it. Taken as one-based, the second spans 201 bases.
     elements = pd.DataFrame({"name": ["one_based", "zero_based"], "sequence": ["ACGT" * 50] * 2,
                              "start": [1_001, 1_000], "end": [1_200, 1_200]})
     columns = {"id": "name", "sequence": "sequence", "start": "start", "end": "end"}

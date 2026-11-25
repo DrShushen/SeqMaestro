@@ -1,5 +1,5 @@
-"""`seqmaestro.models.equation`: the equation a symbolic search hands back, evaluated, written out and
-attributed to its features in Core."""
+"""`seqmaestro.models.equation`: how Core evaluates the equation a symbolic search hands back, writes
+it out and attributes it to its features."""
 
 from __future__ import annotations
 

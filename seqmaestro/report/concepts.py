@@ -1,10 +1,10 @@
 """Group the reduced models' features into concepts, across arms.
 
-Different arms name the same idea differently. One writes a fraction of a base class over a stretch
-of the window, another computes the same quantity under a different name over a slightly different
-range, and a third splits on a single base inside that stretch. Counting names would report these
-as three separate findings. Several arms are asked the same question so that agreement like this
-counts as one finding that three arms reached.
+Different arms often name one idea differently. One writes a fraction of a base class over a
+stretch of the window, another computes the same quantity under a different name over a slightly
+different range, and a third splits on a single base inside that stretch. Counting names would
+report these as three separate findings, whereas several arms are asked the same question so that
+agreement like this counts as one finding that three arms reached.
 
 Features are therefore grouped **by what they compute**, not by what they are called. Every feature
 is evaluated on one common set of rows, and two features join the same concept when their values
@@ -12,14 +12,14 @@ agree. The matcher, its correlation, its threshold and the way matched pairs are
 all come from the harness (`seqmaestro.harness.stability`), so a concept here means the same as a
 concept elsewhere in the project.
 
-This module adds the join. Each concept carries the arms that reached it, the feature sources among
-them, and the reliability evidence attached to its members, so a reader can rank ideas by weight of
-evidence instead of ranking columns by importance.
+What this module adds is the join with the evidence. Each concept holds the arms that reached it,
+the feature sources among them and the reliability evidence attached to its members, so a reader
+can rank ideas by weight of evidence instead of ranking columns by importance.
 
 The result has two limits, and any use of it should state them. Grouping is transitive, so a chain
 of borderline matches can merge two distinct ideas. And the grouping is computed on the rows the
-models were fitted and tuned on (D, train + validation). Those rows can show whether two columns
-compute the same thing, but not whether either one holds. Nothing here reads the test split.
+models were fitted and tuned on (D, train + validation), which can show whether two columns compute
+the same thing but not whether either one holds. Nothing here reads the test split.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from seqmaestro.report import naming
 
 #: A member's sign counts towards its concept's direction only when its marginal effect (a
 #: rank-biserial correlation, or Spearman's rho for a continuous target) reaches this size, in
-#: either direction. Below it, the sign is noise.
+#: either direction. Below it, the sign is treated as noise.
 DIRECTION_FLOOR = 0.05
 
 
@@ -81,10 +81,10 @@ class Concept:
     def written_and_enumerated(self) -> bool:
         """Whether both a written feature and an enumerated one reached this concept.
 
-        Agreement between two arms drawing on one pool of columns says less than agreement between
-        two that had no vocabulary in common. The test takes each feature's kind and not its arm's
-        pool, because DEFT on `llm_generated_joint` writes features at each split of its tree and
-        also draws enumerated candidates, so its features can be of either kind.
+        Agreement between two arms that draw on the same columns says less than agreement between
+        two that had no vocabulary in common. The test looks at each feature's kind rather than its
+        arm's pool, because DEFT on `llm_generated_joint` writes features at each split of its tree
+        and also draws enumerated candidates, so its features can be of either kind.
         """
         return {member.kind == "llm_generated" for member in self.members} == {True, False}
 
@@ -122,7 +122,8 @@ class Concept:
 
     @property
     def strongest_association(self) -> float | None:
-        """The member's association furthest from the value that means none, in either direction."""
+        """Of the members' associations, the one furthest from the value that means none, in
+        either direction."""
         found = [m.association for m in self.members if m.association is not None]
         return max(found, key=lambda value: abs(value - self.association_centre)) if found else None
 
@@ -134,7 +135,7 @@ class Concept:
 
         Members are matched on absolute correlation, so a feature and its negation can share a
         concept. The sign is taken from each member's marginal effect, and a concept whose members
-        disagree carries no direction rather than the majority's.
+        disagree has no direction, rather than the majority's.
         """
         signs = {np.sign(member.marginal_effect) for member in self.members
                  if member.marginal_effect is not None
@@ -157,9 +158,9 @@ class Concept:
 
 @dataclass
 class ArmColumns:
-    """The columns the reduction kept for one arm: their records, their values on D, and what the
-    report knows of each: its rank and marginal effect from Stage 3A, and its evidence from the
-    panel, which holds only the columns the reduced model uses."""
+    """The columns the reduction kept for one arm, with their records, their values on D and what
+    the report knows of each (its rank and marginal effect from Stage 3A, and its evidence from the
+    panel, which holds only the columns the reduced model uses)."""
 
     arm: str
     records: list[FeatureRecord]
@@ -169,7 +170,7 @@ class ArmColumns:
 
 
 def build(arms: list[ArmColumns], matcher: Matcher, association: tuple[str, float]) -> list[Concept]:
-    """Group the columns of `arms` into concepts, each carrying its members' evidence.
+    """Group the columns of `arms` into concepts, each with its members' evidence.
     `association` names Tier 2's association in the evidence and the value of it that means none
     (`seqmaestro.reliability.tier2.ASSOCIATION`)."""
     measure, centre = association

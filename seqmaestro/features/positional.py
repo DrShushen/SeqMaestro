@@ -1,16 +1,16 @@
-"""One indicator per (position, symbol): *where* a symbol sits, exactly.
+"""One indicator per position and symbol: *where* each symbol sits.
 
-It keeps position and loses composition and any shift invariance, so the same motif two bases
-along is an entirely different set of columns. `KmerFeaturiser` keeps the complement, which is why
-the two are also composed (`positional+kmer`).
+These columns keep position, whereas composition and shift invariance are lost, so the same motif
+two bases along is an entirely different set of columns. `KmerFeaturiser` keeps the complement,
+which is why the two are also composed (`positional+kmer`).
 
-**An L1-regularised logistic regression on these columns is a learned position-weight matrix.** Its
-coefficients form a PWM over the window, which makes that arm directly comparable to the motif
-literature.
+**An L1-regularised logistic regression on these columns learns a position weight matrix (PWM).**
+Its coefficients form a weight for each symbol at each position of the window, which makes that arm
+directly comparable with the motifs of the literature.
 
-**Sequences of different lengths are read in a declared window** (`PositionalWindow`), cut and
-padded by one rule, `window_symbols`. Without a window every sequence must have one length, as
-position 37 means nothing across sequences of different lengths.
+**Sequences of different lengths are featurised in a declared window** (`PositionalWindow`), cut
+and padded by one rule (`window_symbols`). Without a window every sequence must have the same
+length, because position 37 means nothing across sequences of different lengths.
 """
 
 from __future__ import annotations
@@ -32,19 +32,20 @@ from seqmaestro.features.base import (
     count_dtype,
 )
 
-#: Where a positional window is read from: the first base of the sequence, or the last.
+#: The end of the sequence a positional window is anchored to: its first base, or its last.
 ANCHORS = ("start", "end")
 
 
 @dataclass(frozen=True)
 class PositionalWindow:
-    """The fixed frame positional features are read in, when sequences differ in length.
+    """The fixed frame in which positional features are measured, when sequences differ in length.
 
-    Declared at Stage 1 (`sequences.positional_window`, `docs/dataset.md`). The window is `length`
-    bases read from the `anchor`: the first `length` bases with `start`, the last `length` with
-    `end`. A longer sequence is cut at the far end, which costs no row. What happens to a shorter
-    one is the `pad` decision, which the user confirms at Stage 1: with `pad` it is padded at the
-    far end, and without it no sequence may be shorter, so Stage 1 filters the short ones out.
+    It is declared at Stage 1 (`sequences.positional_window`, `docs/developer/dataset.md`). The
+    window is `length` bases counted from the `anchor`: the first `length` bases with `start`, the
+    last `length` with `end`. A longer sequence is cut at the far end, so every row is kept. What
+    happens to a shorter one is the `pad` decision, which the user confirms at Stage 1: with `pad`
+    it is padded at the far end, and without it every sequence must be at least `length` long, so
+    Stage 1 filters the short ones out.
     """
 
     length: int
@@ -70,19 +71,20 @@ class PositionalFeaturiser(Featuriser):
 
     The column count is `sequence_length * len(alphabet)`, and neither factor is assumed: a 101 nt
     window over ACGT gives 404 columns, and an alphabet that includes `N` widens the matrix instead
-    of silently dropping the symbol. The alphabet is every symbol the training sequences hold, inside
-    a window or not, so no symbol Stage 1 found in training can meet the featuriser unseen.
+    of silently dropping the symbol. The alphabet is every symbol the training sequences hold,
+    inside the window or outside it, so the featuriser has a column for every symbol of the training
+    sequences.
 
     With a `window`, the positions are the window's and `sequence_length` is its length. A window
     that pads adds a column per position, `pos_<i>_pad`, set where the sequence stops before that
-    position. A model can read a sequence's length from those columns, which is a fact about the
-    design that the columns make visible, and Stage 1's `sequence_lengths` finding puts to the user.
+    position. A model can infer a sequence's length from those columns. That is a property of the
+    design, which Stage 1's `sequence_lengths` finding puts to the user.
     """
 
     def __init__(self, window: PositionalWindow | None = None) -> None:
         super().__init__()
         self.alphabet: list[str] | None = None
-        #: The declared window, or None where every sequence has one length.
+        #: The declared window, or None where every sequence has the same length.
         self.window = window
         self.sequence_length: int | None = None
 
@@ -97,7 +99,7 @@ class PositionalFeaturiser(Featuriser):
                     f"Positional featurisation needs every sequence to be the same length, or a "
                     f"positional window; found {len(lengths)} distinct lengths between "
                     f"{min(lengths)} and {max(lengths)}. Position 37 means nothing across sequences "
-                    f"of different length. Declare a window at Stage 1 (docs/dataset.md), where "
+                    f"of different length. Declare a window at Stage 1 (docs/developer/dataset.md), where "
                     f"whether to pad is a question about the data. `KmerFeaturiser` has no such "
                     f"requirement."
                 )
@@ -188,9 +190,9 @@ class PositionalFeaturiser(Featuriser):
 PAD = "pad"
 
 
-# DEFT carries a verbatim copy of this function (`deft.utils.window`), so that a position means
-# the same in a DEFT tree as in every other arm, and a test checks that the two agree. Change both,
-# or neither.
+# DEFT has a verbatim copy of this function (`deft.utils.window`), so that a position means the
+# same in a DEFT tree as in every other arm, and a test checks that the two agree. Change both, or
+# neither.
 def window_symbols(sequence: str, length: int, anchor: str, pad: bool) -> list[str]:
     """The symbol at each position of a window over `sequence`: the one cut-and-pad rule.
 

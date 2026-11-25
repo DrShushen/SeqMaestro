@@ -1,18 +1,18 @@
 """What kind of target a dataset has, and the arithmetic that differs between the kinds.
 
-A dataset's target is **binary**, a label of 0 or 1 on every row with class 1 the positive class,
-or **continuous**, one finite number on every row. Stage 1 declares the kind (`target.kind` in the
-declaration, see `docs/dataset.md`) and `dataset.json` records it. A stage that treats the two
-kinds differently asks the object `target_for` returns, so the arithmetic of each kind is written
-once: how the target is read, summarised and stratified, what a split can detect, how a model's
-predictions are scored and which metric ranks them, how one feature's association with the target
-is measured, and the words a direction is given in.
+A dataset's target is either **binary** (a label of 0 or 1 on every row, with class 1 the positive
+class) or **continuous** (one finite number on every row). Stage 1 declares the kind (`target.kind`
+in the declaration, see `docs/developer/dataset.md`) and `dataset.json` records it. A stage that
+treats the two kinds differently asks the object that `target_for` returns, so the arithmetic of
+each kind is written once: how the target is parsed, summarised and stratified, what a split can
+detect, how a model's predictions are scored and which metric ranks them, how one feature's
+association with the target is measured, and the words that describe a feature's direction.
 
-Nothing guesses a kind from the values. A column of 0s and 1s can be a measured rate as well as a
-label, and code written for labels runs on a continuous target without an error: a label cast to an
-integer truncates it, a sample drawn class by class draws one row per distinct value, and an AUC of
-a number against itself returns a number. So the kind is always the declared one, and a stage that
-has not been told it has nothing to fall back on.
+The kind is never guessed from the values. A column of 0s and 1s can be a measured rate as well as
+a label, and code written for labels runs on a continuous target without an error: casting the
+target to integer labels truncates it, drawing a sample class by class draws one row per distinct
+value, and an AUC computed against it still returns a number. So the kind is always the declared one, and a stage
+that has not been told it has no default to fall back on.
 """
 
 from __future__ import annotations
@@ -57,17 +57,19 @@ CORRELATIONS_AT = (0.10, 0.20, 0.30, 0.50)
 
 
 class Target(Protocol):
-    """What every kind provides."""
+    """What every kind of target provides."""
 
     #: One of `TARGET_KINDS`.
     kind: str
     #: The values a label takes, in the order a breakdown by class reports them: `(1, 0)` for a
-    #: binary target, and none for a continuous one, whose rows have no classes to break down by.
+    #: binary target, and empty for a continuous one, whose rows have no classes to break down by.
     labels: tuple[int, ...]
-    #: The metric that ranks arms and seeds, and the one reported beside it wherever one is shown.
+    #: The metric that ranks arms and seeds (`headline`), and the one reported beside it wherever
+    #: the headline is shown (`companion`).
     headline: str
     companion: str
-    #: What the headline scores for a model that has learned nothing, such as a permuted-label arm.
+    #: What the headline scores for a model that has learned nothing, such as one fitted on
+    #: permuted labels.
     chance: float
     #: The word for a feature whose rise raises the model's score, then the word for one whose rise
     #: lowers it (`seqmaestro.harness.direction`).
@@ -78,7 +80,8 @@ class Target(Protocol):
     probabilities: bool
 
     def values(self, y) -> np.ndarray:
-        """Targets a stage has been handed, as this kind holds them, or `ValueError`."""
+        """The targets a stage has been handed, in this kind's form, or `ValueError` where they do
+        not fit it."""
 
     def threshold(self, y, scores) -> float | None:
         """The cut a thresholded metric is scored at, chosen on these rows, or None for a kind
@@ -89,14 +92,15 @@ class Target(Protocol):
         """Every metric of this kind, for scores against targets."""
 
     def score(self, y, scores) -> float:
-        """The headline alone, NaN where it is undefined."""
+        """The headline metric alone, or NaN where it is undefined."""
 
     def feedback_metrics(self, y, scores) -> dict[str, float]:
-        """The headline and its companion, which need no threshold: what a model reports of its own
-        fit to a proposer."""
+        """The headline and its companion, which need no threshold: what a model reports about its
+        fit to the proposer."""
 
     def association(self, values, y) -> np.ndarray:
-        """How far each column of `values` goes with the target on its own, from -1 to 1."""
+        """How strongly each column of `values` is associated with the target on its own, from -1
+        to 1."""
 
     def parse(self, column: pd.Series) -> tuple[np.ndarray, list[str]]:
         """A split file's target column as this kind holds it, and the raw values it cannot hold."""
@@ -108,7 +112,8 @@ class Target(Protocol):
         """What a stratified sample of these rows keeps in proportion, one value per row."""
 
     def held_out_power(self, y) -> dict[str, Any]:
-        """What a held-out split with these targets can detect: the interval on its headline."""
+        """What a held-out split with these targets can detect: the interval on its headline
+        metric."""
 
     def training_information(self, y, weights=None) -> dict[str, Any]:
         """How much information a training split with these targets and fitting weights holds."""
@@ -117,9 +122,9 @@ class Target(Protocol):
 class BinaryTarget:
     """A label of 0 or 1 on every row. Class 1 is the positive class.
 
-    A model's score is the probability of class 1. AUROC ranks arms because it is free of any
-    threshold and of where a model's scores happen to sit, and the thresholded metrics are scored
-    at the cut chosen on validation.
+    A model's score is the probability of class 1. AUROC ranks arms because it depends neither on a
+    threshold nor on where a model's scores happen to sit. The thresholded metrics are scored at the
+    cut chosen on validation.
     """
 
     kind = BINARY
@@ -213,8 +218,8 @@ class ContinuousTarget:
     """One finite number on every row.
 
     A model's score is its prediction of the number. R-squared ranks arms because it measures the
-    squared error every model here minimises, and a model that predicts the target's mean, which is
-    what a permuted-label arm learns, scores zero on it. There is no threshold.
+    squared error every model here minimises, and a model that predicts the target's mean (which is
+    what a model fitted on permuted labels learns) scores zero on it. There is no threshold.
     """
 
     kind = CONTINUOUS
@@ -261,7 +266,7 @@ class ContinuousTarget:
 
     def summary(self, y) -> dict[str, Any]:
         """The target's centre, spread and quartiles, to six significant digits, since a target can
-        be on any scale. A value `parse` could not read is NaN, and is left out."""
+        be on any scale. A value that `parse` could not convert is NaN, and is left out."""
         y = np.asarray(y, dtype=float)
         y = y[np.isfinite(y)]
         if not len(y):
@@ -327,7 +332,8 @@ def recorded_kind(record) -> str:
 
 
 def _kept(weights, n: int) -> tuple[np.ndarray | None, np.ndarray]:
-    """The training weights as floats, and which rows carry any: every row when there are none."""
+    """The training weights as floats, and which rows have any weight: every row when there are no
+    weights."""
     if weights is None:
         return None, np.ones(n, dtype=bool)
     weights = np.asarray(weights, dtype=float)

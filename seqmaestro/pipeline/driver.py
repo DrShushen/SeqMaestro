@@ -1,90 +1,101 @@
-"""Run a dataset through the whole pipeline, start to finish, unattended: every arm and analysis,
-the reduction and the reliability panel, the reveal, and the report's inputs.
+"""Run a dataset through the whole pipeline unattended: every arm and analysis, the reduction and
+the reliability panel, the reveal, and the report's inputs.
 
     experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml
 
-Launch it detached and it survives the session that started it:
+**`--detach` starts the run in a session of its own** and returns once it is under way, so that the
+run outlives the terminal, and the agent's command, that started it:
 
-    nohup $CORE experiments/runners/run_experiment.py --config <config> > /dev/null 2>&1 &
+    $CORE experiments/runners/run_experiment.py --config <config> --run-dir <run> --detach
 
-**The config file says what a run is**: which splits, which grid and which arms
-(`experiments/configs/`). The driver records it, resolved, as `<run>/config.yaml`, and every stage
-reads its settings from that file, so the driver passes a stage nothing but the run directory and
-which part of the run it is to work on. This module holds only what is true of the pipeline
-whatever dataset it runs on: the stages, their order, and which of them may run at once.
+A harness that runs an agent's commands may end every process a command started as soon as the
+command returns, which a job started with `nohup` alone does not survive, whereas a process in a
+session of its own does. The checks before the run (the config, the run's directory, the preflight)
+are made before the call returns, so a refusal is printed where the launch was typed.
 
-**Every stage is resumable, and the driver is idempotent.** Run again after a crash, a reboot or a
-killed process, it skips the cells already done and continues. A stage cannot tell a finished cell
-from one computed under different settings, so the driver refuses to continue a run whose recorded
-config differs from the one it is given, since that would mix two configurations into one table
-with nothing to show it. A recorded config states the `version` of its shape, and the driver also
-refuses to continue a run recorded under another, since the stages could not take that run's
-settings from it.
+**The config states the run**: which splits, which grid and which arms (`experiments/configs/`).
+The driver records the resolved config as `<run>/config.yaml`, and every stage reads its settings
+from that file, so the driver passes a stage only the run directory and the part of the run it is
+to work on. This module holds only what is true of the pipeline on any dataset: the stages, their
+order, and which of them may run at once.
+
+**Every stage is resumable, and the driver is idempotent.** When it is run again after a crash, a
+reboot or a killed process, the driver skips the cells already done and continues. A stage cannot
+tell a finished cell from one computed under different settings, so the driver refuses to continue
+a run whose recorded config differs from the one it is given, because that would mix two
+configurations in one table without any sign of it. The driver also refuses to continue a run
+whose recorded config states another `version` of the config's shape, because the stages could not
+take that run's settings from it.
 
 **To resume, pass the run directory.** The default directory is dated, so a resume on a later day
 than the launch would start an empty run, redo hours of work, and split the results across two
-directories, which nobody notices until they read both. A resume usually happens with nobody
-watching, so a warning is not enough: the driver refuses to start a new run when earlier ones for
-the same config exist, unless `--new-run` says that is the intent.
+directories, which goes unnoticed until someone reads both. A resume is usually unattended, so a
+warning is not enough: the driver refuses to start a new run when earlier ones for the same config
+exist, unless `--new-run` says that is the intent.
 
 **A failing stage does not stop the stages after it, except the reveal** (below). Each stage
-isolates its cells, and a config lists its cheap arms first, which start first, so that an abort
-still leaves them done and analysable. Failures are counted and repeated at the end. `logs/` holds
-what each call printed, and `failures/` what failed in it.
+isolates its cells. Failures are counted and repeated at the end, `logs/` holds what each call
+printed, and `failures/` what failed in it.
 
-**The processes of a run run side by side** (`seqmaestro/pipeline/schedule.py`). An arm is one
-model fitted on one pool of sources, as the config's `arms` lists them (`seqmaestro.arms` says which
-model takes which pool), and every arm runs as one process per (labels, seed). The reduction and the
-reliability panel run one process per arm. A process starts once what it waits for has finished and
-the machine has room for it, and of two that could both start, the one listed first starts first.
-The arms wait for nothing. An arm's reduction waits for its real-label cells and its panel for its
-reduction, so a cheap arm is reduced and profiled while slow arms still run. The analyses wait for
-every arm, and the reveal for everything before it.
-
-**The machine is probed as the run starts**: the CPUs this process may use and the memory available
-to it (`seqmaestro.execution.probe`). The run's budget is drawn from that: threads, memory, and how
-many processes may call a language model at once, which the endpoint's throughput bounds and which
-defaults to `LLM_SLOTS`. `--max-cpus` and `--max-memory` lower the first two, for a machine that is
-also in use for other work, and `--llm-slots` sets the third. None of them changes a result, so
-they are flags of the driver, and a run resumed on another machine may use other values. Each
-invocation appends the probe and the budget to `logs/machine.jsonl`, and each process leaves a row
-in `logs/processes.csv` with its threads, its time and the memory it held.
-
-**The composition baseline starts first**: base fractions in a standardised sparse linear model at
-every seed, the reference line every arm is compared with. **The reduction (Stage 3A)** runs when
-the config has a `reduction` section. It cuts each arm to a model of a few features, using only
-that arm's cells. **The reliability panel (Stage 3B)** runs when the config has a `reliability`
-section: all of its work that comes before the reveal, with Tier 1's selections spread over the
-threads it is given, and those lent to it as they free up, in as many workers as fit in the memory
-it is given.
-
-**Then the reveal, and what reads it.** The test split is opened once (`reveal.py`), the panel's
-Tier 3 and tables are computed from what the reveal scored, and the report's inputs are built: its
-facts and tables under Core, its figures under `SeqMaestro_LocalUtils`. **The reveal runs only when
-every stage before it finished clean.** It opens the test split for good, so a failure before it
-holds the reveal back and is reported by name. Running again with `--run-dir` continues the run.
-`--stop-before-reveal` stops ahead of the reveal so the run can be checked first. Continued without
-the flag, such a run starts every stage again: the cells, the reductions and the panels skip what
-they have finished, stability and co-discovery are computed again and give the same tables, and the
-two analyses that ask a language model keep what is on file while what they were computed from is
-unchanged (`seqmaestro/pipeline/analyses/inputs.py`). **A revealed run resumes from the reveal**:
-the stages before it fit or select, so they are not run again.
+**A run starts its processes side by side** (`seqmaestro/pipeline/schedule.py`). An arm is one
+model fitted on one pool of feature sources, as the config's `arms` lists them (`seqmaestro.arms`
+says which model takes which pool), and each arm runs as one process per label condition and seed.
+The reduction and the reliability panel run one process per arm. A process starts once what it
+waits for has finished and the machine has room for it. The arms wait for nothing, whereas an arm's
+reduction waits for its real-label cells and its panel for its reduction, so a cheap arm is reduced
+and profiled while slow arms still run. The analyses wait for every arm, and the reveal for
+everything before it.
 
 **Arms are offered the machine in the order the config lists them.** Of two processes that could
-both start, the one listed first starts first, so a config lists its cheap arms first, and those it
-wants finished early, and an early abort still leaves a result.
+both start, the one listed first starts first, so a config lists first its cheap arms and those it
+wants finished early, and an early abort still leaves them finished and ready to analyse.
 
-**`--estimate` says what each arm would cost before anything runs**: a few fits of each arm's model
-on the run's data, scaled to every stage (`seqmaestro/pipeline/estimate.py`). It flags the arms
-over `--slow-hours`, so whoever launches the run can decide about them first, and starts no stage.
+**The machine is probed as the run starts**: the CPUs this process may use and the memory available
+to it (`seqmaestro.execution.probe`). The run's budget follows from the probe: the threads, the
+memory, and how many processes may call a language model at once, which the endpoint's throughput
+bounds and which defaults to `LLM_SLOTS`. `--max-cpus` and `--max-memory` lower the first two for a
+machine that is also in use for other work, and `--llm-slots` sets the third. These flags do not
+change any result, so they belong to the driver instead of the config, and a run resumed on another
+machine may use other values. Each invocation appends the probe and the budget to
+`logs/machine.jsonl`, and each process leaves a row in `logs/processes.csv` with its threads, its
+time and the memory it held.
 
-**Nothing before the reveal reads the test split.** Every stage before it fits and scores on
-validation (`seqmaestro.harness.heldout`).
+**The composition baseline starts first**: a standardised sparse linear model on the base fractions
+at every seed, which gives the reference line every arm is compared with. **Where a pool holds
+known motifs**, a step before the arms on that pool scans every training and validation sequence
+once with the run's collection. Where a pool holds discovered motifs, the same step makes each
+discovery that can be made in advance, one per label condition and seed
+(`seqmaestro/pipeline/motifs.py`). **The reduction (Stage 3A)** runs when the config has a
+`reduction` section. It reduces each arm to a model of a few features, using only that arm's cells.
+**The reliability panel (Stage 3B)** does all of its work that comes before the reveal when the
+config has a `reliability` section. Tier 1's selections are spread over the threads the panel is
+given, and over those lent to it as they free up, in as many workers as fit in its memory.
 
-**Stages run with the interpreter that runs the driver**, so no second place records which
-environment the pipeline belongs to. Run it with `SeqMaestro_Core` (ENVIRONMENTS.md). The
-exceptions are DEFT's and IGSR's sides, PySR's search and the report's figures, which must run
-elsewhere and find their interpreter with `seqmaestro.provenance.environment_python`.
+**Then the reveal and the stages that use its scores.** The held-out split is opened once
+(`reveal.py`), the panel's Tier 3 and tables are computed from what the reveal scored, and the
+report's inputs are built: its facts and tables under Core, and its figures under
+`SeqMaestro_LocalUtils`. **The reveal runs only when every stage before it finished without a
+failure.** Because the reveal opens the held-out split for good, a failure before it holds the
+reveal back and is reported by name. Running again with `--run-dir` continues the run.
+`--stop-before-reveal` stops ahead of the reveal so that the run can be checked first. When such a
+run is continued without the flag, every stage starts again: the cells, the reductions and the
+panels skip what they have finished, stability and co-discovery are computed again and give the
+same tables, and the two analyses that call a language model keep their results on file as long as
+their inputs are unchanged (`seqmaestro/pipeline/analyses/inputs.py`). **A revealed run resumes
+from the reveal**: the stages before it fit or select, so they are not run again.
+
+**`--estimate` says how long each arm would take before anything runs**: a few fits of each arm's
+model on the run's data, scaled to every stage (`seqmaestro/pipeline/estimate.py`). It starts no
+stage, and it flags the arms that would take longer than `--slow-hours`, so that whoever launches
+the run can decide about them first.
+
+**The held-out split is not read before the reveal.** Every stage before it fits and scores on the
+validation split (`seqmaestro.harness.heldout`).
+
+**Stages run with the interpreter that runs the driver**, so the pipeline's environment is not
+stated in a second place. Run the driver with `SeqMaestro_Core` (ENVIRONMENTS.md). The exceptions
+are DEFT's and IGSR's sides, PySR's search and the report's figures, which must run elsewhere and
+find their interpreter with `seqmaestro.provenance.environment_python`.
 """
 
 from __future__ import annotations
@@ -103,14 +114,16 @@ from pathlib import Path
 import yaml
 
 from seqmaestro import arms as registry
-from seqmaestro import files
+from seqmaestro import files, status
 from seqmaestro.arms import Arm, arm_name
 from seqmaestro.execution import budget as draw_budget
 from seqmaestro.execution import probe
+from seqmaestro.features import MOTIF_DISCOVERED, MOTIF_KNOWN, parse_pool
 from seqmaestro.harness import cell as cells
 from seqmaestro.harness.heldout import reveal_record
-from seqmaestro.llm import TaskContext, missing_settings
+from seqmaestro.llm import TaskContext, describe_calls, missing_settings, provider_from_environment
 from seqmaestro.pipeline import baseline, reduction, reliability, report, reveal, stage2
+from seqmaestro.pipeline import motifs as run_motifs
 from seqmaestro.pipeline.analyses import co_discovery, judge, recurrence, stability
 from seqmaestro.pipeline.config import CONFIG_VERSION, ConfigError, ExperimentConfig, load
 from seqmaestro.pipeline.layout import (
@@ -134,24 +147,32 @@ CALL = "driver"
 
 
 def _short(path: Path) -> str:
-    """The path relative to the repository, where possible. Stages run with `cwd=REPO`, so this
-    form is both what they are given and what the logs show. An absolute run directory would make
-    every recorded command line hard to read and no more reproducible."""
+    """The path relative to the repository, where possible. Stages run with `cwd=REPO`, so they
+    are given this form and the logs show it. An absolute run directory would make every recorded
+    command line hard to read without making it any more reproducible."""
     try:
         return str(path.resolve().relative_to(REPO))
     except ValueError:
         return str(path)
 
 
+#: How long `--detach` watches the run it started before it returns: long enough for a run that
+#: stops at once, for instance on a config that differs from the one the run recorded, to say so.
+DETACH_WATCH_SECONDS = 15
+#: Where a detached run's printed output goes, beside the journal in `logs/driver.log`. It holds
+#: what the run printed before its journal began, such as a refusal.
+DETACHED_OUTPUT = f"{CALL}.out"
+
+
 #: How many processes may call a language model at once, unless `--llm-slots` says otherwise. The
-#: endpoint's throughput bounds it, which the run cannot probe without spending calls, so it is
-#: stated here and recorded with each invocation.
+#: limit is set by the endpoint's throughput, which the run cannot probe without spending calls, so
+#: it is stated here and recorded with each invocation.
 LLM_SLOTS = 20
 
 
 def _serial(name: str, argv: tuple[str, ...], retry: bool = True, phase: str = BEFORE,
             threads: int | None = 1, after: tuple[str, ...] = (), calls_model: bool = False) -> Stage:
-    """A stage that is one process, logging under its own name."""
+    """A stage of one process, which logs under the stage's name."""
     return Stage(name, (Command(argv, name, after=after),), retry=retry, phase=phase,
                  threads=threads, calls_model=calls_model)
 
@@ -168,15 +189,16 @@ def _analysis(script: str, python: Path | str = sys.executable) -> tuple[str, ..
 
 
 def _arm(arm: Arm, config: ExperimentConfig, run_dir: Path) -> Stage:
-    """One arm as one process per (labels, seed). The arm's cells for one condition of the labels
-    and one seed do not depend on its others, so the processes run side by side. The stage is named
-    `model/pool`, as the arm is spelled."""
+    """One arm as one process per label condition and seed. An arm's cell at one label condition
+    and seed does not depend on its other cells, so the processes run side by side. The stage is
+    named `model/pool`, as the arm is written."""
     model, pool = arm
     name = arm_name(model, pool)
     return Stage(name, tuple(
         Command((*_runner("run_arm.py"), "--run-dir", _short(run_dir), "--arms", name,
                  "--labels", labels, "--seeds", str(seed)),
                 stage2.cell_call(model, pool, labels, seed),
+                after=run_motifs.waits_for(pool, labels, seed, config.grid.permutation_scope),
                 produces=(arm,) if labels == cells.REAL else ())
         for labels in config.grid.labels for seed in config.grid.seeds
     ), retry=registry.retries(pool), calls_model=registry.calls_language_model(pool))
@@ -187,11 +209,28 @@ def _baseline(run_dir: Path) -> Stage:
     return _serial(baseline.CALL, (*_runner("run_baseline.py"), "--run-dir", _short(run_dir)))
 
 
+def _motifs(config: ExperimentConfig, run_dir: Path) -> tuple[Stage, ...]:
+    """What the motif sources make once, before the arms on their pools, which wait for it
+    (`seqmaestro/pipeline/motifs.py`): the scan with the known motifs, and one discovery for each
+    label condition and seed whose discovery is made in advance. Empty where no pool holds a motif
+    source."""
+    run = (*_runner("run_motifs.py"), "--run-dir", _short(run_dir))
+    commands = []
+    if run_motifs.holds_known(config):
+        commands.append(Command(run, run_motifs.KNOWN_CALL))
+    if run_motifs.holds(config, MOTIF_DISCOVERED):
+        commands += [Command((*run, "--discover", "--labels", labels, "--seed", str(seed)),
+                             run_motifs.discovered_call(labels, seed))
+                     for labels in config.grid.labels for seed in config.grid.seeds
+                     if run_motifs.made_in_advance(labels, config.grid.permutation_scope)]
+    return (Stage(run_motifs.STAGE, tuple(commands)),) if commands else ()
+
+
 def _analyses(config: ExperimentConfig, run_dir: Path, after: tuple[str, ...]) -> tuple[Stage, ...]:
-    """The analyses, from the narrowest question to the widest, once every arm has finished.
-    Stability comes first because it compares one arm only with itself. What each one answers, and
-    how the three that cluster features differ, is in experiments/analysis/README.md. The judge runs
-    when the grid says so (`grid.judge`).
+    """The analyses, run once every arm has finished, in order from the narrowest question to the
+    widest. Stability comes first because it compares one arm only with itself. What each analysis
+    answers, and how the three that cluster features differ, is in experiments/analysis/README.md.
+    The judge runs when the grid says so (`grid.judge`).
     """
     run = ("--run-dir", _short(run_dir))
     judged = (_serial(judge.CALL, (*_analysis("run_judge.py"), *run), after=after,
@@ -201,8 +240,8 @@ def _analyses(config: ExperimentConfig, run_dir: Path, after: tuple[str, ...]) -
         _serial(stability.CALL, (*_analysis("analyse_stability.py"), *run), after=after),
         _serial(co_discovery.CALL, (*_analysis("analyse_co_discovery.py"), *run), after=after),
         # Whether an arm proposes the same *ideas* across seeds, which set-based stability cannot
-        # see, because a generative arm names one idea differently each time and moves the window
-        # it is evaluated over.
+        # detect, because an arm on a written source names one idea differently each time and
+        # moves the window it is evaluated over.
         _serial(recurrence.CALL, (*_analysis("analyse_recurrence.py"), *run), after=after,
                 calls_model=writes),
         *(judged if config.grid.judge else ()),
@@ -214,7 +253,7 @@ def _reduction(config: ExperimentConfig, run_dir: Path, arms: tuple[Stage, ...]
     """Stage 3A, when the config has a `reduction` section and reduces an arm: one process per
     reduced arm. An arm is reduced from its best real-label cell, so its process starts once the
     processes writing its real-label cells have finished, whatever the rest of the run is doing.
-    Each takes up to four threads, which PySR's searches use."""
+    Each process takes up to four threads, which PySR's searches use."""
     if config.reduction is None or not config.reduced_arms():
         return ()
     writers: dict[Arm, list[str]] = {}
@@ -232,9 +271,9 @@ def _reduction(config: ExperimentConfig, run_dir: Path, arms: tuple[Stage, ...]
 def _reliability(config: ExperimentConfig, run_dir: Path, reduced: tuple[Stage, ...]
                  ) -> tuple[Stage, ...]:
     """Stage 3B's work before the reveal, when the config has a `reliability` section: one process
-    per profiled arm, started once that arm's reduction has finished. Each takes every free thread
-    for Tier 1's selections, and is lent those that free up while it runs, so the panels run one at
-    a time. Its work after the reveal is in `_after_reveal`."""
+    per profiled arm, started once that arm's reduction has finished. Each process takes every free
+    thread for Tier 1's selections and is lent the threads that free up while it runs, so the
+    panels run one at a time. The panel's work after the reveal is in `_after_reveal`."""
     if config.reliability is None:
         return ()
     reductions = set(_logs(reduced))
@@ -247,18 +286,18 @@ def _reliability(config: ExperimentConfig, run_dir: Path, reduced: tuple[Stage, 
 
 
 def _reveal(run_dir: Path) -> Stage:
-    """The reveal: the test split opened once, every saved model scored on it, and the panel's
-    test-side work. It refuses a run that is not complete, so the check that every stage before it
-    finished lives in the reveal."""
+    """The reveal: the held-out split opened once, every saved model scored on it, and the panel's
+    Tier 2 on the held-out rows. The reveal refuses a run that is not complete, so the check that
+    every stage before it has finished is made there."""
     return _serial(reveal.CALL, (*_runner("run_reveal.py"), "--run-dir", _short(run_dir)),
                    phase=REVEAL, threads=None)
 
 
 def _after_reveal(config: ExperimentConfig, run_dir: Path) -> tuple[Stage, ...]:
-    """What reads the reveal's numbers: the panel's Tier 3 and tables, then the report's inputs
-    under Core, then its figures under LocalUtils, drawn only from what the Core stage wrote. The
-    report itself is written by hand or by an agent (process/reporting.md), so the driver stops at
-    its inputs."""
+    """The stages that use the reveal's numbers: the panel's Tier 3 and tables, then the report's
+    inputs under Core, then its figures under LocalUtils, drawn only from what the Core stage
+    wrote. The report itself is written by hand or by an agent (process/reporting.md), so the
+    driver stops at its inputs."""
     stages = []
     if config.reliability is not None:
         stages.append(_serial(reliability.STAGE_AFTER_REVEAL, (
@@ -273,35 +312,36 @@ def _after_reveal(config: ExperimentConfig, run_dir: Path) -> tuple[Stage, ...]:
 
 
 def build_stages(config: ExperimentConfig, run_dir: Path) -> tuple[Stage, ...]:
-    """Everything the run will do, in order, as the exact processes it will start. A config under
-    which an arm could not be started is refused here (`stage2.check`)."""
+    """Everything the run will do, in order, as the processes it will start. A config under which
+    an arm could not start is refused here (`stage2.check`)."""
     stage2.check(config)
     arms = tuple(_arm(arm, config, run_dir) for arm in config.arm_cells())
     reduced = _reduction(config, run_dir, arms)
-    return (_baseline(run_dir), *arms, *_analyses(config, run_dir, after=_logs(arms)),
+    return (_baseline(run_dir), *_motifs(config, run_dir), *arms,
+            *_analyses(config, run_dir, after=_logs(arms)),
             *reduced, *_reliability(config, run_dir, reduced), _reveal(run_dir),
             *_after_reveal(config, run_dir))
 
 
 def _logs(stages: tuple[Stage, ...]) -> tuple[str, ...]:
-    """The logs of every command of `stages`: what a command waiting for all of them names."""
+    """The logs of every command of `stages`, which a command that waits for all of them names."""
     return tuple(command.log for stage in stages for command in stage.commands)
 
 
 # ------------------------------------------------------------------------------------- preflight
 
 def preflight(config: ExperimentConfig, stages: tuple[Stage, ...], run_dir: Path) -> list[str]:
-    """Everything that can be checked before anything is spent.
+    """Everything that can be checked before any work is done.
 
-    A run that dies three hours in for want of a credential has cost the whole night, and each of
-    these is a one-line check. The checks follow the stages selected, not the whole config, so
-    `--only l1_logistic/positional` needs no credentials and no vendored interpreter even when the
-    config also names arms that do. The run's blinding is the exception, checked whatever is selected
-    (`blinding_problems`), since it is a property of the whole run.
+    A run that dies three hours in for want of a credential loses the whole night, whereas each of
+    these is a one-line check. The checks follow the selected stages instead of the whole config,
+    so `--only l1_logistic/positional` needs no credentials and no vendored interpreter even when
+    the config also names arms that do. The run's blinding is the exception: it is checked whatever
+    is selected (`blinding_problems`), because it is a property of the whole run.
 
-    The split files are not checked here. Loading the config already read the dataset's
+    The split files are not checked here. Loading the config has already read the dataset's
     `dataset.json` and checked the training and validation files against it, and the reveal checks
-    the test file.
+    the held-out split's file.
     """
     selected = {stage.name for stage in stages}
     problems = []
@@ -321,10 +361,20 @@ def preflight(config: ExperimentConfig, stages: tuple[Stage, ...], run_dir: Path
         script = REPO / stage.commands[0].argv[1]
         if not script.exists():
             problems.append(f"missing script for stage {stage.name}: {script}")
-    # A model fitted in another environment needs it wherever the model is fitted: its arm's stage,
-    # the reduction and the panel. A vendored method's is needed after those too, by every stage
-    # that uses its models: the panel on both sides of the reveal, the reveal, and the report's
-    # inputs, which read a model to draw it. PySR's equation is evaluated in Core once found.
+    # A motif collection (the one a known-motif source scans with, or the one discovered motifs are
+    # compared with) is read by the step before the arms and by the arms whose pools hold a motif
+    # source. Later stages take it from the featurisers the cells saved.
+    reads_collection = [stage.name for stage in stages if stage.name == run_motifs.STAGE
+                        or ("/" in stage.name and set(parse_pool(stage.name.partition("/")[2]))
+                            & {MOTIF_KNOWN, MOTIF_DISCOVERED})]
+    if reads_collection:
+        problems += run_motifs.collection_problems(config, run_dir)
+        problems += run_motifs.environment_problems(config)
+    # A model fitted in another environment needs that environment wherever the model is fitted: in
+    # its arm's stage, the reduction and the panel. A vendored method's environment is also needed
+    # afterwards, by every stage that uses its models: the panel on both sides of the reveal, the
+    # reveal itself, and the report's inputs, which load a model to draw it. PySR's equation is
+    # evaluated in Core once it is found.
     uses_models = {reduction.STAGE, reliability.STAGE, reveal.CALL, reliability.STAGE_AFTER_REVEAL,
                    report.CALL}
     fitting: dict[str, list[str]] = {arm_name(*arm): [arm[0]] for arm in config.arm_cells()}
@@ -343,7 +393,8 @@ def preflight(config: ExperimentConfig, stages: tuple[Stage, ...], run_dir: Path
     problems = list(dict.fromkeys(problem for problem in problems if problem))
     # A stage calls a language model when it is an arm whose pool holds a written source
     # (`seqmaestro.arms.calls_language_model`), the judge, or the recurrence analysis of a run with
-    # such an arm. A run with no written source and no judge needs no provider and no credentials.
+    # such an arm. A run without a written source or the judge needs neither a provider nor
+    # credentials.
     calling = sorted(stage.name for stage in stages if stage.calls_model)
     unset = missing_settings() if calling else []
     if unset:
@@ -357,7 +408,7 @@ def preflight(config: ExperimentConfig, stages: tuple[Stage, ...], run_dir: Path
 
 
 class Journal:
-    """The driver's narration: to the terminal, and to one log that outlives the terminal."""
+    """The driver's messages, printed to the terminal and appended to a log that outlives it."""
 
     def __init__(self, logs: Path) -> None:
         self.logs = logs
@@ -378,11 +429,11 @@ class Journal:
 def notify(title: str, message: str, priority: str = "default", journal: Journal | None = None) -> None:
     """Send a push notification, if a topic is configured.
 
-    The topic is read from `NTFY_TOPIC` in the environment and never from the config. It is how an
-    agentic session watches a run it started, so it is no part of the experiment, and two runs of
-    one config should not differ in their recorded settings because one was being watched. It is
-    also a public channel to anyone who knows its name, so it must stay out of tracked files. When
-    it is unset there are no notifications and no complaint.
+    The topic is read from `NTFY_TOPIC` in the environment and never from the config. An agent uses
+    it to watch a run it started, so it is not part of the experiment, and two runs of one config
+    should not differ in their recorded settings because one was being watched. The topic is also a
+    public channel to anyone who knows its name, so it must stay out of tracked files. When it is
+    unset, the driver sends no notifications and does not complain.
     """
     topic = os.environ.get("NTFY_TOPIC")
     if not topic:
@@ -397,8 +448,8 @@ def notify(title: str, message: str, priority: str = "default", journal: Journal
 
 
 def start_process(argv: tuple[str, ...], log: Path, environment: dict[str, str], cwd: Path):
-    """Start one of the run's processes (`schedule.start_process`). A module attribute, so that a
-    test can stand in for every process the driver starts."""
+    """Start one of the run's processes (`schedule.start_process`). It is a module attribute so
+    that a test can stand in for every process the driver starts."""
     from seqmaestro.pipeline.schedule import start_process as start
     return start(argv, log, environment, cwd)
 
@@ -423,12 +474,13 @@ def record_budget(logs: Path, machine, budget, args: argparse.Namespace) -> None
 
 
 def resolve_run_dir(given: Path | None, config: ExperimentConfig, new_run: bool) -> Path:
-    """Where this run's results go, refusing the mistake the dated default invites.
+    """Where this run's results go, with a check against the mistake that the dated default
+    directory invites.
 
     Without the check, a resume on a later day than the launch would start an empty run: every
     stage "resumes" into an empty directory, redoes hours of work, and the results end up split
-    across two directories. An interrupted run is the case resuming exists for, and also the case
-    that meets this problem, so the driver refuses instead of relying on documentation.
+    across two directories. Resuming exists for interrupted runs, which are also the runs that meet
+    this problem, so the driver refuses instead of relying on documentation.
     """
     if given is not None:
         return given
@@ -451,8 +503,8 @@ def runs_of(name: str) -> list[Path]:
     """The run directories whose recorded config has this name, oldest first.
 
     A run is matched on the name its `config.yaml` records, whatever its directory is called. A
-    directory named by hand is still a run of its config, and a directory whose name holds another
-    config's name (`screen_v2` holds `screen`) is no run of that other config.
+    directory named by hand is still a run of its config, and a directory whose name contains
+    another config's name (`screen_v2` contains `screen`) is not a run of that other config.
     """
     found = []
     for path in sorted(RUNS.glob(f"*/{CONFIG_FILE}")):
@@ -468,14 +520,14 @@ def runs_of(name: str) -> list[Path]:
 def bind_config(run_dir: Path, config: ExperimentConfig, allow_change: bool, journal: Journal) -> None:
     """Record the resolved config, or refuse to resume onto a different one.
 
-    A stage skips the cells that already have results, and cannot tell a finished cell from one
-    finished under different settings. Two configurations mixed into one table cannot be detected
-    afterwards, so the difference is caught here. A deliberate change is allowed through with
+    A stage skips the cells that already have results and cannot tell a finished cell from one
+    finished under different settings. Two configurations mixed in one table cannot be detected
+    afterwards, so the difference is caught here. A deliberate change is allowed with
     `--allow-config-change`, and the superseded config is kept beside the new one, because it is
-    the only record of what the cells already in the directory were computed under.
+    the only record of the settings the cells already in the directory were computed under.
 
     A run whose config was recorded under another `version` of the config's shape is refused
-    whatever the flag, since the stages could not take that run's settings from it.
+    whatever the flag, because the stages could not take that run's settings from it.
     """
     path = run_dir / CONFIG_FILE
     resolved = config.to_yaml()
@@ -552,6 +604,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run everything that comes before the reveal, and stop there. Running "
                              "again without it starts each of those stages again, which skips what "
                              "it has finished, and goes on through the reveal")
+    parser.add_argument("--detach", action="store_true",
+                        help="start the run in a session of its own and return once it is under "
+                             "way, so that it outlives the terminal and the command that started "
+                             "it. Follow it in the run's logs/driver.log and status.html")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the resolved config, the budget and every command, run nothing")
     parser.add_argument("--estimate", action="store_true",
@@ -561,8 +617,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--slow-hours", type=_positive_float, default=None, metavar="HOURS",
                         help="with --estimate, the wall time over which an arm is flagged (default: "
                              "2)")
-    # How much of the machine the run may take. None changes a result, and each is recorded in
-    # `logs/machine.jsonl`, so a run resumed on another machine may use other values.
+    # How much of the machine the run may take. These flags do not change any result, and each is
+    # recorded in `logs/machine.jsonl`, so a run resumed on another machine may use other values.
     parser.add_argument("--max-cpus", type=_positive_int, default=None, metavar="N",
                         help="at most this many threads at once (default: every CPU this process "
                              "may use)")
@@ -593,9 +649,10 @@ def plan(stages: tuple[Stage, ...], revealed: bool, stop_before_reveal: bool
          ) -> tuple[tuple[Stage, ...], list[str]]:
     """The stages this call runs, and why any selected stage was left out.
 
-    A revealed run resumes from the reveal. Everything before the reveal fits or selects, and has
-    already run, because the reveal refuses to start until it has. `--stop-before-reveal` stops
-    ahead of the reveal, so a run's results can be checked before the test split is opened.
+    A revealed run resumes from the reveal, because everything before the reveal fits or selects
+    and has already run (the reveal refuses to start until it has). `--stop-before-reveal` stops
+    ahead of the reveal, so that a run's results can be checked before the held-out split is
+    opened.
     """
     notes = []
     if revealed:
@@ -613,9 +670,42 @@ def plan(stages: tuple[Stage, ...], revealed: bool, stop_before_reveal: bool
     return stages, notes
 
 
+def detach(argv: list[str], run_dir: Path) -> int:
+    """`--detach`: start this call again without the flag, in a session of its own, and return
+    once it is under way.
+
+    The run's directory is passed on explicitly, so the run that starts is the one this call
+    resolved and checked. The call watches the run for `DETACH_WATCH_SECONDS`, so that a run that
+    stops at once says so where the launch was typed.
+    """
+    arguments = [argument for argument in argv if argument != "--detach"]
+    if not any(argument == "--run-dir" or argument.startswith("--run-dir=") for argument in arguments):
+        arguments += ["--run-dir", str(run_dir)]
+    logs = run_dir / LOGS_DIR
+    logs.mkdir(parents=True, exist_ok=True)
+    with (logs / DETACHED_OUTPUT).open("ab") as output:
+        process = subprocess.Popen(
+            (sys.executable, str(RUNNERS / "run_experiment.py"), *arguments),
+            stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+            start_new_session=True)
+    try:
+        code = process.wait(timeout=DETACH_WATCH_SECONDS)
+    except subprocess.TimeoutExpired:
+        print(f"The run is under way in the background, as process {process.pid}. Follow it in "
+              f"{_short(logs / f'{CALL}.log')} and {_short(run_dir / status.PAGE_FILE)}.")
+        return 0
+    if code == 0:
+        print(f"The run finished within {DETACH_WATCH_SECONDS} s. Its journal is "
+              f"{_short(logs / f'{CALL}.log')}.")
+        return 0
+    print(f"The run stopped within {DETACH_WATCH_SECONDS} s, with exit code {code}. What it printed "
+          f"is in {_short(logs / DETACHED_OUTPUT)}.", file=sys.stderr)
+    return code
+
+
 def run_estimate(args: argparse.Namespace, config: ExperimentConfig) -> int:
-    """`--estimate`: each arm's time on this machine, printed, and kept in the run's `logs/` when a
-    run directory is named. It starts no stage."""
+    """`--estimate`: print each arm's time on this machine, and keep the estimate in the run's
+    `logs/` when a run directory is named. It starts no stage."""
     from seqmaestro.pipeline import estimate
 
     _, budget = run_budget(args)
@@ -624,14 +714,25 @@ def run_estimate(args: argparse.Namespace, config: ExperimentConfig) -> int:
         print(f"WARNING: {warning}")
     print(f"Probing {len(config.arm_cells())} arm(s) on this machine, one thread each.", flush=True)
     try:
-        probes, estimates = estimate.estimate_run(config, budget.cpus, slow_hours,
-                                                  report=lambda line: print(line, flush=True))
+        probes, estimates, before = estimate.estimate_run(
+            config, budget.cpus, slow_hours, report=lambda line: print(line, flush=True))
     except RuntimeError as error:
         print(error, file=sys.stderr)
         return 1
-    print("\n" + estimate.table(estimates, config, budget.cpus, slow_hours), flush=True)
+    print("\n" + estimate.table(estimates, config, budget.cpus, slow_hours, before), flush=True)
+    # The language model's part: each arm's calls, their cost and waiting, and the load on the
+    # provider, with DEFT's tree counted at the splits its probe made.
+    from seqmaestro.pipeline import calls
+
+    found = calls.estimate(config, budget.model_calls,
+                           nodes={probe.pool: probe.nodes for probe in probes if probe.nodes})
+    print("\n" + calls.table(found), flush=True)
+    print("\nThe grid, each arm's time and, where it calls a language model, its cost and waiting:\n"
+          + calls.grid(config, {item.arm: item.wall for item in estimates}, found), flush=True)
     if args.run_dir is not None:
-        print(f"\nkept in {_short(estimate.record(args.run_dir, probes, estimates, budget.cpus, slow_hours))}")
+        kept = estimate.record(args.run_dir, probes, estimates, budget.cpus, slow_hours, before,
+                               language_model=calls.as_record(found))
+        print(f"\nkept in {_short(kept)}")
     return 0
 
 
@@ -639,6 +740,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.slow_hours is not None and not args.estimate:
         print("--slow-hours applies only with --estimate.", file=sys.stderr)
+        return 2
+    if args.detach and (args.dry_run or args.estimate):
+        print("--detach starts a run, so it does not go with --dry-run or --estimate.",
+              file=sys.stderr)
         return 2
 
     try:
@@ -664,7 +769,11 @@ def main(argv: list[str] | None = None) -> int:
         print(config.to_yaml(), end="")
         print(f"\n# run-dir: {_short(run_dir)}")
         print(f"# machine: {machine.as_dict()}")
-        print(f"# budget: {budget.as_dict()}\n")
+        print(f"# budget: {budget.as_dict()}")
+        print("# the settings each Core model is fitted with (the config's, or the model's defaults):")
+        for model, values in config.effective_model_settings().items():
+            print(f"#   {model}: {', '.join(f'{key}={value}' for key, value in values.items())}")
+        print()
         for stage in stages:
             for command in stage.commands:
                 print(f"[{stage.name}] {shlex.join(command.argv)}\n")
@@ -678,6 +787,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print("# preflight clean")
         return 0
+    if args.detach:
+        return detach(sys.argv[1:] if argv is None else list(argv), run_dir)
 
     (run_dir / LOGS_DIR).mkdir(parents=True, exist_ok=True)
     journal = Journal(run_dir / LOGS_DIR)
@@ -686,7 +797,12 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as error:
         print(error, file=sys.stderr)
         return 2
-    record_call(run_dir, CALL, vars(args), config=config.to_mapping())
+    # Record, beside the config (which names no model), the model that the environment names for
+    # the stages that call one, and how the run calls it. Each part that calls the model also
+    # records the model it called.
+    called = ({"language_model": describe_calls(provider_from_environment(), config.language_model)}
+              if any(stage.calls_model for stage in stages) else {})
+    record_call(run_dir, CALL, vars(args), config=config.to_mapping(), **called)
 
     record_budget(journal.logs, machine, budget, args)
 
@@ -713,11 +829,16 @@ def main(argv: list[str] | None = None) -> int:
                f"Stage '{stage.name}' failed. The run continues without it. "
                f"Logs: {_short(journal.logs)}/{stage.name}*.log", "high", journal)
 
-    # The reveal opens the test split for good, so the scheduler holds it, and what reads it, once
-    # anything before it has failed. The reveal would refuse an incomplete run anyway, but holding
-    # it here reports the failed stage by name.
-    outcome = Scheduler(stages, budget, journal, cwd=REPO, start=start_process,
-                        on_failure=failed_stage).run()
+    # The reveal opens the held-out split for good, so once anything before it has failed, the
+    # scheduler holds back the reveal and the stages that use its scores. The reveal would refuse
+    # an incomplete run anyway, but holding it back here reports the failed stage by name.
+    # The run's status page, kept current from the scheduler's jobs (`seqmaestro.status`), and
+    # written once before anything starts, so that a page opened then reloads itself.
+    updater = status.Updater(run_dir, journal.note)
+    scheduler = Scheduler(stages, budget, journal, cwd=REPO, start=start_process,
+                          on_failure=failed_stage, on_step=updater)
+    updater(scheduler.jobs, True)
+    outcome = scheduler.run()
     failed, held = outcome.failed, outcome.held
 
     journal.banner("finished")
@@ -742,6 +863,8 @@ def main(argv: list[str] | None = None) -> int:
                      f"continue: --run-dir {_short(run_dir)} without --stop-before-reveal.")
     elif not failed and not held:
         journal.note(f"report inputs: {_short(report_dir(run_dir))}; the report is written against "
-                     f"docs/report/TEMPLATE.md, as process/reporting.md says")
+                     f"process/report-template.md, as process/reporting.md says")
+    updater.finish(scheduler.jobs)
+    journal.note(f"status page: {_short(run_dir / status.PAGE_FILE)}")
     return 1 if failed or held else 0
 

@@ -1,12 +1,13 @@
-"""The fitted arm, kept so a finished cell can be loaded back and asked about new sequences.
+"""The fitted arm, saved so that a finished cell can be loaded again and used on new sequences.
 
-A cell records what a model *found*: its features, its importances, its scores on the validation
-rows. It also keeps the fitted model, so that a new question can be answered without refitting the
-cell, including a question about sequences the run never saw.
+A cell records what a model *found* (its features, their importances, its scores on the validation
+rows) and also keeps the fitted model, so that a new question can be answered without refitting the
+cell, even a question about sequences the run never saw.
 
-**A model on its own is not enough.** It was fitted on columns some featuriser produced, and
-predicting on a new sequence means producing those same columns, in the same order, from the same
-learned vocabulary. So the featuriser and the model are saved and loaded together, as a `FittedArm`.
+**The model alone is not enough.** It was fitted on the columns a featuriser produced, and
+predicting on a new sequence means producing those columns again, in the same order and from the
+same learned vocabulary. The featuriser and the model are therefore saved and loaded together, as a
+`FittedArm`.
 
     from seqmaestro.harness.fitted import load_fitted
 
@@ -21,9 +22,9 @@ without its fitted arm can never be scored on the test split.
 **DEFT's and IGSR's Stage 2 cells keep their model in their bundle.** Each method saves the model
 it fitted into the bundle it hands back, in the method's format: DEFT its tree, and IGSR the model
 of its search. Using either needs the method, which this package must not import, so the reveal
-asks the method's adapter to predict with it. The only fitted part of such a cell that this side
-saves is the featuriser for any columns this side computed and handed across, which
-`save_featuriser` writes.
+has the method's adapter predict with it. The only fitted part of such a cell that this side saves
+is the featuriser for any columns this side computed and handed across, which `save_featuriser`
+writes.
 """
 
 from __future__ import annotations
@@ -40,15 +41,15 @@ from seqmaestro import files
 from seqmaestro.features.base import Featuriser
 from seqmaestro.models.base import Model, filled_rows
 
-#: What the file is called inside a results cell.
+#: The file's name inside a cell.
 FILENAME = "fitted.pkl"
 
-#: What the `run.json` of a cell that keeps one records under `predict_with`: the reveal loads the
-#: file and predicts in its own process.
+#: What the `run.json` of a cell that keeps this file records under `predict_with`, which tells the
+#: reveal to load the file and predict in its process instead of through an adapter.
 PREDICT_WITH = "fitted"
 
-#: Bumped when the saved shape changes in a way a reader must notice. A pickle carries no header of
-#: its own, so the version travels beside the object rather than inside it.
+#: Bumped when the saved layout changes in a way a reader must notice. A pickle has no header, so
+#: the version is saved beside the object in the pickled payload.
 FITTED_VERSION = 1
 
 
@@ -60,7 +61,7 @@ class FittedArm:
     featuriser: Featuriser
     model: Model
     #: Which column of the dataset held the sequences the arm was fitted on. The reveal checks it
-    #: against the dataset it scores. `predict` takes rows, not a frame, and needs no name.
+    #: against the dataset it scores. `predict` takes rows rather than a frame, so it needs no name.
     sequence_column: str | None = None
 
     def transform(self, inputs) -> pd.DataFrame:
@@ -74,8 +75,8 @@ class FittedArm:
         return np.asarray(self.model.predict(self.transform(inputs)), dtype=float)
 
     def predict_counting(self, inputs) -> tuple[np.ndarray, int | None]:
-        """`predict`, and how many rows took the model's constant prediction because what it fitted
-        is undefined there (None for a model defined everywhere), from one transform."""
+        """`predict`, plus how many rows took the model's constant prediction because the fitted
+        model is undefined there (`None` for a model defined everywhere), both from one transform."""
         X = self.transform(inputs)
         return np.asarray(self.model.predict(X), dtype=float), filled_rows(self.model, X)
 
@@ -86,12 +87,12 @@ class FittedArm:
 
 def save_fitted(out_dir: str | Path, featuriser: Featuriser, model: Model,
                 sequence_column: str | None = None) -> Path:
-    """Write the fitted pair into a results cell and return the path.
+    """Write the fitted pair into a cell and return the path.
 
     A pickling failure is raised, not swallowed. Every featuriser and model in this package pickles
     (the generated featurisers because they define how to restore themselves), so a failure here
-    means a new component that cannot be saved. Finding that out on the run that produced it is far
-    cheaper than finding it out later, when the cell is needed.
+    means a new component that cannot be saved. It is far better to find that out on the run that
+    produced it than later, when the cell is needed.
     """
     if not featuriser.is_fitted:
         raise ValueError("Refusing to save an unfitted featuriser: it has no columns to produce.")
@@ -107,7 +108,7 @@ def save_fitted(out_dir: str | Path, featuriser: Featuriser, model: Model,
 def save_featuriser(path: str | Path, featuriser: Featuriser) -> Path:
     """Write a fitted featuriser on its own, for columns handed to an arm in another environment.
 
-    That arm's model lives on its own side of the boundary. Predicting with it later needs the same
+    That arm's model stays in its method's environment. Predicting with it later needs the same
     columns computed for the new rows, and only this featuriser, fitted on the rows the arm trained
     on, can produce them.
     """
@@ -120,7 +121,7 @@ def save_featuriser(path: str | Path, featuriser: Featuriser) -> Path:
 
 
 def load_featuriser(path: str | Path) -> Featuriser:
-    """A featuriser written by `save_featuriser`. The same trust applies as for `load_fitted`."""
+    """A featuriser written by `save_featuriser`, trusted on the same terms as in `load_fitted`."""
     payload = pickle.loads(Path(path).read_bytes())
     if payload.get("version") != FITTED_VERSION or "featuriser" not in payload:
         raise ValueError(f"{path} is not a featuriser written at version {FITTED_VERSION}.")
@@ -131,9 +132,9 @@ def load_fitted(path: str | Path) -> FittedArm:
     """Load a saved arm, given the cell directory or the file itself.
 
     **Unpickling runs code and requires the libraries the arm was fitted with.** A cell is written
-    by one of our own runs, so it is trusted like any other file in the run directory. The versions
-    of `xgboost` and `interpret-core` still matter, and the environment snapshot beside the run
-    records them.
+    by one of our runs, so it is trusted like any other file in the run directory. The versions of
+    `xgboost` and `interpret-core` still matter, and the environment snapshot beside the run records
+    them.
     """
     path = Path(path)
     if path.is_dir():

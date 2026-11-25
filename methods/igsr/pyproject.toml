@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=62.0"]
+# 77 is the first setuptools to read the SPDX `license` and `license-files` keys (PEP 639).
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "igsr"
 version = "0.1.0"
 description = "IGSR: influence-guided symbolic regression with a language model in the loop. Vendored into SeqMaestro and reduced to the method itself."
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 
 # Only what the IGSR method imports: the search, the agent, the influence and the term

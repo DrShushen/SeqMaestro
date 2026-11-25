@@ -1,33 +1,34 @@
-"""Proposed code in, a named numeric matrix out.
+"""Turning the code a language model proposed into a named numeric matrix.
 
 A `GeneratedFeaturiser` is an ordinary `Featuriser`, so `run_model` drives it the way it drives the
 *k*-mer and positional featurisers, with the same subsample, threshold selection, metrics and
-output files. A proposer arm therefore differs from a fixed one in the featuriser it builds
-(`seqmaestro.pipeline.stage2.ProposerArm`), and `run_model` holds no logic for it.
+output files. A proposer arm therefore differs from a fixed one only in the featuriser it builds
+(`seqmaestro.pipeline.stage2.ProposerArm`), and `run_model` has no code specific to it.
 
 **The proposer runs at `fit` and only at `fit`.** `run_model` fits on the seed's subsample, so the
-model is shown only those rows and their labels. `transform` on validation and test evaluates what
-was already proposed and makes no call. This is the ordinary split discipline. It also means the
-proposer arms vary between seeds through the same subsample perturbation as every other arm, and
-not through sampling temperature, which is what makes their stability comparable with the other
-arms in a row.
+language model is shown only those rows and their labels, and `transform` on validation and test
+evaluates what was already proposed without calling it, as the separation of the splits requires.
+Each seed's proposal is therefore made from that seed's rows, so the proposer arms vary between
+seeds through the same subsample perturbation as every other arm, as well as through the language
+model's sampling.
 
 **At `fit`, a feature that cannot be used is dropped** (`seqmaestro.proposer.checks`): one that
-raises, does not finish within `max_seconds`, returns other than a number per row, is constant, or
-is undefined (NaN or infinite) on more than `max_undefined_share` of the rows. Up to that share it
-is kept, its undefined rows are filled with its fit-time median, and the share is recorded in the
-record's `extra["undefined_share"]`. Where a proposer wrote the features, it has already sent the
-failures back to the model in its repair round, so this is the second guard.
+raises, does not finish within `max_seconds`, returns anything but one number per row, is constant,
+or is undefined (NaN or infinite) on more than `max_undefined_share` of the rows. Up to that share
+it is kept, its undefined rows are filled with its fit-time median, and the share is recorded in
+the record's `extra["undefined_share"]`. Where a proposer wrote the features, it has already sent
+the failures back to the language model in its repair round, so this is the second guard.
 
 **A feature that fails at `transform` cannot be dropped**, because the model is already fitted on
 it. It is filled with its fit-time median and the failure is counted, as is every undefined value
-filled. Dropping a failing feature at `fit` is fine, because those rows are the training rows, but
-dropping one at `transform` would be selecting features on test. At `transform` a feature is given
-`max_seconds` scaled up by the rows' count against the rows it was fitted on (`scaled_limit`), so
-one that finished at `fit` fails on time only where some rows cost it far more than those did.
+filled. Dropping a failing feature at `fit` is fine, because those rows are the training rows,
+whereas dropping one at `transform` would select features on the test rows. At `transform` a
+feature is given `max_seconds` scaled up by the ratio of these rows to the rows it was fitted on
+(`scaled_limit`), so one that finished at `fit` runs out of time only where some rows take it far
+longer than the fitting rows did.
 
-**Generated code reads the covariates the featuriser was fitted with.** It is handed the rows as one
-frame, the sequences under the column the prompt named and each covariate under its own name
+**Generated code can use the covariates the featuriser was fitted with.** It is handed the rows as
+one frame, with the sequences under the column the prompt named and each covariate under its name
 (`Inputs.frame`). The covariates present at `fit` are recorded, and `transform` selects those by
 name, so rows lacking one are refused instead of evaluated against a different frame.
 
@@ -59,19 +60,19 @@ from seqmaestro.proposer.guard import CodeGuardPolicy, UnsafeCodeError, compile_
 
 
 class NoFeatureSurvived(RuntimeError):
-    """Nothing of a proposal can be used on the rows: every feature failed to compile, raised, ran
-    out of time, gave the wrong shape, was undefined too often or was constant. The `fit_report` of
-    the featuriser that raised it counts each."""
+    """Every feature of a proposal failed on the rows: it did not compile, raised, ran out of time,
+    gave the wrong shape, was undefined too often or was constant. The `fit_report` of the
+    featuriser that raised this error counts each kind of failure."""
 
 
 class GeneratedFeaturiser(Featuriser):
     """Features a language model proposed, compiled and evaluated behind the guard.
 
-    Takes a proposer: anything with a `propose(inputs, y)` method returning records whose
+    It takes a proposer: anything with a `propose(inputs, y)` method returning records whose
     `source` is the code, and a `sequence_column` attribute naming the column that code indexes.
-    `from_records` builds one from existing records, for a re-scoring or a test, with no model and
-    no network call. There `sequence_column` must be supplied, because records carry code without
-    the frame it was written against.
+    `from_records` builds one from existing records, for a re-scoring or a test, with no language
+    model and no network call. There `sequence_column` must be supplied, because records hold code
+    without the frame it was written against.
     """
 
     def __init__(
@@ -89,7 +90,7 @@ class GeneratedFeaturiser(Featuriser):
         if (proposer is None) == (records is None):
             raise ValueError("Give exactly one of `proposer` or `records`.")
         # Taken from the proposer when there is one, so it is not passed twice. The generated code
-        # indexes this column by name because the prompt told it to, so this class reads the name
+        # indexes this column by name because the prompt told it to, so this class takes the name
         # from the same place the prompt did.
         if sequence_column is None:
             sequence_column = getattr(proposer, "sequence_column", None)
@@ -105,8 +106,8 @@ class GeneratedFeaturiser(Featuriser):
         self.policy = policy or CodeGuardPolicy()
         # The provenance these features have for the arm that reports them. A one-round proposal
         # is `selected`: the arm chose from it, and any other arm handed the same proposal could
-        # have chosen the same. The iterative source builds one of these per round and stamps its
-        # rounds `generated`.
+        # have chosen the same. The iterative source builds one of these for each round it
+        # proposes itself, and marks those `generated`.
         self.provenance = provenance
         if significant_digits is not None and (isinstance(significant_digits, bool)
                                                or not isinstance(significant_digits, int)
@@ -131,7 +132,7 @@ class GeneratedFeaturiser(Featuriser):
         self.max_seconds = None if max_seconds is None else float(max_seconds)
         #: How many rows the features were checked on at `fit`, which scales the limit at transform.
         self._fitted_rows: int | None = None
-        #: The covariates the generated code may read: those the rows carried at `fit`.
+        #: The covariates the generated code may use: those the rows held at `fit`.
         self.covariate_columns: tuple[str, ...] = ()
 
         self._functions: list = []
@@ -150,7 +151,7 @@ class GeneratedFeaturiser(Featuriser):
         """Everything except the compiled functions and the proposer.
 
         A compiled function has no importable name, so pickle cannot reach it. Each kept record
-        carries the source it was compiled from, so `__setstate__` compiles the same code again and
+        holds the source it was compiled from, so `__setstate__` compiles the same code again and
         restores the same columns. Recompiling is also the only route that needs no data.
         Rebuilding through `fit` would re-run the validation and could drop a feature that happens
         to be constant on whatever rows were at hand, leaving a model fitted on columns the
@@ -198,8 +199,8 @@ class GeneratedFeaturiser(Featuriser):
                 dropped["uncompilable"] += 1
                 continue
 
-            # A constant feature cannot help any model, and the stability estimator can match it to
-            # nothing, which is why the estimator reports constants as a diagnostic.
+            # A constant feature cannot help any model, and the stability estimator cannot match it
+            # to anything, which is why the estimator reports constants as a diagnostic.
             checked = check(function, frame, max_undefined_share=self.max_undefined_share,
                             significant_digits=self.significant_digits,
                             max_seconds=self.max_seconds)
@@ -214,8 +215,8 @@ class GeneratedFeaturiser(Featuriser):
             functions.append(function)
             fills.append(float(np.median(checked.values[np.isfinite(checked.values)])))
 
-        # Stated before a proposal with nothing left is refused, so that a caller that goes on
-        # without it can still count what it lost.
+        # The report is set before a proposal with no feature left is refused, so that a caller
+        # that continues without it can still count what it lost.
         self.fit_report = {"n_proposed": len(proposed), "n_kept": len(kept), "dropped": dropped}
         if not kept:
             raise NoFeatureSurvived(
@@ -242,8 +243,9 @@ class GeneratedFeaturiser(Featuriser):
             except TimeLimitUnavailable:
                 raise
             except Exception:
-                # Cannot be dropped, because the model is already fitted on this column. Filled
-                # with the fit-time median, a training statistic, and counted.
+                # The feature cannot be dropped, because the model is already fitted on this
+                # column, so it is filled with the fit-time median (a training statistic) and
+                # counted.
                 self.transform_failures[record.name] = self.transform_failures.get(record.name, 0) + 1
                 values = np.full(len(frame), fill)
 

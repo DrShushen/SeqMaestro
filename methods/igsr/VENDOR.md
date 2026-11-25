@@ -6,6 +6,7 @@
 | Commit | `44af1f48ce0881987cc996657b5e5c60b8661e4f` ("Initial commit", 2026-07-02) |
 | Copied | 2026-09-26, from `git archive 44af1f4` of the paths below; the working tree was clean at that commit |
 | Changes since | summarised in [`README.md`](README.md#what-changed) |
+| Licence | MIT ([`LICENSE`](LICENSE)) |
 
 There is no nested `.git`, no remote and no submodule. SeqMaestro keeps the history of the copy
 from here on.

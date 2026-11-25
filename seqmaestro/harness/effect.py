@@ -1,47 +1,18 @@
-"""How far one feature goes with the target on its own, measured directly on the data.
+"""How strongly one feature is associated with the target on its own, measured directly on the data.
 
-`docs/analyses/direct_measurement.md` is the maintained account of this. Keep the two in step.
+`rank_biserial` and `rank_correlation` compute the rank association that the harness records for
+every feature as `marginal_effect`, the first for a binary target and the second for a continuous
+one (`seqmaestro.target` assigns them). The other functions make up the direct effect test, which
+contrasts two classes and so refuses a label with any other number of values:
 
-The module holds two things. `rank_biserial` and `rank_correlation` are the rank association the
-harness records for every feature as `marginal_effect`: the first for a binary target and the
-second for a continuous one, as `seqmaestro.target` assigns them. The other functions make up the
-direct effect test, which an analysis computes on demand. It is a contrast between two classes, so
-it refuses a label holding any other number of values.
+- `match_within_strata` fixes the class ratio inside every stratum of a confounder (equal classes by
+  default) by subsampling the more abundant class;
+- `stratified_permutation_p` shuffles the labels within each stratum;
+- `direct_effect` runs the whole set of features against one label vector and returns the table,
+  with ratios and their intervals where one is defined (`proportion_ratio_interval`).
 
-A fitted model answers "can these features predict the label together?". The direct effect test
-answers the narrower question that is usually the one a collaborator asked: does *this* feature
-differ between the classes, by how much, and could a difference that size have arisen by chance?
-
-This is needed beside the models for two reasons. A model's score is a joint statement and cannot
-be attributed to any one of its inputs. And an arm can report a feature because it helps
-prediction while that feature's class difference, taken alone, is indistinguishable from noise.
-
-**The test is stratified**, because the case that needs measuring is a dataset with a confounder
-in it: a batch, a donor, a gene, whatever the split already groups on. There are three pieces, kept
-separate because they are separate decisions:
-
-- `match_within_strata` equalises the classes inside every stratum by subsampling the abundant one,
-  so stratum identity carries no information about the label.
-- `stratified_permutation_p` shuffles the labels *within* each stratum, so the null has the same
-  structure as the design and the confounder cannot contribute to it either.
-- `direct_effect` runs the whole set of features against one label vector and returns the table.
-
-Matching and permuting are both needed. Matching removes the association from the *estimate*, and
-permuting within strata removes it from the *null*. Matching alone leaves a p-value that a stratum
-imbalance can inflate, and permuting alone leaves an estimate that stratum composition still moves.
-
-**A stratum holding only one class adds nothing.** Matching drops it, and permuting inside it
-changes nothing. It offers no contrast, so it says nothing about the label, and keeping it in the
-estimate would only put the association back.
-
-The statistic is the difference of class means, which is a difference of rates when the feature is
-binary. Ratios are reported beside it because that is how an enrichment is usually quoted, with an
-interval only where one is defined (see `proportion_ratio_interval`).
-
-`rank_biserial` is the same contrast reduced to one scale-free number, and `rank_correlation` is
-its counterpart for a continuous target. Both are unstratified and carry no null of their own,
-because a per-feature p over a whole grid is a claim about the analysis rather than about the
-feature. For a binary label that question belongs to the functions above.
+`docs/developer/analyses/direct_measurement.md` is the account of the test: why it exists beside
+the models, why it needs both the matching and the permuting, and what its output can support.
 """
 
 from __future__ import annotations
@@ -57,8 +28,8 @@ DEFAULT_DRAWS = 10_000
 #: See `matched_effect`.
 DEFAULT_MATCH_REPEATS = 20
 
-#: Permutation draws evaluated per matrix product. It trades memory for speed and does not change
-#: the result. Each batch is one `argsort` and one `matmul`.
+#: Permutation draws evaluated per matrix product (each batch is one `argsort` and one `matmul`).
+#: It trades memory for speed and does not change the result.
 DRAW_BATCH = 250
 
 
@@ -85,20 +56,20 @@ def match_within_strata(strata, y, *, seed: int = 0, ratio: int = 1) -> np.ndarr
     """Row positions giving a **fixed class ratio** inside every stratum, by subsampling the
     abundant class.
 
-    The fixed ratio makes stratum identity uninformative. Every stratum then says the same thing
+    The fixed ratio makes stratum identity uninformative: every stratum then says the same thing
     about the label, so a model or a rate computed on these rows cannot recover the label from the
     stratum, whichever class is abundant overall.
 
     `ratio` is how many negative rows to keep per positive row. A ratio of 1 balances the classes
     and keeps the most of the scarce class, so only the abundant class loses rows. Where the
-    negative class is the abundant one, larger values keep more rows in total, of which the scarce
-    class is a smaller share, and the scarce class is what limits a matched design. A stratum
-    holding fewer than `ratio` negative rows per positive row loses positive rows too, so that it
-    keeps the ratio. Strata holding a single class contribute nothing and are dropped.
+    negative class is the abundant one, a larger ratio keeps more rows in total, but the scarce class
+    becomes a smaller share of them, and the scarce class is what limits a matched design. A stratum
+    with fewer than `ratio` negative rows per positive row also loses positive rows, so that it keeps
+    the ratio. A stratum that holds a single class contributes nothing and is dropped.
 
-    One generator is used across all strata, instead of one seed reused inside each. Reusing a seed
-    per stratum would make each stratum's draw a deterministic function of its own row order, which
-    correlates the selections in a way nothing downstream expects.
+    One random generator serves all strata, instead of one seed reused inside each, because reusing
+    a seed per stratum would make each stratum's draw a deterministic function of its row order.
+    That would correlate the selections in a way that downstream code does not expect.
     """
     if ratio < 1:
         raise ValueError(f"ratio must be at least 1; got {ratio}.")
@@ -121,10 +92,10 @@ def match_within_strata(strata, y, *, seed: int = 0, ratio: int = 1) -> np.ndarr
 
 def proportion_ratio_interval(k1: int, n1: int, k0: int, n0: int,
                               z: float = CONFIDENCE_Z) -> tuple[float, float, float]:
-    """Ratio of two proportions with its 95% interval, by the delta method on the log.
+    """The ratio of two proportions with its 95% interval, by the delta method on the log scale.
 
-    Defined only for a *binary* feature, where each class mean is a proportion and its variance
-    follows from the count. A continuous feature's ratio of means has no such variance, so
+    It is defined only for a *binary* feature, where each class mean is a proportion and its
+    variance follows from the count. A continuous feature's ratio of means has no such variance, so
     `direct_effect` does not call this for one and leaves the interval empty.
     """
     if not (n1 and n0):
@@ -144,8 +115,8 @@ def _within_stratum_permutations(label: np.ndarray, codes: np.ndarray, batch: in
 
     Sorting on `stratum + U[0, 1)` orders the rows by stratum with a random order within each,
     because the codes are integers and the added noise never reaches 1. One `argsort` over the
-    batch therefore gives every draw at once. Each stratum keeps its own class counts, which is
-    what lets `stratified_permutation_p` treat the class sizes as constants.
+    batch therefore gives every draw at once. Each stratum keeps its class counts, which lets
+    `stratified_permutation_p` treat the class sizes as constants.
     """
     grouped = np.argsort(codes, kind="stable")
     keys = codes[None, :] + rng.random((batch, len(label)))
@@ -158,14 +129,15 @@ def _within_stratum_permutations(label: np.ndarray, codes: np.ndarray, batch: in
 def stratified_permutation_p(values: np.ndarray, y, strata=None, *,
                              draws: int = DEFAULT_DRAWS, seed: int = 0,
                              batch: int = DRAW_BATCH) -> np.ndarray:
-    """Two-sided p per feature: how often shuffled labels move the class means this far apart.
+    """Two-sided p-value per feature: how often shuffled labels move the class means at least this
+    far apart.
 
     The labels are shuffled *within* each stratum, so every draw keeps the design's structure, and a
     difference the confounder produces appears in the null as readily as in the estimate. With no
     strata given, this is the ordinary label permutation.
 
     The p-value is `(hits + 1) / (draws + 1)`, counting the observed arrangement as one of the
-    arrangements. This prevents a p of exactly zero, which no permutation test can support.
+    arrangements. This prevents a p-value of zero, which a permutation test cannot support.
     """
     values = np.atleast_2d(np.asarray(values, dtype=np.float64))
     if values.shape[0] != len(np.asarray(y)):
@@ -175,8 +147,8 @@ def stratified_permutation_p(values: np.ndarray, y, strata=None, *,
 
     n_positive, n_negative = float(label.sum()), float((1 - label).sum())
     if draws <= 0 or not n_positive or not n_negative:
-        # Zero draws is "not asked for", which is NaN. Returning `1 / (0 + 1)` would be a p of 1.0
-        # backed by no evidence at all, and would look like a measured null result.
+        # Zero draws means no p-value was asked for, which is NaN. Returning `1 / (0 + 1)` would give
+        # a p-value of 1.0 backed by no evidence, which would look like a measured null result.
         return np.full(values.shape[1], float("nan"))
     totals = values.sum(axis=0)
 
@@ -200,21 +172,21 @@ def rank_biserial(values: np.ndarray, y) -> np.ndarray:
     """How far each feature separates the two classes, on one scale for every feature and arm.
 
     `2 * AUC - 1` per column, where AUC is that column used alone as a score for the positive
-    class. It runs from -1 to 1, and has a direct meaning: 0.4 means that of one row drawn from
-    each class, the positive one holds the higher value 70% of the time. Positive is **higher in
-    the positive class**, whichever way round the labels happen to be encoded.
+    class. It runs from -1 to 1 and has a direct meaning: 0.4 means that of one row drawn from each
+    class, the positive one holds the higher value 70% of the time. A positive value means **higher
+    in the positive class** (the larger of the two label values).
 
-    **Ranks, not means.** A count and a fraction of the same thing over the same window are the
-    same feature under a monotone map, and only a rank statistic scores them alike.
-    `seqmaestro.harness.stability` matches on Spearman correlation for the same reason. It also
-    makes the number immune to a class imbalance that a difference of means is not.
+    **The statistic uses ranks.** A count and a fraction of the same thing over the same window are
+    one feature under a monotone map, and only a rank statistic scores them alike
+    (`seqmaestro.harness.stability` matches on Spearman correlation for the same reason). Ranks also
+    make the number immune to a class imbalance, whereas a difference of means is not.
 
-    **This is a marginal statement**, about the feature and the label alone. What a model does with
-    the feature once it holds the others is a different quantity, recorded beside this one (see
-    `seqmaestro.harness.direction`).
+    **This is a marginal statement** about the feature and the label alone. What a model does with
+    the feature, given the other features it holds, is a different quantity, recorded beside this
+    one (see `seqmaestro.harness.direction`).
 
-    A column carrying any non-finite value scores NaN instead of being quietly imputed: the matrix
-    should not contain one, and repairing it here would hide that it did.
+    A column with any non-finite value scores NaN instead of being quietly imputed, because the
+    matrix should not contain one, and repairing it here would hide that it did.
     """
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 1:
@@ -236,22 +208,23 @@ def rank_biserial(values: np.ndarray, y) -> np.ndarray:
 
     ranked = rankdata(values[:, usable], axis=0)
     # Mann-Whitney U over the positive rows, normalised to an AUC. Ties take average ranks, which
-    # counts a tie as half a win, the same convention `roc_auc_score` uses.
+    # counts a tie as half a win, as `roc_auc_score` does.
     auc = (ranked[positive].sum(axis=0) - n_positive * (n_positive + 1) / 2) / (n_positive * n_negative)
     scores[usable] = 2 * auc - 1
     return scores
 
 
 def rank_correlation(values: np.ndarray, y) -> np.ndarray:
-    """How far each feature goes with a continuous target, on one scale for every feature and arm.
+    """How strongly each feature is associated with a continuous target, on one scale for every
+    feature and arm.
 
     Spearman's rho per column, with average ranks for ties: from -1 to 1, positive where higher
     values of the feature go with higher values of the target. It is the continuous counterpart of
-    `rank_biserial`, and a rank statistic for the same reason: a count and a fraction of the same
-    thing score alike, and a heavy-tailed target cannot let a few rows decide it.
+    `rank_biserial` and uses ranks for the same reason, so that a count and a fraction of the same
+    thing score alike. Ranks also keep a few rows of a heavy-tailed target from deciding the result.
 
-    A constant column, or a column carrying any non-finite value, scores NaN: nothing was measured
-    there, which differs from measuring no association.
+    A constant column, or one with any non-finite value, scores NaN: nothing was measured there, and
+    that differs from measuring no association.
     """
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 1:
@@ -277,14 +250,17 @@ def rank_correlation(values: np.ndarray, y) -> np.ndarray:
 
 def direct_effect(values: np.ndarray, y, names: list[str], *, strata=None,
                   draws: int = DEFAULT_DRAWS, seed: int = 0) -> pd.DataFrame:
-    """One row per feature: each class's mean, the difference between them, and a permutation p.
+    """One row per feature: each class's mean (`mean_positive`, `mean_negative`), the difference
+    between them (`difference`), the ratio of the two with its interval where one is defined
+    (`ratio`, `ci_lo`, `ci_hi`), and a two-sided permutation p-value (`p_permutation`). `binary`
+    says whether the feature takes only the values 0 and 1.
 
     `values` is rows by features, matching `names`. `strata` sets the structure of the permutation.
     To match the estimate as well, pass the rows through `match_within_strata` first.
 
-    The ratio is reported because it is how an enrichment is quoted, and its interval only where the
-    delta method applies. A ratio with a small denominator carries a sign but no reliable magnitude,
-    so compare features on the difference column.
+    The ratio is reported because an enrichment is quoted that way, with its interval only where the
+    delta method applies. A ratio with a small denominator has a sign but no reliable magnitude, so
+    compare features on the difference column.
     """
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 1:
@@ -307,9 +283,9 @@ def direct_effect(values: np.ndarray, y, names: list[str], *, strata=None,
                 int(column[positive].sum()), int(positive.sum()),
                 int(column[negative].sum()), int(negative.sum()))
         else:
-            # Only where a ratio means anything. For a quantity that takes both signs, the ratio of
-            # means swings with how close the denominator sits to zero and flips sign through it,
-            # so it would look like a magnitude while carrying none.
+            # A ratio only where it means something. For a quantity that takes both signs, the ratio
+            # of means swings with how close the denominator is to zero and flips sign as it crosses
+            # zero, so it would look like a magnitude while having none.
             ratio = (mean_positive / mean_negative
                      if mean_negative > 0 and mean_positive >= 0 else float("nan"))
             low = high = float("nan")
@@ -336,18 +312,19 @@ def matched_effect(values: np.ndarray, y, strata, names: list[str], *,
     matters.
 
     **A matched estimate is a statistic of a random subsample.** Both the interval and the p-value
-    condition on the subsample that was drawn, and neither says anything about the next draw. For a
-    common feature that hardly matters. For a rare one, the abundant class is sampled down hard and
-    the estimate moves with the seed by an amount that can rival the stated interval.
+    condition on the subsample that was drawn, and neither says anything about the next draw. That
+    hardly matters for a common feature, whereas for a rare one the abundant class is heavily
+    subsampled and the estimate moves with the seed by an amount that can rival the stated interval.
 
-    So the estimate, its interval and its p-value all come from one matched sample, which keeps
-    them an internally consistent analysis of one design. `ratio_draw_min`, `ratio_draw_max` and
-    `difference_draw_sd` report how far the same quantities moved across `repeats` draws, the
-    reported one included. Treat them as an imprecision the interval does not include. Where they
-    are wide, matching costs more than it gains, and a weighted design is the better instrument.
+    The estimate, its interval and its p-value all come from one matched sample, which keeps them a
+    consistent analysis of one design. `ratio_draw_min`, `ratio_draw_max` and `difference_draw_sd`
+    report how far the same quantities moved across `repeats` draws (the reported draw included).
+    Treat them as an imprecision that the interval does not include. Where they are wide, matching
+    loses more than it gains, and a weighted design is the better instrument.
 
-    Averaging the draws would give a lower-variance estimator, but it is not done, because its
-    interval and its p-value would then describe a quantity nothing else in the table is about.
+    Averaging the draws would give a lower-variance estimator, but its interval and its p-value
+    would then describe a quantity that nothing else in the table describes, so the draws are not
+    averaged.
     """
     label = _binary_label(y)
     strata = np.asarray(strata)
@@ -360,8 +337,8 @@ def matched_effect(values: np.ndarray, y, strata, names: list[str], *,
         keep = match_within_strata(strata, label, seed=seed + offset)
         if not len(keep):
             return pd.DataFrame()
-        # The null is computed on the reported draw only. It is the expensive half, and the other
-        # draws are needed only for their estimates, so running it on them would waste the cost.
+        # The null is computed on the reported draw only, because it is the slow half and the other
+        # draws are needed only for their estimates.
         tables.append(direct_effect(values[keep], label[keep], names, strata=strata[keep],
                                     draws=draws if offset == 0 else 0, seed=seed))
 

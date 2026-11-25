@@ -13,8 +13,8 @@ can score well for that reason alone.
 
 This check finds such a leak before any arm is fitted, and it needs no model fit.
 
-**The measure.** For each feature, the share of its variance explained by group identity: a one-way
-ANOVA eta-squared, `SS_between / SS_total`, with the split's grouping variable as the factor.
+**The measure is the share of a feature's variance explained by group identity**: a one-way ANOVA
+eta-squared, `SS_between / SS_total`, with the split's grouping variable as the factor.
 
 - **Near 0**: the feature varies within a group, so it describes the row. It cannot carry a
   group-level confound across a split.
@@ -26,12 +26,13 @@ the biology, a group-dependent feature measures biology. A high value says that 
 information is at the level of the group, so a split grouped on that variable cannot be trusted to
 have isolated it, and a matched design is needed.
 
-**A pool is featurised as the arm featurises it.** `--k-range` and `--kmer-normalise` say how
+**A pool is featurised as its arm would featurise it.** `--k-range` and `--kmer-normalise` say how
 k-mers are counted, and a pool with k-mers needs both, as the run's config states them: counts
 grow with a sequence's length, so on sequences of different lengths they can depend on a group
-through its lengths alone. Where the sequences differ in length, a positional pool reads the
-positional window the dataset declares, which `--positional-window` states, since the table this
-reads may have no `dataset.json` yet. Without one, a positional pool is refused there.
+through its lengths alone. Where the sequences differ in length, a positional pool uses the
+positional window the dataset declares, which `--positional-window` gives, because the table this
+check reads may not have a `dataset.json` yet. Without the flag, a positional pool is refused on
+such sequences.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ from scipy import sparse
 from seqmaestro.features import (
     COVARIATES,
     FIXED_POOLS,
+    MOTIF_DISCOVERED,
+    MOTIF_KNOWN,
     PositionalWindow,
     make_featuriser,
     parse_pool,
@@ -58,10 +61,10 @@ from seqmaestro.proposer.featuriser import GeneratedFeaturiser
 
 
 def eta_squared(X: pd.DataFrame, groups: np.ndarray) -> pd.Series:
-    """Share of each column's variance explained by `groups`. Vectorised over columns.
+    """The share of each column's variance explained by `groups`, vectorised over columns.
 
     Columns with no variance return 0 instead of raising a division warning, because a constant
-    feature carries no information about anything, group identity included.
+    feature holds no information about anything, group identity included.
     """
     codes, _ = pd.factorize(groups)
     n, n_groups = len(codes), int(codes.max()) + 1
@@ -80,8 +83,12 @@ def eta_squared(X: pd.DataFrame, groups: np.ndarray) -> pd.Series:
     return pd.Series(np.clip(share, 0.0, 1.0), index=X.columns)
 
 
-#: The pools this can score: those whose columns follow from the sequences alone.
-POOLS = tuple(pool for pool in FIXED_POOLS if COVARIATES not in parse_pool(pool))
+#: The pools this check can score: those whose columns follow from the sequences alone, by a rule
+#: its command line states. Which motif collection a run scans with, and how it discovers motifs,
+#: are settings of the run, which this check does not have at Stage 1, and a discovery uses the
+#: labels as well, so the pools holding either motif source are left out.
+POOLS = tuple(pool for pool in FIXED_POOLS
+              if not {COVARIATES, MOTIF_KNOWN, MOTIF_DISCOVERED} & set(parse_pool(pool)))
 
 #: How `--positional-window` says whether a shorter sequence is padded.
 PAD_CHOICES = {"pad": True, "no-pad": False}
@@ -165,8 +172,8 @@ def main(argv: list[str] | None = None) -> int:
         if absent:
             raise SystemExit(f"{path} reads covariate(s) {absent}, which {args.dataset} does not have.")
         featuriser = GeneratedFeaturiser.from_records(records, sequence_column=args.sequence_column)
-        # Named by the file as it was given: the files of two arms at one seed sit in
-        # directories of one name.
+        # Named by the file's path as it was given, because the files of two arms at one seed are
+        # in directories of the same name.
         scored[str(path)] = eta_squared(
             featuriser.fit_transform(Inputs(frame[args.sequence_column], frame[covariates])), groups
         )

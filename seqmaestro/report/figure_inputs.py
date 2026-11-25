@@ -5,11 +5,27 @@ code reads that file and nothing else. Every choice about what a figure shows is
 here, in the environment that reads the run: which arms a figure shows, the numbers, the labels and
 class names, the reference line, the caption and the width, and everything that differs between the
 kinds of target (the metric and its chance level, what the poles of a direction are called). The
-drawing side decides only how the figure looks. Every number it shows comes from that file, because
-it is never handed a run.
+drawing side decides only how the figure looks, and since it is never handed a run, every number it
+shows comes from that file.
 
 Each entry is `{"draw": <drawer>, "caption", "width", "data": {...}}`, keyed by the name a report
-source uses in `{{figure:NAME}}`.
+source uses in `{{figure:NAME}}`. `process/report-template.md` says where each figure goes, and a
+figure is built only where the run has what it draws:
+
+- `stage2_grid`: every arm's mean held-out score, by model and feature source, beside its score on
+  shuffled labels and the reference line.
+- `stage3a_grid`: every reduced arm's held-out score, with its interval and the reference line.
+- `stage3a_cost`: how much each arm lost when it was reduced, as its full model's score beside its
+  reduced model's.
+- One figure for each drawn model of the headline set (`DRAWN_AS`): `stage3a_ebm`, `stage3a_l1`,
+  `stage3a_igsr`, `stage3a_tree` and `stage3a_pysr`, and for the symbolic model the front its
+  equation was chosen from (`stage3a_pysr_front`, `FRONT`).
+- `stage3b_evidence`: the three tiers of the reliability panel for the features of the models the
+  body of the report shows.
+- `stage3b_evidence_all`: the three tiers for every feature of every profiled arm's reduced model.
+- `stage3b_thresholds`: how many features survive at each cut-off of Tier 1.
+- `stage3b_concepts`: the concepts that more than one profiled arm reached, by arm, with their
+  evidence.
 """
 
 from __future__ import annotations
@@ -32,19 +48,19 @@ SHAPE_COLUMNS = 4
 #: The figure each drawn model class gets: its name in a report, its drawer, its caption, its width,
 #: and what its title calls the model.
 DRAWN_AS = {
-    "ebm": ("stage3a_ebm", "ebm_shapes", "Shape functions of the additive model cut to {n} features",
+    "ebm": ("stage3a_ebm", "ebm_shapes", "Shape functions of the additive model reduced to {n} features",
             "100%", "The additive model"),
     "l1_logistic": ("stage3a_l1", "l1_weights",
-                    "Weights of the sparse linear model cut to {n} features", "95%",
+                    "Weights of the sparse linear model reduced to {n} features", "95%",
                     "The sparse linear model"),
     "l1_linear": ("stage3a_l1", "l1_weights",
-                  "Weights of the sparse linear model cut to {n} features", "95%",
+                  "Weights of the sparse linear model reduced to {n} features", "95%",
                   "The sparse linear model"),
-    "igsr": ("stage3a_igsr", "l1_weights", "Weights of the IGSR model cut to {n} terms", "95%",
+    "igsr": ("stage3a_igsr", "l1_weights", "Weights of the IGSR model reduced to {n} terms", "95%",
              "The IGSR model"),
-    "deft_or_cart": ("stage3a_tree", "tree", "The decision tree cut to {n} features", "100%",
+    "deft_or_cart": ("stage3a_tree", "tree", "The decision tree reduced to {n} features", "100%",
                      "The decision tree"),
-    "pysr": ("stage3a_pysr", "equation_shapley", "Shapley values of the equation cut to {n} features",
+    "pysr": ("stage3a_pysr", "equation_shapley", "Shapley values of the equation reduced to {n} features",
              "100%", "The equation"),
 }
 
@@ -67,10 +83,10 @@ def polarity(facts: dict[str, Any]) -> dict[str, Any]:
     """How the figures say which way a feature points: the two poles, positive first, and the
     sentences and legend entries built on them.
 
-    A binary target's poles are its classes, and a feature argues for one of them. Figures carry only
-    the class names: a class's meaning is a whole clause, and the report states it once, beside the
-    names, in its title block. A continuous target's poles are a higher and a lower value, and a
-    feature raises or lowers it.
+    A binary target's poles are its classes, and a feature argues for one of them. Figures show only
+    the class names, because a class's meaning is a whole clause, which the report states once,
+    beside the names, in its title block. A continuous target's poles are a higher and a lower
+    value, and a feature raises or lowers the target.
     """
     directions = facts["directions"]
     rising, falling = (directions["printed"][directions[side]] for side in ("rising", "falling"))
@@ -139,28 +155,28 @@ def build(facts: dict[str, Any], concepts: list[Concept], internals: dict[str, d
     stage3a = facts["stage3a"]["arms"]
     if stage3a:
         figures["stage3a_grid"] = {
-            "draw": "grid", "caption": f"Every configuration cut to at most {n} features",
+            "draw": "grid", "caption": f"Every configuration reduced to at most {n} features",
             "width": "85%",
             "data": {"rows": [{**_style(arm), "value": entry[f"reduced_{score}"],
                                "low": entry[f"reduced_{score}_low"],
                                "high": entry[f"reduced_{score}_high"]}
                               for arm, entry in stage3a.items()],
                      "baselines": lines, **scale,
-                     "title": f"The same configurations cut to at most {n} features each",
+                     "title": f"The same configurations reduced to at most {n} features each",
                      "subtitle": ("Whiskers are a 95% interval from resampling the held-out "
                                   "sequences."
                                   if any(entry[f"reduced_{score}_low"] is not None
                                          for entry in stage3a.values()) else "")}}
         figures["stage3a_cost"] = {
-            "draw": "cost", "caption": f"What cutting to {n} features cost each configuration",
+            "draw": "cost", "caption": f"How much each configuration lost when reduced to {n} features",
             "width": "85%",
             "data": {"rows": [{**_style(arm), "full": entry[f"full_{score}"],
                                "reduced": entry[f"reduced_{score}"]}
                               for arm, entry in stage3a.items()],
-                     "reduced_label": f"cut to at most {n} features", **scale,
-                     "title": f"What cutting to {n} features cost each configuration",
-                     "subtitle": "An open circle is every feature the configuration selected; a filled "
-                                 f"one is what the cut to at most {n} left it."}}
+                     "reduced_label": f"reduced to at most {n} features", **scale,
+                     "title": f"How much each configuration lost when reduced to {n} features",
+                     "subtitle": "An open circle is the configuration with every feature it selected, "
+                                 f"and a filled one the configuration reduced to at most {n}."}}
 
     headline = facts["headline_set"]
     families = HEADLINE_FAMILIES[kind]
@@ -173,10 +189,11 @@ def build(facts: dict[str, Any], concepts: list[Concept], internals: dict[str, d
         label = naming.label(headline[slot])
         # How many columns the arm's reduction kept (`n_final`), in place of the budget. It falls
         # below the budget when the arm's Stage 2 model used fewer features than the budget, as an
-        # equation often does. It counts a kept column the reduced model gives no weight, so the
-        # words say what the model was cut to, and the drawing shows what it uses.
+        # equation often does. It counts a kept column that the reduced model gives no weight, so
+        # the title and caption say what the model was reduced to, whereas the drawing shows what
+        # it uses.
         own = markdown.word(facts["stage3a"]["arms"][headline[slot]]["n_final"])
-        data = {"internals": internals[slot], "title": f"{model}: {label}, cut to {own} features"}
+        data = {"internals": internals[slot], "title": f"{model}: {label}, reduced to {own} features"}
         if drawer == "ebm_shapes":
             data.update(note=poles["shapes"], columns=SHAPE_COLUMNS)
         elif drawer == "equation_shapley":

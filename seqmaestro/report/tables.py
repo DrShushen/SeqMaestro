@@ -2,12 +2,43 @@
 
 A report source includes a table with `{{table:NAME}}` and says what it means, and never retypes a
 number. This module decides which tables exist, and assembling a report lists any table the source
-left out.
+left out. `process/report-template.md` says where each table goes.
 
-Table names are fixed, except the per-arm ones: `features_<arm>` for every reduced arm whose
-reduction kept a column and `evidence_<arm>` for every profiled one, where `<arm>` is
-`model__pool`. The drawn symbolic model's equation is a table file too (`equation`), built from its
-exported internals.
+Table names are fixed, except the per-arm ones, where `<arm>` is `model__pool`:
+
+- `key`: each model and feature source of the run, with the short name the tables give it.
+- `language_models`: each language model the run's records name, with the reasoning effort its
+  calls stated and what each part of the run called it for.
+- `agents`: each agent the run records, with the model it runs on and the stages it carried out
+  (`agents`, which `assemble_report.py` calls again before it fills the placeholders).
+- `baseline`: the composition baseline's held-out score, its range over the seeds, and whether its
+  number of features is within the reduction's budget.
+- `stage2_all_arms`: every arm's mean held-out score, its range over the seeds, its mean on
+  shuffled labels, the gap between the two, and how many features it used.
+- `stage2_headline`: the Stage 2 headline set, each arm with its margin over the baseline.
+- `stage2_reproducibility`: for every arm, how far it selects its features again, the ideas it
+  found at more than one seed, its agreement with other feature sources, and the judge's mean
+  where the run's config ran the judge.
+- `stage2_cross_arm_concepts`: the ideas of the recurrence analysis's pass across arms, with how
+  many arms reached each and how often each was found on real and on shuffled labels.
+- `stage3a_all_arms`: every reduced arm's held-out score with its interval, the number of features
+  it started from, the score of the arm's full model, and the change.
+- `features_<arm>`: for every reduced arm whose reduction kept a column, each column's rank, what
+  it computes, its direction before the reduction and its association with the target on its own.
+- `stage3a_shared_features`: the features that at least `SHARED_AT_LEAST` reduced arms kept, by
+  name.
+- `stage3a_pysr_equation`: the drawn symbolic model's equation, typeset, with what each of its
+  features measures, built by `equation` from the model's exported internals.
+- `stage3b_summary`: for every profiled arm, how many of its reduced model's features pass each
+  tier of the reliability panel.
+- `evidence_<arm>`: for every profiled arm, each feature its reduced model uses, with its
+  stability, its held-out association and how much removing it loses.
+- `stage3b_tier2`: for every profiled arm, the candidates Tier 2 tested, how many each correction
+  called, and how many of its reduced model's features hold.
+- `stage3b_plug_in_fdr`: for every profiled arm at each raw cut-off, the features called, the
+  number expected under the null, and their ratio.
+- `concepts`, `concepts_detail`: the concepts that more than one profiled arm reached, first with
+  their evidence, then with what each computes and the other names it was found under.
 """
 
 from __future__ import annotations
@@ -15,6 +46,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from seqmaestro.pipeline.agents import STAGES
 from seqmaestro.report import facts as facts_module
 from seqmaestro.report import markdown as md
 from seqmaestro.report import naming
@@ -28,17 +60,17 @@ SHARED_AT_LEAST = 3
 #: What a table calls the columns whose meaning differs between the kinds of target, and how it
 #: prints them. A feature's association with the target on its own (its marginal effect, and Tier 2
 #: on the held-out rows) is a separation of the classes for a binary target and a rank correlation
-#: for a continuous one. The cost of removing a feature (Tier 3) is the tested change in log-loss
+#: for a continuous one. What removing a feature loses (Tier 3) is the tested change in log-loss
 #: for a binary target, and for a continuous one the fall in R², which is the tested change in
-#: squared error divided by the held-out target's variance: the same test on an axis that does not
-#: depend on the target's units.
+#: squared error divided by the held-out target's variance, so the test is reported on a scale that
+#: does not depend on the target's units.
 WORDS = {
     BINARY: {"direction": "argues for, before reduction", "concept_direction": "higher values argue for",
              "alone": "separation on its own", "held_out": "separation, held out",
-             "held_out_format": md.score, "cost": ("delta_log_loss", "cost of removing it")},
+             "held_out_format": md.score, "cost": ("delta_log_loss", "rise in log-loss without it")},
     CONTINUOUS: {"direction": "higher values, before reduction", "concept_direction": "higher values",
                  "alone": "rank correlation on its own", "held_out": "rank correlation, held out",
-                 "held_out_format": md.signed, "cost": ("delta_r2", "cost of removing it, in R²")},
+                 "held_out_format": md.signed, "cost": ("delta_r2", "fall in R² without it")},
 }
 
 
@@ -52,6 +84,38 @@ def headline_order(target_kind: str) -> tuple[str, ...]:
 def direction_word(direction: str | None, directions: dict[str, Any]) -> str:
     """A recorded direction as a report prints it (`facts["directions"]`)."""
     return directions["printed"].get(direction, md.MISSING)
+
+
+#: The q-value at or below which a table names the known motif closest to a discovered one. Tomtom
+#: finds a closest motif in the collection whatever its q-value, and one far above this resembles
+#: the discovered motif no more than the rest of the collection does.
+CLOSE_Q = 0.05
+
+#: The relative widths of the columns of the three tables that hold a feature's whole description
+#: (`markdown.render`). The description takes the largest share of the width, since it can run to
+#: several sentences, and a column of names a fifth to a quarter, since a long name breaks only
+#: after an underscore. The features table: rank, name, description, direction, association on its
+#: own.
+FEATURE_TABLE_WIDTHS = (2, 13, 26, 11, 8)
+#: The concepts table: the concept's name, its description, and the names of its other members.
+CONCEPT_TABLE_WIDTHS = (5, 9, 6)
+#: The features of a symbolic model's equation: name, description, mean absolute Shapley value.
+EQUATION_FEATURE_WIDTHS = (5, 11, 4)
+
+
+def what_it_computes(feature: dict[str, Any]) -> str:
+    """A reduced arm's feature as its table describes it: the whole description, and for a
+    discovered motif the known motif closest to it, with Tomtom's q-value, where the two are alike
+    (`CLOSE_Q`)."""
+    text = md.prose(feature["description"])
+    closest = feature.get("closest_known")
+    if not closest or closest["q_value"] > CLOSE_Q:
+        return text
+    named = (f"{closest['motif_name']} ({closest['motif_id']})" if closest.get("motif_name")
+             else closest["motif_id"])
+    stop = "" if text.endswith(".") else "."
+    return (f"{text}{stop} Close to the known motif {named} of {closest['collection']}, "
+            f"q = {closest['q_value']:.2g}.")
 
 
 def _model_source(arm: str) -> list[str]:
@@ -71,6 +135,7 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
         ["", "short", "what it is", "note"],
         [[row["kind"], row["short"], row["name"], row["note"]]
          for row in naming.key_table(facts["stage2"]["arms"], facts["target_kind"])])
+    tables[LANGUAGE_MODELS_TABLE] = language_models(facts["language_models"])
 
     # ---------------------------------------------------------------------- the baseline
     base = facts["baseline"]
@@ -88,7 +153,7 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
 
     # ---------------------------------------------------------------------- stage 2
     stage2 = facts["stage2"]["arms"]
-    # A missing score sorts last whatever the metric's range, R² running below zero.
+    # A missing score sorts last whatever the metric's range, since R² can run below zero.
     order = sorted(stage2, key=lambda arm: (stage2[arm][headline] is None,
                                             -(stage2[arm][headline] or 0), arm))
     repeats = len(facts["stage2"]["seeds"])
@@ -119,8 +184,8 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
         ["model", "feature source", held_out, "shuffled labels",
          "clears the base composition", "features used"], rows)
 
-    # The judge's column only where the run's config ran the judge (`components/61_stage2_judge.md`
-    # explains it).
+    # The judge's column appears only where the run's config ran the judge
+    # (`components/61_stage2_judge.md` explains it).
     judged = facts["stage2"]["judged"]
     tables["stage2_reproducibility"] = md.render(
         ["model", "feature source", "same features again", "ideas found in more than one repeat",
@@ -158,15 +223,16 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
         # An arm whose reduction started from no feature has no table of features.
         if not entry["features"]:
             continue
-        # The direction is the one the arm's model gave the feature before it was cut, which is the
-        # only one recorded for every arm. Where a reduced model is drawn, its figure carries the
-        # direction after reduction, and the two can differ.
+        # The direction is the one the arm's model gave the feature before the reduction, which is
+        # the only one recorded for every arm. Where a reduced model is drawn, its figure shows the
+        # direction after the reduction, and the two can differ.
         tables[f"features_{naming.slug(arm)}"] = md.render(
             ["#", "feature", "what it computes", words["direction"], words["alone"]],
-            [[feature["rank"], f"`{feature['name']}`", md.clip(feature["description"]),
+            [[feature["rank"], f"`{feature['name']}`", what_it_computes(feature),
               direction_word(feature["direction"], directions),
               md.signed(feature["marginal_effect"], 2)]
-             for feature in entry["features"]])
+             for feature in entry["features"]],
+            widths=FEATURE_TABLE_WIDTHS)
 
     # Features kept by several arms, matched on exact name. This undercounts, because two arms can
     # hold one idea under two names. The concept tables match on what the features compute instead.
@@ -196,9 +262,10 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
     association = facts["metrics"]["association"]
     cost, cost_header = words["cost"]
     for arm, entry in stage3b.items():
-        # The cost of removing a feature sits beside the test on that removal, as the held-out
-        # association sits beside its q-value. On a large held-out set every test is significant,
-        # and the size of what is lost is then the only column that still ranks the features.
+        # What removing a feature loses sits beside the test on that removal, as the held-out
+        # association sits beside its q-value. On a large held-out set almost every test is
+        # significant, and the size of what is lost is then the only column that still ranks the
+        # features.
         tables[f"evidence_{naming.slug(arm)}"] = md.render(
             ["feature", "chosen again", "with a near-duplicate", words["held_out"], "q",
              cost_header, "needs it (p)"],
@@ -234,17 +301,63 @@ def build(facts: dict[str, Any], concepts: list[Concept]) -> dict[str, str]:
                          .get(concept.direction), directions),
           md.frequency(concept.best_stability),
           # The strongest association any member reaches, beside the best q-value. On a large
-          # held-out set every q falls to the smallest value the permutations can reach, and the
-          # association is then the only column that still orders the ideas.
+          # held-out set the q-values can all fall to the smallest value the permutations can
+          # reach, and the association is then the only column that still orders the ideas.
           words["held_out_format"](concept.strongest_association),
           md.q_value(concept.best_association_q)]
          for concept in multi])
     tables["concepts_detail"] = md.render(
         ["idea", "what it computes", "also found as"],
-        [[f"`{concept.label}`", md.clip(concept.description, 150),
+        [[f"`{concept.label}`", md.prose(concept.description),
           ", ".join(f"`{name}`" for name in concept.member_names if name != concept.label)
-          or "nothing else"] for concept in multi])
+          or "nothing else"] for concept in multi],
+        widths=CONCEPT_TABLE_WIDTHS)
     return tables
+
+
+#: The table of the language models the run called, and the table of the agents that carried it
+#: out. The second is rendered again when the report is assembled (`agents`).
+LANGUAGE_MODELS_TABLE = "language_models"
+AGENTS_TABLE = "agents"
+#: The relative widths of their columns. What a model or an agent did takes the most room.
+LANGUAGE_MODEL_WIDTHS = (9, 4, 14)
+AGENT_WIDTHS = (4, 6, 11)
+
+
+def capitalised(text: str) -> str:
+    return text[:1].upper() + text[1:]
+
+
+def language_models(entries: list[dict[str, Any]]) -> str:
+    """The language model the run called, one row for each model and setting its records name
+    (`facts.language_models`), with what each part of the run called it for."""
+    headers = ["language model", "reasoning effort", "what it did"]
+    if not entries:
+        return md.render(headers, [[md.MISSING, md.MISSING,
+                                    "No part of this run called a language model"]],
+                         LANGUAGE_MODEL_WIDTHS)
+    return md.render(headers, [
+        [naming.language_model(entry), naming.reasoning_effort(entry),
+         capitalised("; ".join(naming.CALLED_FOR[role] for role in entry["used_for"]))]
+        for entry in entries], LANGUAGE_MODEL_WIDTHS)
+
+
+def agents(entries: list[dict[str, Any]]) -> str:
+    """The agents that carried out the run, each as it recorded itself
+    (`seqmaestro.pipeline.agents`): one row for each agent and model, with every stage recorded for
+    them. An agent records itself when it starts the report, which is after the report's inputs are
+    built, so `assemble_report.py` renders this table again before it fills the placeholders."""
+    headers = ["agent", "language model", "what it did"]
+    merged: dict[tuple[str, str], list[str]] = {}
+    for entry in entries:
+        stages = merged.setdefault((entry["agent"], entry["model"]), [])
+        stages.extend(stage for stage in entry["stages"] if stage not in stages)
+    if not merged:
+        return md.render(headers, [[md.MISSING, md.MISSING, "No agent recorded itself in this run"]],
+                         AGENT_WIDTHS)
+    return md.render(headers, [
+        [agent, model, capitalised(naming.agent_did(sorted(stages, key=STAGES.index)))]
+        for (agent, model), stages in merged.items()], AGENT_WIDTHS)
 
 
 #: The table holding the drawn symbolic model's equation.
@@ -261,11 +374,12 @@ QUAD_WIDTH = 4
 
 
 def equation(facts: dict[str, Any], internals: dict[str, dict]) -> dict[str, str]:
-    """The drawn symbolic model's equation, typeset with one top-level term to a line, a product too
-    long for a line continued on the next, a fraction too wide for a line written as a division on
-    the line, and a table of the features it names, strongest first, with what each measures and its
-    mean absolute Shapley value. Empty when the run draws no symbolic model, or when that model
-    used no feature."""
+    """The drawn symbolic model's equation, typeset, and a table of the features it names.
+
+    The equation has one top-level term to a line. A product too long for a line is continued on
+    the next, and a fraction too wide for a line is written as a division on the line. The table
+    lists the features strongest first, each with what it measures and its mean absolute Shapley
+    value. Empty when the run draws no symbolic model, or when that model used no feature."""
     slot = "best_pysr"
     if slot not in internals or internals[slot]["kind"] == NO_FEATURES:
         return {}
@@ -278,10 +392,11 @@ def equation(facts: dict[str, Any], internals: dict[str, dict]) -> dict[str, str
         left = f"\\text{{predicted {_latex_text(facts['target']['name'])}}}"
     lines = _aligned_lines(left, structure["latex_terms"])
     display = "$$\n\\begin{aligned}\n" + " \\\\\n".join(lines) + "\n\\end{aligned}\n$$"
-    rows = [[feature["name"], md.clip(described.get(feature["name"]) or md.MISSING),
+    rows = [[feature["name"], md.prose(described.get(feature["name"]) or md.MISSING),
              f"{feature['importance']:.3g}"] for feature in structure["features"]]
     table = md.render(["feature", "what it measures",
-                       f"mean absolute Shapley value ({structure['scale']})"], rows)
+                       f"mean absolute Shapley value ({structure['scale']})"], rows,
+                      widths=EQUATION_FEATURE_WIDTHS)
     return {EQUATION_TABLE: f"{display}\n\n{table}"}
 
 

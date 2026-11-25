@@ -1,12 +1,12 @@
-"""The panel's fits for one of our own arms, made in this process.
+"""The panel's fits for an arm fitted in Core, made in this process.
 
-Everything is rebuilt from the Stage 2 cell the arm was reduced from, as the reduction rebuilds it.
-The featuriser the cell saved computes the candidates, and the model is rebuilt from the
+Everything is rebuilt from the Stage 2 cell the arm was reduced from, as the reduction rebuilds it:
+the featuriser the cell saved computes the candidates, and the model is rebuilt from the
 description the cell recorded (`model_settings`) and its seed, and fitted with the rows' weights. A
 DEFT arm's fits are made on DEFT's side, through `DeftFits` in
 `seqmaestro/pipeline/vendored/deft_cart.py`, behind the same interface (`panel.Fits`). An IGSR
-arm's candidates are evaluated on IGSR's side and its fits are made here, by the same `ColumnFits`
-as ours (`seqmaestro/pipeline/vendored/igsr_terms.py`).
+arm's candidates are evaluated on IGSR's side, whereas its fits are made here by `ColumnFits`, as
+for an arm fitted in Core (`seqmaestro/pipeline/vendored/igsr_terms.py`).
 """
 
 from __future__ import annotations
@@ -38,10 +38,10 @@ def one_thread(fit_step):
     """`fit_step`, run with the numeric libraries' thread pools held to one thread.
 
     Tier 1's workers already run one selection per core, and each forked worker inherits a BLAS pool
-    sized to the machine, so without the limit every core carries a pool's worth of threads. A
-    sparse linear model's coordinate descent makes a BLAS call per coordinate, and on a large half
-    of D it then runs many times slower. The limit changes how fast a fit runs. A sum taken on one
-    thread can round differently from one split across threads, as between two machines.
+    sized to the machine, so without the limit every core runs a pool's worth of threads. A sparse
+    linear model's coordinate descent makes a BLAS call per coordinate, so on a large half of D it
+    then runs many times slower. The limit changes how fast a fit runs, although a sum taken on one
+    thread can round differently from one split across threads, as it can between two machines.
     """
     def step(*args, **kwargs):
         with threadpool_limits(limits=1):
@@ -50,16 +50,17 @@ def one_thread(fit_step):
 
 
 class ColumnFits:
-    """Fits on an arm's candidates, computed once over D, with a model fitted in this process.
+    """Fits on an arm's candidates, whose values are computed once over D, with a model fitted in
+    this process.
 
     The selections and the refits need only the candidates' values, a fit step and a way to save a
     refitted model, so they are written once here. A subclass says how the candidates are computed
-    (`pool`), which model is fitted and how a refit is saved: `InProcess` for our own arms, and the
-    IGSR arm's side (`seqmaestro/pipeline/vendored/igsr_terms.py`), whose terms IGSR evaluates and
-    whose model is fitted here.
+    (`pool`), which model is fitted and how a refit is saved: `InProcess` for an arm fitted in Core,
+    and IGSR's side (`seqmaestro/pipeline/vendored/igsr_terms.py`) for an IGSR arm, whose terms IGSR
+    evaluates and whose model is fitted here.
     """
 
-    #: Whether refitting on the same rows returns the same model, which the reproduction check needs.
+    #: Whether refitting on the same rows returns the same model, which the reproduction checks need.
     reproducible = True
 
     def _fit_step(self, weights: np.ndarray | None, *, one_core: bool = False):
@@ -115,7 +116,7 @@ class ColumnFits:
 
 
 class InProcess(ColumnFits):
-    """One of our arms: its featuriser and model loaded and fitted here."""
+    """An arm fitted in Core: its featuriser loaded and its model fitted here."""
 
     def __init__(self, source: Source, discovery: pd.DataFrame, columns: Columns) -> None:
         self.source = source
@@ -128,11 +129,11 @@ class InProcess(ColumnFits):
         self.reproducible = reproducible(self.description["model"])
 
     def _fit_step(self, weights: np.ndarray | None, *, one_core: bool = False):
-        # Tier 1's workers already run one fit per core, so each of their fits is held to one
-        # (`seqmaestro.models.one_core`). Without that an EBM spreads its bags across threads and
+        # Tier 1's workers already run one fit per core, so each of their fits is held to one core
+        # (`seqmaestro.models.one_core`). Without that, an EBM spreads its bags across threads and
         # competes with the process pool, and each worker's PySR search runs a thread per core.
-        # The option changes how a fit runs and never which model it fits, so the reported models,
-        # the LOCO refits, are fitted without it, as Stage 2 fitted them.
+        # The option changes how a fit runs and never which model it fits, so the reported models
+        # (the LOCO refits) are fitted without it, as Stage 2 fitted them.
         execution = held_to_one_core(self.description["model"]) if one_core else None
         return fit_step_for(self.description, self.seed, weights, execution,
                             target_kind=self.target_kind)

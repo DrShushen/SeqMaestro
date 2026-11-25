@@ -9,61 +9,61 @@ way each of them points.
 **Where it runs.** Only the search runs in PySR's environment, in a process of
 `SeqMaestro_Method_pysr` started by the first fit in a Core process and kept for every later fit of
 that process (`symbolic_search.py`). Core never starts Julia. The search hands back each equation on
-the front as a tree (`seqmaestro.models.equation`), and Core evaluates it. Every front equation is
-checked against PySR's own predictions on the searched rows, so a fault in the export stops the fit
-instead of changing the model. A fitted model holds only these trees and numbers, so it pickles,
-loads and predicts without PySR.
+the front as a tree (`seqmaestro.models.equation`), and Core evaluates it. Every equation on the
+front is checked against PySR's predictions on the searched rows, so a fault in the export stops
+the fit instead of changing the model. A fitted model holds only these trees and numbers, so it
+pickles, loads and predicts without PySR.
 
-**The choice.** A fit sets aside `set_aside_fraction` of its fitting rows, drawn with its seed and
-stratified as the harness stratifies (`seqmaestro.target`), and searches the rest. From the front it
-keeps the equation with the lowest loss on the rows set aside, in the loss the search minimised and
-weighted as the fit is, and a tie goes to the simpler equation. PySR's own choice weighs each
-equation's training loss against its complexity, which suits clean data: on a noisy target nearly
-the whole front has a training loss close to the lowest, and the choice then says little about new
-rows. The lowest loss on rows the search did not see can still favour a longer equation whose gain
-is noise; the extra features such an equation carries are what the reduction's ranking and the
-reliability panel exist to find. The rows set aside come from the fitting rows and not from the
-validation split, so a fit depends on its fitting rows alone, as XGBoost's regressor stops early on
-its own rows. The chosen equation keeps the constants the search fitted, and nothing is refitted on
-the rows set aside.
+**How one equation is chosen.** A fit sets aside `set_aside_fraction` of its fitting rows, drawn
+with its seed and stratified as the harness stratifies (`seqmaestro.target`), and searches the rest.
+From the front it keeps the equation with the lowest loss on the rows set aside, in the loss the
+search minimised and weighted as the fit is, and a tie goes to the simpler equation. PySR's
+built-in choice weighs each equation's training loss against its complexity, which suits clean
+data. On a noisy target, by contrast, nearly the whole front has a training loss close to the
+lowest, and that choice then says little about new rows. The lowest loss on rows the search did not
+see can still favour a longer equation whose gain is noise, and the extra features such an equation
+uses are what the reduction's ranking and the reliability panel exist to find. The rows set aside
+come from the fitting rows and not from the validation split, so a fit depends on its fitting rows
+alone, as XGBoost's regressor stops early on its fitting rows. The chosen equation keeps the
+constants the search fitted, and nothing is refitted on the rows set aside.
 
-**Undefined rows.** An equation can be undefined on a row: a division by zero, the log of a number
-that is not positive, an overflow. An equation undefined on any row set aside is never chosen. On
-other rows the model predicts its constant for such a row: the weighted mean of the fitting targets,
-or the weighted positive rate for a binary target. `filled(X)` says which rows those are, so the
-harness can record how many there were.
+**Undefined rows.** An equation can be undefined on a row, through a division by zero, the log of a
+number that is not positive, or an overflow. An equation undefined on any row set aside is never
+chosen. On any other row where the chosen equation is undefined, the model predicts its constant:
+the weighted mean of the fitting targets, or the weighted positive rate for a binary target.
+`filled(X)` says which rows those are, so the harness can record how many there were.
 
 **Importance and direction** come from exact interventional Shapley values of the equation's output
 (`equation.shapley`), in the target's units or in log-odds for a binary target. A feature's
-importance is its mean absolute value over up to `equation.SHAPLEY_ROWS` fitting rows, and a feature
-the equation names whose values are all zero is unused. A direction comes from the dependence of a
-feature's values on the feature, as XGBoost's does from its TreeSHAP contributions. The fit keeps
-the values it ranked by, so a report draws the same ones.
+importance is its mean absolute Shapley value over up to `equation.SHAPLEY_ROWS` fitting rows, and
+a feature the equation names whose Shapley values are all zero is unused. A direction comes from
+how a feature's Shapley values depend on the feature's values, as XGBoost's comes from its TreeSHAP
+contributions. The fit keeps the Shapley values it ranked by, so a report draws the same ones.
 
-**Not reproducible.** The search runs in PySR's multithreaded mode, on the threads its process was
-given or on every core. That mode does not fix the order in which the populations evolve and
-exchange equations, so two fits of the same rows with the same seed can return different fronts,
-on one thread as on many (`reproducible = False`). Every stage keeps what it fitted, so no number
-depends on fitting again, and the reliability panel does not rerun the reduction for this model
-(`docs/reliability.md`).
+**The search is not reproducible.** It runs in PySR's multithreaded mode, on the threads its
+process was given or on every core. That mode does not fix the order in which the populations
+evolve and exchange equations, so two fits of the same rows with the same seed can return different
+fronts, on one thread as on many (`reproducible = False`). Every stage keeps what it fitted, so a
+number never depends on fitting again, and the reliability panel does not rerun the reduction for
+this model (`docs/developer/reliability.md`).
 
 **The binary target** is searched as labels of -1 and +1 under PySR's logistic margin loss, so the
 equation is the log-odds of the positive class and `predict` returns its sigmoid.
 
 **The settings are fixed here** and recorded by `describe()`, as XGBoost's are:
 
-- `+ - * /`, `exp` and `log`, where `exp` and `log` may not contain `exp` or `log`: nested
+- `+ - * /`, `exp` and `log`, where `exp` and `log` may not contain `exp` or `log`, because nested
   exponentials and logarithms are hard to follow, and PySR's tuning notes suggest the constraint.
-- 200 iterations of 31 populations of 27 equations, PySR's population defaults. A dataset makes
-  several hundred searches across its stages, which is what the budget is sized for.
+- 200 iterations of 31 populations of 27 equations, PySR's population defaults. A run makes several
+  hundred searches across its stages, which is what the budget is sized for.
 - `maxsize` 25 nodes, below PySR's 30, so that an equation stays short enough to be followed.
 - Precision 32, PySR's default. The search fits constants and compares equations to about seven
-  significant figures, far finer than these targets' noise, and a constant comes back as the
-  shortest decimal that gives back its 32-bit value. Core evaluates that decimal in float64, as
-  PySR's own `predict` does.
+  significant figures, far finer than the targets' noise, and a constant comes back as the shortest
+  decimal that gives back its 32-bit value. Core evaluates that decimal in float64, as PySR's
+  `predict` does.
 - PySR's automatic batching: above about a thousand rows it evolves on batches of rows and scores
   its best equations on all of them.
-- The seed is the cell's, although a search does not repeat itself under it.
+- The seed is the cell's, although the search does not give the same result twice under it.
 """
 
 from __future__ import annotations
@@ -101,10 +101,14 @@ SEARCH_SCRIPT = Path(__file__).with_name("symbolic_search.py")
 #: test), so it can never remove anything else.
 WORKDIR_PREFIX = "seqmaestro-pysr-"
 
-#: Core's evaluation of a front equation may differ from PySR's own prediction by this much,
+#: Core's evaluation of an equation on the front may differ from PySR's prediction by this much,
 #: relative to the equation's largest value on the searched rows. Both evaluate the same
 #: expression in float64 with numpy, and differ only by the order of a sum's terms.
 PARITY = 1e-9
+
+#: The fewest nodes PySR lets an equation have (`maxsize`). It refuses a smaller value when a search
+#: starts, so the model refuses it when built, before a run is under way.
+MIN_MAXSIZE = 7
 
 
 # ------------------------------------------------------------------------------ the search process
@@ -112,16 +116,16 @@ PARITY = 1e-9
 class SearchProcess:
     """A search process of the PySR environment, serving one Core process.
 
-    Started with `threads` Julia threads, or one per core when `threads` is None, in a clean
+    It is started with `threads` Julia threads, or one per core when `threads` is None, in a clean
     environment: only the home directory, a path to the interpreter's environment, and the thread
-    count reach it. Requests and replies travel on two pipes of their own, since Julia takes over
+    count reach it. Requests and replies pass through two dedicated pipes, because Julia takes over
     the standard streams. Its standard input is `/dev/null`, and its standard output and error go
-    to a log in its working directory, a temporary directory. The end of that log is quoted in the
-    error raised when the process ends without replying. The directory is its `TMPDIR` too, since
+    to a log in its working directory (a temporary directory). The end of that log is quoted in the
+    error raised when the process ends without replying. The directory is its `TMPDIR` too, because
     PySR writes each search's equations to a temporary directory of its own and never removes it.
-    The process removes its working directory when its requests end, which also covers a forked
-    Tier 1 worker's process: the worker exits without running exit handlers, but its end closes the
-    request pipe.
+    The process removes its working directory when its requests end, which also covers a search
+    process started by a forked Tier 1 worker: the worker exits without running exit handlers, but
+    its exit closes the request pipe.
     """
 
     def __init__(self, python: Path, script: Path, threads: int | None) -> None:
@@ -226,7 +230,7 @@ def close_search_processes() -> None:
 
 
 def check_parity(trees: list, X: np.ndarray, theirs: np.ndarray, complexities: list[int]) -> None:
-    """Refuse a front whose trees Core evaluates differently from PySR's own predictions."""
+    """Refuse a front whose trees Core evaluates differently from PySR's predictions."""
     for tree, predicted, complexity in zip(trees, theirs, complexities, strict=True):
         ours = equation.evaluate(tree, X)
         if not np.array_equal(np.isfinite(ours), np.isfinite(predicted)):
@@ -259,6 +263,9 @@ class _Equation:
     environment = ENVIRONMENT
     #: A search runs a Julia thread per core it is allowed.
     one_core: ClassVar[dict[str, Any]] = {"threads": 1}
+    #: What a run's config may change (`seqmaestro.models.settings`): how long the search runs, and
+    #: the most nodes an equation may have.
+    settings: ClassVar[dict[str, type]] = {"niterations": int, "maxsize": int}
     target_kind: str
     loss: str
 
@@ -271,6 +278,9 @@ class _Equation:
         if threads is not None and threads < 1:
             raise ValueError(f"threads is a number of Julia threads, or None for the threads the "
                              f"process was given (`seqmaestro.execution`), not {threads!r}.")
+        if maxsize < MIN_MAXSIZE:
+            raise ValueError(f"maxsize is the most nodes an equation may have, and PySR needs at "
+                             f"least {MIN_MAXSIZE}, not {maxsize!r}.")
         self.seed = seed
         self.threads = threads
         self.niterations = niterations
@@ -374,7 +384,8 @@ class _Equation:
         return self._fitted
 
     def output(self, X: pd.DataFrame) -> np.ndarray:
-        """The chosen equation on each row, in its own units, with undefined rows filled."""
+        """The chosen equation on each row, in the equation's units (log-odds for a binary target),
+        with undefined rows filled."""
         state = self._state()
         rows = X[state["used"]].to_numpy(dtype=float) if state["used"] else np.zeros((len(X), 0))
         return equation.filled(equation.evaluate(state["local"], rows), state["constant"])[0]
@@ -390,7 +401,7 @@ class _Equation:
 
     def importances(self) -> dict[str, float]:
         """Mean absolute Shapley value, over the fitting rows the fit explained, for each feature
-        whose values are not all zero."""
+        whose Shapley values are not all zero."""
         state = self._state()
         means = np.abs(state["shapley"]).mean(axis=0) if len(state["shapley"]) else []
         return {name: float(mean) for name, mean in zip(state["used"], means, strict=True)
@@ -491,8 +502,8 @@ class _Equation:
 
 class SymbolicClassification(_Equation):
     """A symbolic model of a binary target: an equation for the log-odds of the positive class,
-    searched on labels of -1 and +1 under PySR's logistic margin loss, whose sigmoid is the
-    predicted probability. Balanced class weights by default, as for every binary model."""
+    searched on labels of -1 and +1 under PySR's logistic margin loss. The equation's sigmoid is
+    the predicted probability. Class weights are balanced by default, as for every binary model."""
 
     target_kind = BINARY
     loss = "LogitMarginLoss()"
@@ -524,7 +535,7 @@ class SymbolicClassification(_Equation):
 
 class SymbolicRegression(_Equation):
     """A symbolic model of a continuous target: an equation for the target, searched under squared
-    error. It takes no class weighting; per-row weights from the design are used as for every
+    error. It takes no class weighting, and per-row weights from the design are used as for every
     model."""
 
     target_kind = CONTINUOUS

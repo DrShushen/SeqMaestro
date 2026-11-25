@@ -27,9 +27,11 @@ The import is `igsr`. `src/` is a container directory.
 Runs read SeqMaestro's root `.env`, exported before the run (`set -a && source .env && set +a`).
 `.env` names one provider for a SeqMaestro run, and `src/igsr/conf/llm/` has a config for each,
 which reads that provider's variables: `llm=seqmaestro_azure` for Azure OpenAI,
-`llm=seqmaestro_openai` for the OpenAI API and `llm=seqmaestro_claude` for the Claude API. Every
-call goes through LiteLLM. Nothing in this directory holds a key, and the configuration is printed
-and logged with the key redacted.
+`llm=seqmaestro_azure_foundry` for a model deployed on Azure AI Foundry, `llm=seqmaestro_openai`
+for the OpenAI API and `llm=seqmaestro_claude` for the Claude API. Every call goes through LiteLLM.
+A config may state a `reasoning_effort` for every call, as the Foundry one does to turn off the
+reasoning its open models may otherwise do before they answer. Nothing in this directory holds a
+key, and the configuration is printed and logged with the key redacted.
 
 ## Running it
 

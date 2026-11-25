@@ -1,0 +1,47 @@
+# Builds the documentation and publishes it with GitHub Pages. Pages is free for a public repository,
+# so both jobs run only where the repository is public. Publishing needs the repository's Pages to
+# take its source from GitHub Actions (Settings, Pages).
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One publication at a time, and one that has started is allowed to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install ".[docs]"
+      # Warnings are errors, so a broken link or a malformed page stops the publication. Sphinx's
+      # cache (`-d`) is kept out of the folder that is published, of which it would be most.
+      - run: sphinx-build -d docs/_build/doctrees docs docs/_build/html -W --keep-going
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/_build/html
+
+  deploy:
+    if: ${{ !github.event.repository.private }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

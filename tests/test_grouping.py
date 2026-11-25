@@ -2,8 +2,8 @@
 
 A dataset usually has more than one relation that makes two rows dependent, and the relations
 overlap. A split grouped on one of them alone lets the other straddle it, and the score it reports
-is then partly memory. Nothing in a finished run shows that, so the grouping is tested here.
-`tests/test_dataset.py` tests the group map a split is checked against.
+then partly measures memorisation. Nothing in a finished run shows that, so the grouping is tested
+here. `tests/test_dataset.py` tests the group map a split is checked against.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def test_rows_of_one_gene_are_one_group():
 
 
 def test_an_identical_sequence_is_one_group_whatever_gene_it_came_from():
-    """Grouping by gene alone would miss this relation. Two genes can present the same window, and
+    """Grouping by gene alone would miss this relation: two genes can present the same window, and
     a row in one split would then be a copy of a row in another."""
     group = connected_groups(rows(("AAAA", "G1"), ("AAAA", "G2"), ("CCCC", "G3")),
                              ["sequence", "gene"])
@@ -34,15 +34,15 @@ def test_an_identical_sequence_is_one_group_whatever_gene_it_came_from():
 
 def test_the_relations_chain_through_each_other():
     """The first row shares a gene with the second, and the second a sequence with the third, so
-    none of the three may be separated. This is why the group is a connected component and not a
-    single key."""
+    none of the three may be separated. This is why the group is a connected component instead of
+    a single key."""
     frame = rows(("AAAA", "G1"), ("CCCC", "G1"), ("CCCC", "G2"))
     assert connected_groups(frame, ["sequence", "gene"]).nunique() == 1
 
 
 def test_only_the_relations_named_join_rows():
-    """A dataset that names the sequence alone is grouped on it alone. The gene column is there,
-    and must not join anything unasked."""
+    """A dataset that names the sequence alone is grouped on it alone. The gene column is present
+    but must not join anything unasked."""
     assert connected_groups(rows(("AAAA", "G1"), ("CCCC", "G1")), ["sequence"]).nunique() == 2
 
 

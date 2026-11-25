@@ -1,16 +1,17 @@
 """What an analysis that asks a language model was computed from, so that it asks once.
 
-Stability and co-discovery are arithmetic on the cells, and computing them again gives the same
-tables. The recurrence analysis and the judge ask a language model, whose answers cost tokens and
-differ from one call to the next. The driver starts every analysis again whenever a run that is not
-yet revealed is continued, which the process has an agent do after it has stopped before the reveal
-and checked the run.
+Stability and co-discovery are arithmetic on the cells, so computing them again gives the same
+tables, whereas the recurrence analysis and the judge ask a language model, whose answers cost
+tokens and differ from one call to the next. The driver starts every analysis again whenever a run
+that is not yet revealed is continued, which the process has an agent do after it has stopped
+before the reveal and checked the run.
 
 Each of the two therefore records a digest of what it was computed from, and a later call that
-would be computed from the same keeps what is on file. The tables an agent checked are then the
-tables the report is written from. A cell whose feature file has changed, a changed setting or a
-changed description gives another digest, and the analysis asks again. `--force` asks again
-whatever the digest.
+would be computed from the same inputs keeps what is on file, so the tables an agent checked are
+the tables the report is written from. A changed feature file of a cell, a changed setting, a
+changed description, or another model or reasoning effort gives another digest, so the analysis
+asks again. The model and the effort change the digest because each analysis counts them among
+its settings (`reply_conditions`). `--force` asks again whatever the digest.
 """
 
 from __future__ import annotations
@@ -42,8 +43,8 @@ def digest(results: Path, settings: Mapping[str, Any], context: Any) -> str:
 
 
 def on_file(record: Path) -> str | None:
-    """The digest the record on file states. None where there is no record, or where the one there
-    states none because its analysis did not finish whole."""
+    """The digest the record on file states, or None where there is no record, or where the record
+    states none because its analysis did not finish."""
     try:
         stated = json.loads(record.read_text())
     except (OSError, ValueError):

@@ -1,8 +1,8 @@
 """The registry of what an arm can be: which model can be fitted on which pool, and how.
 
-The config loader refuses a combination from these answers before anything is spent, and Stage 2
-chooses how each arm's cells are fitted from them, so a wrong answer here either refuses a run that
-would work or starts one that cannot.
+The config loader uses these answers to refuse a combination before any model is fitted or any
+language model is called, and Stage 2 uses them to choose how each arm's cells are fitted. A wrong
+answer here therefore either refuses a run that would work or starts one that cannot.
 """
 
 from __future__ import annotations
@@ -69,8 +69,8 @@ def test_a_pool_holds_at_most_one_written_source():
 ])
 def test_each_arm_is_of_one_kind_and_retries_unless_its_model_writes_inside_the_fit(
         model, pool, kind, retries, calls):
-    """A second start of an arm whose language model works inside the method's fit would pay again
-    for every call the first made."""
+    """Retrying an arm whose language model works inside the method's fit would repeat, and pay
+    again for, every call the first attempt made."""
     assert arms.kind(model, pool) == kind
     assert kind in (arms.FIXED, arms.PROPOSER, arms.DEFT, arms.IGSR_KIND)
     assert arms.retries(pool) is retries
@@ -93,15 +93,17 @@ def test_an_arm_is_spelled_one_way_in_text_and_one_way_in_a_file_name():
 
 
 def test_only_a_vendored_methods_model_is_used_in_its_environment_alone():
-    """PySR's search runs in another environment, and the equation it finds is evaluated in Core."""
+    """PySR's search runs in another environment, whereas the equation it finds is evaluated in
+    Core."""
     assert {name for name, spec in arms.MODEL_SPECS.items() if spec.vendored} == {
         arms.DEFT_OR_CART, arms.IGSR}
     assert arms.spec("pysr").environment is not None and not arms.spec("pysr").vendored
 
 
 def test_every_model_is_presented_to_a_reader_and_every_interpretable_one_is_drawn():
-    """A model added to the registry has no name a reader sees and no figure until someone decides
-    both, so this fails for it instead of a report being built without them."""
+    """A model added to the registry has no name shown to a reader and no figure until someone
+    decides both. This test fails for such a model, so the omission shows here instead of in a
+    report built without them."""
     from seqmaestro.report import facts, figure_inputs, naming
     from seqmaestro.target import BINARY, CONTINUOUS
 

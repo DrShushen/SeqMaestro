@@ -2,9 +2,8 @@
 
 The runner is what makes the arms one comparison, so most of what is checked here is that they are
 treated alike: every model produces the same files, the featuriser never sees rows the model did
-not train on, and a permuted-label run scores at chance. The tests use a small synthetic sequence
-dataset with a planted signal, so the assertions are about behaviour and not about a particular
-biological result.
+not train on, and a cell fitted on permuted labels scores at chance. The tests use a small synthetic
+sequence dataset with a planted signal, so the assertions concern behaviour alone.
 """
 
 from __future__ import annotations
@@ -26,8 +25,8 @@ from tests.planted import run_cell
 
 ALPHABET = "ACGT"
 
-# These match no real dataset's column names. The library requires both and defaults neither, and
-# a plausible name here would let a default creep back in without any test noticing.
+# These are not the column names of any real dataset. The library requires both and defaults
+# neither. A plausible name here would let a default creep in without any test noticing.
 SEQUENCE, TARGET = "window", "outcome"
 COLUMNS = Columns(SEQUENCE, TARGET, weight=None, covariates=(), target_kind=BINARY)
 
@@ -66,7 +65,7 @@ def a_run(splits, model_name="l1_logistic", **kwargs):
     )
 
 
-# ----------------------------------------------------------------- every model, same treatment
+# ----------------------------------------------------------------- every model treated alike
 
 
 @pytest.mark.parametrize("model_name", sorted(MODELS["binary"]))
@@ -102,12 +101,12 @@ def test_an_unknown_model_is_refused():
         make_model("random_forest", target_kind="binary")
 
 
-# --------------------------------------------------------------------------- the control arm
+# ---------------------------------------------------------------- the permuted-label control
 
 
 def test_permuted_labels_score_at_chance(splits):
-    """A permuted-label run is the control. If it beats chance, something leaks, and this test
-    catches that before a whole grid is run."""
+    """A cell fitted on permuted labels is the control, so if it beats chance, something leaks.
+    This test catches such a leak before a whole grid is fitted."""
     result = a_run(splits, permute_labels=True)
 
     assert 0.35 < result["metrics"]["val"]["auroc"] < 0.65
@@ -115,7 +114,7 @@ def test_permuted_labels_score_at_chance(splits):
 
 
 def test_permuting_does_not_touch_the_evaluation_labels(splits):
-    """Only the training labels are shuffled, so a permuted run is still scored against the true
+    """Only the training labels are shuffled, so a permuted cell is still scored against the true
     labels."""
     _, val = splits
     result = a_run(splits, permute_labels=True)
@@ -297,13 +296,13 @@ def test_feature_values_still_hold_the_reference_split(splits, tmp_path):
 
 
 def test_a_control_arm_measures_its_effect_against_the_real_labels(splits, tmp_path):
-    """A control arm's model is fitted on shuffled labels, but its marginal effect is measured
+    """A permuted cell's model is fitted on shuffled labels, but its marginal effect is measured
     against the real labels.
 
-    Measured against the shuffled vector, `direction` and `marginal_effect` would agree under
-    shuffled labels for the same reason they agree under real ones, so the permuted control for
-    that comparison would carry no information. The real and control arms of a seed therefore
-    report the same marginal effect per feature and differ only in `direction`.
+    If the effect were measured against the shuffled vector, `direction` and `marginal_effect`
+    would agree under shuffled labels for the same reason they agree under real ones, so the
+    permuted control for that comparison would be uninformative. The real and permuted cells of a
+    seed therefore report the same marginal effect per feature and differ only in `direction`.
     """
     real = tmp_path / "real"
     control = tmp_path / "control"
@@ -323,14 +322,14 @@ def test_a_control_arm_measures_its_effect_against_the_real_labels(splits, tmp_p
 
 @pytest.mark.parametrize("model_name", sorted(MODELS["binary"]))
 def test_a_permuted_arm_still_reports_directions(model_name, splits, tmp_path):
-    """The control arm's features must be indistinguishable from the real arm's in everything the
-    judge is shown. An arm whose records had no direction at all would be identifiable by that
-    absence alone, whatever the panel does to blind it."""
+    """A permuted cell's features must be indistinguishable from a real cell's in everything the
+    judge is shown. A cell whose records had no direction at all would be identifiable by that
+    absence alone, however the judge's panel is blinded."""
     a_run(splits, model_name=model_name, out_dir=tmp_path, permute_labels=True)
 
     records, _ = load_features(tmp_path / "features.json")
-    # An equation chosen on rows set aside can be the constant on permuted labels, and then the arm
-    # has no features to show; an arm that has some must give them directions.
+    # An equation chosen on rows set aside can be a constant on permuted labels, in which case the
+    # cell has no features to show. A cell that has some must give them directions.
     assert any(record.direction is not None for record in records) or (
         model_name == "pysr" and not records)
     assert all(record.marginal_effect is not None for record in records)

@@ -1,42 +1,27 @@
 """Test discovered features against the label directly, matched and permuted within a confounder.
 
-    experiments/analysis/direct_effect_test.py \
-        --dataset data/<dataset>/<file>.csv --label-column <target> \
-        --features experiments/runs/<run>/results/<model>/<pool>/real/seed_*/features.json \
+    experiments/analysis/direct_effect_test.py --dataset data/<dataset>/<file>.csv \\
+        --label-column <target> \\
+        --features experiments/runs/<run>/results/<model>/<pool>/real/seed_*/features.json \\
         --group-column <confounder> --out <path>.csv
 
-A run reports what a set of features predicts together. A collaborator reading it asks a narrower
-question about one of them: does it differ between the classes, by how much, and could a
-difference of that size be chance? This analysis answers that for features a run produced. It
-compiles them from the code each cell recorded in its `features.json`, so the test runs on the
-features the arm used.
+The features are compiled from the code each cell recorded in its `features.json`, so the test runs
+on the features the arm used, and no other part of a run is read. The driver does not start it.
 
-It is run by hand, on a table of the dataset and the feature files of the cells of interest. It
-reads no other part of a run, and the driver does not start it.
+`--group-column` is the confounder the split already groups on. When it is given, the classes are
+matched 1:1 within every level of it, and the null distribution shuffles the labels within each
+level. `--no-match` keeps every row and stratifies the null only. `--within` repeats the whole
+analysis within each level of a second column, which checks whether a feature is only another view
+of that column: a feature that holds within every level of it is not. `--columns` tests columns of
+the dataset instead of, or beside, proposed features, which needs no run at all.
 
-`--group-column` is the confounder the split already groups on. Given one, the classes are matched
-1:1 inside every level of it and the null shuffles labels within it, so neither the estimate nor the
-p-value can come from composition. `--no-match` keeps every row and stratifies the null only, which
-trades the matched estimate for the rows a matched design would discard.
+**Multiplicity is not corrected.** These are a handful of named features, which the caller has
+already judged worth testing, so correcting for a set that was not chosen by scanning would only
+lose power. If the set *was* chosen by scanning, correct across it yourself.
 
-`--within` repeats the whole analysis inside each level of a second column. That is the check for
-"this feature is only another view of that one": a feature holding inside every level of the thing
-it is suspected of restating is not restating it.
-
-`--columns` tests columns already in the dataset instead of, or beside, proposed features, which
-needs no run at all.
-
-A matched estimate is a statistic of a random subsample, so it moves with the draw. The estimate,
-its interval and its p-value all come from one matched sample, and `ratio_draw_min`/`ratio_draw_max`
-report the range of the same ratio over repeated draws of the matched sample. The interval does not
-include that variation.
-
-**Multiplicity is not corrected.** These are a handful of named features, and the caller has
-already judged which of them were worth testing. Correcting for a set that was not chosen by
-scanning would only cost power. If the set *was* chosen by scanning, correct across it yourself.
-
-Prints the table and the design. With `--out`, also writes the table as CSV and the design beside
-it as JSON.
+The command prints the table and the design, and with `--out` it writes the table as CSV and the
+design beside it as JSON. `docs/developer/analyses/direct_measurement.md` explains the test and its
+output.
 """
 
 from __future__ import annotations
@@ -66,14 +51,14 @@ def gather_records(paths: list[Path], kinds: set[str], top_n: int | None
                    ) -> tuple[list, str | None, tuple[str, ...]]:
     """The features to test, pooled across files and deduplicated by name.
 
-    Several files are the normal case: one arm's seeds each report their own set, and a feature
-    worth a direct test is usually one that turned up in more than one. Importance is compared by
-    its size, whatever its sign. The most important copy of a repeated name wins, and its code is
-    the code compiled, which matters where two files give one name different code.
+    Several files are the normal case, because each seed of an arm reports its own set, and a
+    feature worth a direct test is usually one that turned up in more than one. Importance is
+    compared by its size, whatever its sign. The most important copy of a repeated name is kept,
+    and its code is the code compiled, which matters where two files give one name different code.
 
-    Also returns the sequence column and the covariates the features were written against, read
-    from the files rather than assumed: generated code indexes those columns by name, so guessing
-    one wrong is a crash at best and a silently different feature at worst.
+    It also returns the sequence column and the covariates the features were written against,
+    taken from the files rather than assumed, because generated code indexes those columns by name,
+    so a wrong guess is a crash at best and a silently different feature at worst.
     """
     best: dict[str, object] = {}
     columns, covariates = set(), set()
@@ -103,7 +88,7 @@ def evaluate(records: list, frame: pd.DataFrame, sequence_column: str,
              covariates: tuple[str, ...]) -> tuple[list[str], np.ndarray]:
     """Compile the proposed features and evaluate them on every row of the dataset.
 
-    Fitting on the same rows it reports on would be wrong for a model, but is correct here because
+    Fitting on the rows it reports on would be wrong for a model, but it is correct here, because
     nothing is being trained: `fit` only decides which features compile and vary at all. Constant
     features are dropped, because a feature that takes one value has no class difference to measure.
     """

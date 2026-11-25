@@ -1,4 +1,5 @@
-"""Recurrence in both senses (the same feature and the same idea), and the nulls each is read against."""
+"""Tests of recurrence in both senses (the same feature and the same idea) and of the nulls that a
+concept's counts are judged against."""
 
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ def test_a_code_fence_is_tolerated():
 
 
 def test_item_numbers_outside_the_listing_are_dropped():
-    """A hallucinated index must not silently point at someone else's feature."""
+    """An item number the model invented must not silently point at another feature."""
     assert mod.parse_groups('{"groups": [{"name": "a", "items": [1, 99, 0]}]}', 3) == {"a": [1]}
 
 
@@ -48,8 +49,8 @@ def test_a_number_a_group_names_twice_is_one_member():
 
 
 def test_a_feature_is_counted_as_placed_once_however_many_groups_name_it():
-    """`n_grouped` is set beside `n_features` to say how much of the listing a grouping covers, so
-    a feature in two groups must not make up for one in none."""
+    """`n_grouped` is reported beside `n_features` to show how much of the listing a grouping
+    covers, so a feature in two groups must not make up for one in none."""
     placed, note = mod.placement({"a": [1, 2], "b": [2, 3]}, n_items=5)
     assert placed == 3
     assert note == ("note: 2 feature(s) were not placed in any group, and 1 feature(s) were placed "
@@ -61,9 +62,9 @@ def test_a_feature_is_counted_as_placed_once_however_many_groups_name_it():
 
 
 def test_every_arm_on_a_written_source_is_grouped_and_no_other(tmp_path):
-    """An arm renames an idea from seed to seed wherever a language model writes its features for
-    each cell, which the one-round source does as the iterative and the joint source do. An arm on
-    a pool of enumerated sources alone selects from one vocabulary and is left to stability."""
+    """An arm renames an idea from seed to seed whenever a language model writes its features for
+    each cell, as the one-round, the iterative and the joint source all do. An arm whose pool holds
+    only enumerated sources selects from one vocabulary and is left to the stability analysis."""
     arms = ("l1_logistic/llm_generated", "ebm/kmer+llm_generated_iterative",
             "deft_or_cart/positional+llm_generated_joint", "igsr/llm_generated_joint+covariates",
             "l1_logistic/positional", "deft_or_cart/positional", "xgboost/positional+kmer")
@@ -77,12 +78,32 @@ def test_every_arm_on_a_written_source_is_grouped_and_no_other(tmp_path):
     assert mod.written_arms(tmp_path / "absent") == []
 
 
-# --------------------------------------------- the room and the time a reply is given
+def test_collect_skips_a_cell_whose_fit_failed(tmp_path):
+    """A failed cell leaves its directory with no `features.json`.
+
+    `collect` skips such a cell, as the stability and co-discovery analyses and the digest of an
+    analysis's inputs do, so one failed cell cannot stop a run from producing its recurrence tables.
+    """
+    from seqmaestro.features.base import FeatureRecord
+    from seqmaestro.harness.features import save_features
+
+    good = tmp_path / "arm" / "real" / "seed_42"
+    good.mkdir(parents=True)
+    save_features(good / "features.json",
+                  [FeatureRecord(name="f", description="", kind="llm_generated", importance=1.0)])
+    (tmp_path / "arm" / "permuted" / "seed_42").mkdir(parents=True)
+
+    got = mod.collect(tmp_path, "arm", {"llm_generated"}, top_n=None)
+
+    assert [f["name"] for f in got] == ["f"]
+
+
+# --------------------------------------------- the token and time limits of a reply
 
 
 def test_a_reply_is_given_room_and_time_for_its_listing():
-    """A reply names every listed item, so one limit for every call would cut short the reply of
-    the pass across arms, whose listing is several arms long."""
+    """A reply names every listed item, so a single limit for every call would truncate the reply
+    of the pass across arms, whose listing is several arms long."""
     one_arm, every_arm = mod.reply_tokens(200, 6), mod.reply_tokens(2000, 6)
     assert every_arm > one_arm > mod.reply_tokens(0, 6) == mod.TOKENS_TO_SPARE
     assert every_arm >= mod.TOKENS_PER_ITEM * 2000 + mod.TOKENS_PER_GROUP * 334
@@ -119,7 +140,7 @@ def test_a_concept_of_only_real_features_is_flagged_as_enriched():
 
 def test_enrichment_is_not_significant_when_the_pool_is_mostly_real():
     """When real features outnumber permuted ones ten to one, any group looks real-heavy, so
-    enrichment is judged against the pool's own mix."""
+    enrichment is judged against the overall mix of real and permuted features."""
     items = features(real_per_seed=10, permuted_per_seed=1)
     real = [i + 1 for i, f in enumerate(items) if f["labels"] == "real"][:6]
     frame = mod.summarise(items, {"c": real})
@@ -142,7 +163,7 @@ def test_the_seed_null_notices_a_group_that_is_one_seed_only():
     assert p["narrow"] > 0.5          # reaching *one* seed is easy, so this is unremarkable
 
 
-# --------------------------------------------------- the two views of recurrence, side by side
+# --------------------------------------------------- the by-name and by-idea views of recurrence
 
 
 def test_exact_recurrence_counts_a_feature_across_seeds():
@@ -153,8 +174,8 @@ def test_exact_recurrence_counts_a_feature_across_seeds():
 
 
 def test_exact_recurrence_ignores_permuted_features():
-    """The by-name view measures reproducibility on real labels. The permuted-label null belongs
-    to the concept view."""
+    """The by-name view measures reproducibility on real labels, whereas the permuted-label null
+    belongs to the concept view."""
     items = [{"name": "f", "arm": "a", "description": "", "importance": 0.5,
               "labels": lab, "seed": "seed_1"} for lab in ("real", "permuted")]
     frame = mod.exact_recurrence(items)
@@ -168,7 +189,8 @@ def test_exact_recurrence_keeps_the_largest_importance():
 
 
 def test_renaming_one_idea_scores_zero_by_name():
-    """A generative arm renames its ideas between runs, which is why both views are reported."""
+    """An arm on a written source renames its ideas from seed to seed, which is why both views are
+    reported."""
     items = [{"name": f"gc_fraction_{w}nt", "arm": "a", "description": "GC fraction",
               "importance": 0.5, "labels": "real", "seed": f"seed_{i}"}
              for i, w in enumerate((11, 21, 31))]
@@ -184,8 +206,8 @@ def test_an_empty_feature_set_gives_an_empty_frame():
 
 
 def test_collect_takes_the_top_n_by_importance(tmp_path):
-    """`collect` takes the same top-n cut that the stability and co-discovery analyses report
-    on."""
+    """`collect` keeps each cell's `top_n` features by importance, the number the stability and
+    co-discovery analyses report on."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import save_features
 
@@ -199,8 +221,8 @@ def test_collect_takes_the_top_n_by_importance(tmp_path):
 
 
 def test_collect_ranks_a_signed_importance_by_its_size(tmp_path):
-    """A sparse linear arm reports signed weights, and a strong negative weight is among the
-    features the model leaned on most. The cut keeps it, and records its size."""
+    """A sparse linear arm reports signed weights. A feature with a strong negative weight is among
+    those the model leaned on most, so the selection keeps it and records the weight's size."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import save_features
 
@@ -217,33 +239,13 @@ def test_collect_ranks_a_signed_importance_by_its_size(tmp_path):
 
 # --- Recurrence across arms -------------------------------------------------------------------
 #
-# The per-arm pass groups each arm on its own, so its concept labels are scoped to that arm, and
-# two labels from different arms that read alike prove nothing. The cross-arm pass adds
-# `arm_coverage`: which arms are inside one concept, counted from its members and not its label.
+# The per-arm pass groups each arm on its own, so its concept labels apply to that arm alone and
+# two similar labels from different arms prove nothing. The cross-arm pass therefore adds
+# `arm_coverage`: which arms have members in one concept, counted from the members themselves.
 
-
-
-def test_collect_skips_a_cell_whose_fit_failed(tmp_path):
-    """A failed cell leaves its directory with no `features.json`.
-
-    The stability and co-discovery analyses skip such a cell and the digest guards against it.
-    `collect` skips it too, so a single failed cell cannot cost a whole run its recurrence tables.
-    """
-    from seqmaestro.features.base import FeatureRecord
-    from seqmaestro.harness.features import save_features
-
-    good = tmp_path / "arm" / "real" / "seed_42"
-    good.mkdir(parents=True)
-    save_features(good / "features.json",
-                  [FeatureRecord(name="f", description="", kind="llm_generated", importance=1.0)])
-    (tmp_path / "arm" / "permuted" / "seed_42").mkdir(parents=True)
-
-    got = mod.collect(tmp_path, "arm", {"llm_generated"}, top_n=None)
-
-    assert [f["name"] for f in got] == ["f"]
 
 def armed(pairs, labels="real", seed="seed_42"):
-    """One feature per (arm, name) pair, all in one condition unless stated."""
+    """One feature per (arm, name) pair, all under the given label condition and seed."""
     return [{"name": name, "description": "", "labels": labels, "seed": seed,
              "provenance": "generated", "arm": arm} for arm, name in pairs]
 

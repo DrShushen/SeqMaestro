@@ -1,34 +1,23 @@
-"""The test split: closed until one reveal, and opened only here.
+"""The held-out test split, closed until the reveal and opened only here.
 
-Every choice a run makes (which features an arm keeps, what the analyses cluster, which few survive
-the reduction) is made on the training and validation rows. The test split is read once, at the
-end, by the reveal: every saved model predicts it, the predictions are scored, and the numbers are
-written beside the validation ones. Nothing before that point sees a test number, so nothing before
-it can have been steered by one. How far the surviving features can be trusted is the reliability
-panel's question, and its last two tiers are answered on the test split, at the reveal and after
-it. They change nothing the run chose.
-
-**This module is the only reader of the test split** outside Stage 1, which creates it.
+**This module is the only reader of the test split** outside Stage 1, which creates it
+(`seqmaestro.dataset`, and `seqmaestro.cli.prepare` for the command line).
 `tests/test_heldout.py` fails if any other module in `seqmaestro/` or in
 `experiments/{runners,analysis,adapters}/` names it. Code that reads test results after the reveal
 takes the names from here (`TEST_SPLIT`, `TEST_ARRAYS`) and checks `reveal_record` first, so every
 dependency on the test split is an import of this module.
 
 **The reveal cannot be undone.** `reveal.json` is written into the run directory before the first
-test row is read. From then on every stage that fits or selects refuses to run in that directory
-(`refuse_if_revealed`), so a run's decisions cannot be revised in the light of its test numbers.
-Adding an arm afterwards means starting a new run.
+test row is read, and from then on every stage that fits or selects refuses to run in that
+directory (`refuse_if_revealed`), so adding an arm afterwards means starting a new run.
 
-**The reveal predicts and scores, and never fits.** `score_cell` computes a cell's test block from
-predictions made by the model the cell saved, with a binary target's threshold chosen on
-validation and the seed and bootstrap count recorded in `run.json`, through the same metrics of the
-target's kind (`seqmaestro.target`). The block is therefore identical to what scoring the test
-split inline would have produced, and it goes into the same files, so a revealed cell looks like
-one scored inline.
+**The reveal predicts and scores but never fits.** `score_cell` computes a cell's test block from
+the predictions of the model the cell saved, with the metrics of the target's kind
+(`seqmaestro.target`), a binary target's threshold chosen on validation, and the seed and number of
+bootstrap resamples recorded in `run.json`, so the block is what scoring the test split at fit time
+would have produced, and it goes into the same files.
 
-**Hygiene, not a security boundary.** `test.csv` is on disk and anyone can read it. What this
-prevents is reading it by accident, and a test number steering a decision the run was meant to make
-without one. See `docs/heldout.md`.
+`docs/developer/heldout.md` explains why the split stays closed, and what the rule guards against.
 """
 
 from __future__ import annotations
@@ -64,16 +53,16 @@ REVEAL_FILE = "reveal.json"
 REVEAL_VERSION = 1
 
 #: What a cell must record for its test block to be scored as inline scoring would have scored it:
-#: the seed and the count of its bootstrap, and the kind of target it was fitted against, which
-#: has to be the dataset's. A binary target's threshold is in the validation block of
-#: `metrics.json`.
+#: the seed and size of its bootstrap, and the kind of target it was fitted to, which must be the
+#: dataset's. A binary target's threshold is in the validation block of `metrics.json`.
 SCORING_KEYS = ("seed", "n_bootstrap", "target_kind")
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 class SealError(RuntimeError):
-    """Something the seal forbids: a fitting stage after the reveal, or the test split before it."""
+    """Something the seal forbids: a fitting stage after the reveal, or opening the test split
+    before it."""
 
 
 def _now() -> str:
@@ -81,7 +70,7 @@ def _now() -> str:
 
 
 def reveal_record(run_dir: str | Path) -> dict[str, Any] | None:
-    """The run's reveal record, or None while the test split is still closed."""
+    """The run's reveal record, or `None` while the test split is still closed."""
     path = Path(run_dir) / REVEAL_FILE
     return json.loads(path.read_text()) if path.exists() else None
 
@@ -90,8 +79,8 @@ def refuse_if_revealed(run_dir: str | Path, stage: str) -> None:
     """Stop a stage that fits or selects from running in a run that has been revealed.
 
     Called at the start of every such stage. After the reveal, anything fitted or chosen in the run
-    directory could have been chosen knowing the test numbers, and nothing in the files would say
-    so. The seal exists to rule that out.
+    directory could have been chosen with knowledge of the test numbers, and the files would not
+    show it. The seal exists to rule that out.
     """
     record = reveal_record(run_dir)
     if record is not None:
@@ -109,11 +98,13 @@ def begin_reveal(run_dir: str | Path, dataset: Dataset, sealed: Iterable[str], *
     Called before `open_test`, so the record exists before the first test row is read.
 
     `sealed` are the items the reveal scores, as paths relative to the run directory. The list is
-    fixed here, so a resumed reveal scores exactly these and nothing added since. `override` is the
-    reason given for revealing a run whose pre-reveal stages did not all finish, and `incomplete` is
-    what was missing. Both are recorded, because a reveal over a partial run qualifies every number
-    it produces. `unsealed` are items found in the run that its configuration does not account for,
-    which are recorded and left unscored.
+    fixed here, so a resumed reveal scores these and nothing added since. `override` is the reason
+    given for revealing a run whose pre-reveal stages did not all finish, and `incomplete` is what
+    was missing. Both are recorded, because a reveal over a partial run qualifies every number it
+    produces. `unsealed` are items found in the run that its config does not account for, which are
+    recorded and left unscored. The record also holds the time, the commit and whether the working
+    tree had uncommitted changes, and the digest that Stage 1 recorded for the test file, which
+    `open_test` checks.
     """
     run_dir = Path(run_dir)
     if reveal_record(run_dir) is not None:
@@ -142,7 +133,7 @@ def begin_reveal(run_dir: str | Path, dataset: Dataset, sealed: Iterable[str], *
 def open_test(run_dir: str | Path, dataset: Dataset) -> pd.DataFrame:
     """The test split, once the run has been revealed, checked against the digest Stage 1 recorded.
 
-    The digest is checked here because nothing earlier opens the file. Without the check, a test
+    The digest is checked here because the file is not opened earlier. Without the check, a test
     split edited since the dataset was finalised would be scored as though it were the split that
     every other number in the dataset's record describes.
     """
@@ -170,11 +161,12 @@ def score_cell(cell_dir: str | Path, y_test, p_test, *, target_kind: str,
                filled: int | None = None) -> dict[str, Any]:
     """Score one cell's test predictions and write them into its files. Returns the test block.
 
-    The cell is scored by the dataset's kind of target, and a cell that records another kind is
-    refused. A binary target's threshold is the one chosen on validation, and the seed and bootstrap
-    count are the cell's, so the block is what inline scoring would have written. The arrays are
-    written before the metrics: a cell counts as scored once its `metrics.json` has the block, so an
-    interruption between the two is repaired by scoring the cell again.
+    The cell is scored by the metrics of the dataset's kind of target, and a cell that records
+    another kind is refused. A binary target's threshold is the one chosen on validation, and the
+    seed and bootstrap count are the cell's, so the block is what inline scoring would have written.
+    The arrays are written before the metrics, because a cell counts as scored once its
+    `metrics.json` has the block, so an interruption between the two is repaired by scoring the cell
+    again.
 
     `filled` is how many test rows took the model's constant prediction, for a model that can be
     undefined on a row, and is written beside the validation split's count.
@@ -220,7 +212,7 @@ def finish_reveal(run_dir: str | Path, scored: dict[str, int]) -> dict[str, Any]
 
 
 def revealed_metrics(cell_dir: str | Path, run_dir: str | Path) -> dict[str, Any]:
-    """A cell's test block, for a reader working after the reveal. Refused before it."""
+    """A cell's test block, for code that reads results after the reveal. Refused before it."""
     if reveal_record(run_dir) is None:
         raise SealError(f"{run_dir} has not been revealed; its cells have no test numbers yet.")
     metrics = cells.read_metrics(cell_dir)

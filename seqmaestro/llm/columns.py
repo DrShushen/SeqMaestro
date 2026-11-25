@@ -2,14 +2,14 @@
 
 Generated code takes one DataFrame, `X`, and indexes its columns by name: the sequence column and,
 where the dataset declares them, the covariates. A model can use a covariate well only if it knows
-what the covariate measures and what values it takes, so each generator that shows a model the
-rows says so. `describe_columns` states the facts, and `render_columns` puts them into words, which
-the proposer shows in its prompt. DEFT and IGSR are handed the same descriptions with their rows
-(`seqmaestro.pipeline.vendored.handover`) and word them in their prompts, so every generator is told
-what each covariate measures.
+what the covariate measures and what values it takes, so every generator that shows a model the
+rows also tells it these facts. `describe_columns` gathers them, and `render_columns` puts them
+into the words the proposer shows in its prompt. DEFT and IGSR are handed the same descriptions
+with their rows (`seqmaestro.pipeline.vendored.handover`) and word them in their prompts, so every
+generator is told what each covariate measures.
 
-The descriptions come from the dataset's declaration (`Dataset.covariates`) and the lengths and
-ranges from the rows the model is shown, so nothing here is assumed about a dataset.
+The descriptions come from the dataset's declaration (`Dataset.covariates`), and the lengths and
+ranges from the rows the model is shown, so the code assumes nothing about a dataset.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from seqmaestro.features.base import Inputs, as_inputs
 def describe_columns(inputs, sequence_column: str,
                      descriptions: Mapping[str, str] | None) -> dict[str, Any]:
     """The columns of these rows as facts: the sequence column's length (one number when every row
-    has it, a range otherwise), and each covariate's description and range.
+    has the same length, and a range otherwise), and each covariate's description and range.
 
-    `descriptions` maps each covariate the rows carry to what it measures. Rows that carry a
-    covariate with no description are refused, since a model shown a bare name would guess.
+    `descriptions` maps each covariate of the rows to what it measures. Rows with a covariate that
+    has no description are refused, because a model shown a bare name would guess what it means.
     """
     inputs: Inputs = as_inputs(inputs)
     described = dict(descriptions or {})
@@ -48,8 +48,8 @@ def describe_columns(inputs, sequence_column: str,
 
 
 def render_columns(columns: Mapping[str, Any]) -> str | None:
-    """The facts of `describe_columns` in words, for a prompt, or None where they would add
-    nothing: rows all one length, with no covariates, which the task's description covers."""
+    """The facts of `describe_columns` in words, for a prompt, or None where they would add nothing
+    to the task description: rows that all have one length and no covariates."""
     sequence, covariates = columns["sequence"], columns["covariates"]
     length = sequence["length"]
     if isinstance(length, int) and not covariates:

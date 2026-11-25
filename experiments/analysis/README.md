@@ -1,106 +1,58 @@
-# Analysis: read a finished run back
+# The analysis scripts
 
-Each of these scripts works on one run. It writes its tables into that run under names of its own,
-and changes nothing a stage wrote. The rules every stage follows are in
-[`../README.md`](../README.md). This file says what each script answers and when to use it.
+The scripts here work on a [run](../../docs/glossary.md#run) once [Stage 2](../../docs/glossary.md#stage) has fitted its [arms](../../docs/glossary.md#arm), or on a dataset and files that the caller chooses. This page says which question each script answers and when to use it. The pages under [`docs/developer/analyses/`](../../docs/developer/analyses/index.md) explain how each number is computed and what it can support, and [running experiments](../README.md) gives the rules that every script follows.
 
-**None of them reads the test split.** The analyses in the standard pipeline work from what each
-cell reported and from its values on validation, and they run before the reveal. A script that
-reports performance reads test scores only after the run has been revealed, and says which split its
-numbers come from (see [`../../docs/heldout.md`](../../docs/heldout.md)).
+**A script that works on a run writes only files of its own**, under names that no stage uses, and changes nothing that a stage wrote, so running it again is safe.
 
-**How each number is computed is documented in [`../../docs/analyses/`](../../docs/analyses/)**,
-one maintained page per analysis, with the reasoning, the worked arithmetic and the failure modes.
-When you change an analysis, change its page in the same commit:
+**The Stage 2 analyses never open the [held-out split](../../docs/glossary.md#held-out-split).** They work from what each [cell](../../docs/glossary.md#cell) reported and from the values of its [features](../../docs/glossary.md#feature) on the validation rows, and they run before the [reveal](../../docs/glossary.md#reveal). A script that reports performance takes test scores from the cells only after the reveal, and it names the split its numbers come from ([the held-out split and the reveal](../../docs/developer/heldout.md)). `direct_effect_test.py` and `feature_group_dependence.py` work on the table they are given, so a table that holds the test rows opens the held-out split.
 
-| script | page |
-|---|---|
-| `analyse_stability.py`, `analyse_co_discovery.py` | [`stability_and_co_discovery.md`](../../docs/analyses/stability_and_co_discovery.md) |
-| `analyse_recurrence.py` | [`recurrence.md`](../../docs/analyses/recurrence.md) |
-| `run_judge.py` | [`judge.md`](../../docs/analyses/judge.md) |
-| `direct_effect_test.py`, `feature_group_dependence.py` | [`direct_measurement.md`](../../docs/analyses/direct_measurement.md) |
-| anything reading `direction` or `marginal_effect` | [`direction.md`](../../docs/analyses/direction.md) |
-| what every one of them reads | [`feature_record.md`](../../docs/feature_record.md) |
+## The Stage 2 analyses
 
-## What each one answers
+The [driver](../../docs/glossary.md#driver) runs these once every arm has finished, in this order, each with `--run-dir <run>`:
 
-**In the standard pipeline**, run by `../runners/run_experiment.py` in this order, each with
-`--run-dir <run>`:
-
-| | question | writes |
+| Script | Question | Page |
 |---|---|---|
-| `analyse_stability.py` | does an arm *select* the same features again across seeds? | `results/stability.csv` |
-| `analyse_co_discovery.py` | did more than one arm find the same thing? | `results/co_discovery.csv`, `results/co_discovery_by_arm.csv` |
-| `analyse_recurrence.py` | does an arm on a written source find the same features again, arrive at the same ideas again, and do different such arms arrive at the same idea? | `results/feature_recurrence.csv`, `results/concept_recurrence.csv` with its record `concept_recurrence.json`, `results/cross_arm_recurrence.csv` |
-| `run_judge.py`, where the run's config has `grid.judge: true` | how biologically significant would each feature be, if true? | `judge/judge_summary.json`, `judge/judge_scores.json`, `judge/panel_key.json` |
+| [`analyse_stability.py`](analyse_stability.py) | Does one arm report the same features again when it is fitted at another [seed](../../docs/glossary.md#seed)? | [Stability and co-discovery](../../docs/developer/analyses/stability_and_co_discovery.md) |
+| [`analyse_co_discovery.py`](analyse_co_discovery.py) | Do different arms arrive at the same property? | [Stability and co-discovery](../../docs/developer/analyses/stability_and_co_discovery.md) |
+| [`analyse_recurrence.py`](analyse_recurrence.py) | Does an arm on a [written source](../../docs/glossary.md#written-source) arrive at the same ideas again across seeds, and do different such arms arrive at the same idea? | [Recurrence](../../docs/developer/analyses/recurrence.md) |
+| [`run_judge.py`](run_judge.py), where the run's [config](../../docs/glossary.md#config) sets `grid.judge: true` | How biologically significant would each feature be, if it held? | [The judge](../../docs/developer/analyses/judge.md) |
 
-The last two ask a language model, so each keeps what is on file while the features, the settings
-and the description it was computed from are unchanged, and `--force` asks again
-(`seqmaestro/pipeline/analyses/inputs.py`). How many features of a cell an analysis takes, how
-often the judge rates each one and how the recurrence analysis groups are settings of the run, in
-the `analyses` section of its config (`../configs/README.md`), so an analysis started by hand
-takes them as the driver's does.
+Each script's `--help` says what it writes. Every analysis takes the cells' [feature records](../../docs/glossary.md#feature-record) ([the feature record](../../docs/developer/feature_record.md)), and [direction](../../docs/developer/analyses/direction.md) explains the two directions that each record holds.
 
-**On demand**, run by hand, because each needs an argument only the caller can choose or runs in a
-different environment. `--help` lists each one's arguments:
+The [recurrence analysis](../../docs/glossary.md#recurrence-analysis) and the [judge](../../docs/glossary.md#judge) call a [language model](../../docs/glossary.md#language-model). Each keeps what it wrote while the features, the settings and the [task description](../../docs/glossary.md#task-description) it computed them from are unchanged, and `--force` makes it call the model again ([`inputs.py`](../../seqmaestro/pipeline/analyses/inputs.py)). Every analysis takes its settings from the run's recorded config, most of them from its `analyses` section ([run configs](../configs/README.md)), so a script started by hand behaves as it does under the driver.
 
-| | question | takes |
-|---|---|---|
-| `direct_effect_test.py` | does *this* feature differ between the classes, by how much, and could it be chance? | `--dataset` (a table of the dataset), `--label-column`, and `--features` (cells' `features.json`) or `--columns` |
-| `export_features_xlsx.py` | what did every arm report, as a spreadsheet to hand to a collaborator? Performance is on the test split once the run is revealed, on validation before. Runs under `SeqMaestro_LocalUtils` | `--run-dir`. Writes `<run>/features.xlsx` unless `--out` names another place |
-| `feature_group_dependence.py` | how much of each feature *is* the thing the split groups on? | `--dataset`, `--sequence-column`, `--group-column`, and `--pools` with how k-mers are counted (`--k-range`, `--kmer-normalise`, as the run's config states them) or `--features`, each file listed under its path |
+## Stability, co-discovery and recurrence
 
-**The report**, after the reveal, in this order (`../../process/reporting.md` gives the whole
-sequence, and `../../docs/report/README.md` says what the build decides):
+All three measure whether something is found again, so they are easy to confuse. They differ in what they compare and in what counts as the same feature:
 
-| | environment | writes, under `<run>/report/` |
-|---|---|---|
-| `build_report_inputs.py` | Core | `facts.json`, `tables/`, `internals/`, `figure_inputs.json`, read from the run as its config lists it |
-| `build_report_figures.py` | LocalUtils | `figures/`, `figures.json`, from `figure_inputs.json` alone |
-| `assemble_report.py` | either | `REPORT.md`, from the `REPORT.src.md` a writer wrote against `../../docs/report/TEMPLATE.md` |
-| `render_pdf.sh` (with `page_layout.lua`) | none; `pandoc` and `xelatex` | `REPORT.pdf`. `REPORT_ORIENTATION=landscape` in its environment renders the whole report landscape |
+- **Stability** compares the seeds of one arm. Two features are the same when they have the same definition, or when their values correlate closely on the validation rows.
+- **Co-discovery** compares different arms at one seed, with the same test of sameness, so that features computing one property match whatever each arm calls them.
+- **Recurrence** compares ideas, across the seeds of one arm and across arms: a language model groups the written features that measure the same property, from their names and descriptions.
 
-Run `feature_group_dependence.py` **before** a grid. It says whether a grouped split isolates what it
-promises, and the answer is per pool: one split can isolate the grouped variable from one
-pool and not from another. What a design can detect at all is part of the dataset, measured
-when Stage 1 finalises it and recorded in its `dataset.json` (see
-[`../../docs/dataset.md`](../../docs/dataset.md)). `../prepare/design_power.py` answers the same
-question for a split still being planned.
+An arm whose features a language model writes can rename an idea and shift its window from one seed to the next, and two shifted windows do not correlate. Only recurrence can therefore show that such an arm returns to the same idea. Stability measures which features an arm selects, whereas recurrence measures what it proposes, and an arm can be consistent in one and not in the other ([recurrence](../../docs/developer/analyses/recurrence.md)).
 
-Run `direct_effect_test.py` when a collaborator asks about one feature instead of about the model.
-It compiles features from the code a cell recorded in its `features.json`, so the test runs on the
-feature the arm reported. Its statistics come from `seqmaestro.harness.effect`.
+Co-discovery and recurrence both call their groups [concepts](../../docs/glossary.md#concept). A concept of co-discovery is a group of features whose values agree, whereas a concept of recurrence is a group that a language model formed, so the two cannot be compared.
 
-## Stability, co-discovery and recurrence are three different questions
+A figure from any of the three means little until it is compared with the same figure on the permuted cells, the fits on shuffled labels ([the permuted cells](../../docs/developer/analyses/index.md#the-permuted-cells)).
 
-All three cluster features and report agreement, so they are easy to confuse. They differ in the
-axis they compare along and in what counts as the same feature.
+## Scripts run by hand
 
-| | axis | "the same feature" means | needs |
-|---|---|---|---|
-| `analyse_stability.py` | seeds, within an arm | the same name, or values that correlate | features evaluated on a shared reference split |
-| `analyse_co_discovery.py` | **arms, within a seed** | values that correlate on the reference split | every arm evaluated on the same rows |
-| `analyse_recurrence.py` | **seeds within an arm, and arms against each other** | identical text, or a language model says they measure the same property | nothing shared; names and descriptions only |
+The driver does not start these, because each needs an argument that only the caller can choose, or runs in another environment. Each script's `--help` lists its arguments.
 
-Co-discovery and recurrence are the easiest pair to confuse, because both produce something called
-a concept. Co-discovery asks *"did anything else find this?"* and answers it behaviourally, by
-correlating values, because features from different arms have nothing in common except their values.
-Recurrence asks *"did this arm think of it again?"*, and its concept view cannot be answered
-behaviourally: a generative arm re-expresses one idea over a shifted window every seed, and two
-shifted windows do not correlate. For the same reason recurrence complements `top_n_kappa` (from
-`analyse_stability.py`) and does not replace it. `top_n_kappa` measures *selection* and the concept
-view measures *proposal*, and an arm can be stable in one and not the other.
+- **[`feature_group_dependence.py`](feature_group_dependence.py)**, before any arm is fitted, measures how much of each feature is the variable that the split groups on. A grouped split keeps the rows of a group together, but the features can still encode the group, and whether they do differs from one [pool](../../docs/glossary.md#pool) to another. A related question, what a design can detect at all, is measured when Stage 1 finalises the dataset ([Stage 1: the prepared dataset](../../docs/developer/dataset.md)), and [`design_power.py`](../prepare/design_power.py) answers it for a split that is still being planned.
+- **[`direct_effect_test.py`](direct_effect_test.py)** tests whether one feature differs between the two classes, by how much, and whether a difference of that size could be chance, with a confounder matched and permuted within its levels. It is the script for a question about one feature of a report, such as "is that real?", and it computes the feature from the code that its cell recorded.
+- **[`export_features_xlsx.py`](export_features_xlsx.py)**, under `SeqMaestro_LocalUtils`, writes every arm's reported features to a spreadsheet, for a collaborator who wants to sort and filter them. Its performance columns are on the held-out split once the run is revealed, and on validation before.
+- **[`build_status_page.py`](build_status_page.py)** builds the run's [status page](../../docs/glossary.md#status-page) again after the driver has finished, for instance once the report is written.
 
-## Each of the three needs its null read first
+[Direct measurement](../../docs/developer/analyses/direct_measurement.md) explains the first two.
 
-Stability, co-discovery and recurrence each report a permuted-label column beside the real one,
-and in several of them the raw figure points the wrong way until it is compared with the null.
-(The judge rates real-label features only, unless the run's config has `analyses.judge.labels`
-hold `permuted` too.) Arms that share a pool
-agree structurally under any labels. A language-model proposer reads the task description, which
-permuting the labels does not change, so it proposes much the same repertoire under both. A number
-quoted without its null is not a result.
+## The report
 
-Where the null rests on few independent draws, say how many before quoting a gap against it. See
-`grid.permutation_scope` in the run config, which decides whether a run has one draw per seed or one
-per cell.
+After the reveal, four scripts build the report, in this order ([`process/reporting.md`](../../process/reporting.md) gives the commands, and [the report](../../docs/developer/report.md) says what the build decides):
+
+1. [`build_report_inputs.py`](build_report_inputs.py), under `SeqMaestro_Core`, builds the facts, the tables and the inputs of the figures from the run.
+2. [`build_report_figures.py`](build_report_figures.py), under `SeqMaestro_LocalUtils`, draws the figures from those inputs alone.
+3. [`assemble_report.py`](assemble_report.py), under either environment, fills the placeholders of the `REPORT.src.md` that the report's writer wrote from [the report template](../../process/report-template.md), and writes `REPORT.md`.
+4. [`render_pdf.sh`](render_pdf.sh), which needs `pandoc` and `xelatex` and no conda environment, renders `REPORT.pdf`.
+
+The driver runs the first two.

@@ -1,7 +1,9 @@
-# The proposer's prompts on rows with no covariates and one sequence length, as rendered before
-# covariates and variable lengths were added. tests/test_proposer.py checks that the proposer still
-# renders exactly these, byte for byte. Change this file only with a deliberate change of wording,
-# and say so in the commit. Each section runs from its marker to the next.
+# The prompts the proposer renders for rows with no covariates and one sequence length: the system
+# prompt, two blind rounds and an informed round. tests/test_proposer.py compares what the proposer
+# renders with these sections byte for byte, so that every run on such rows sends the same request
+# and a change made for covariates or varying lengths cannot alter it unnoticed. Change this file
+# only with a deliberate change of wording, and say so in the commit. Each section runs from its
+# marker to the next.
 === system ===
 You are an expert computational molecular biologist. You propose interpretable features of nucleic acid sequence that might predict a biological outcome, and you write each one as a short Python function. You favour features a biologist could name and reason about -- composition over a defined window, motif occurrence, periodicity, skew, positional context -- over opaque statistics. Each feature should be a distinct hypothesis, not a restatement of another.
 === blind_round_1 ===

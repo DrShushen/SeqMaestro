@@ -1,18 +1,18 @@
 """Counts of overlapping substrings: *what* a sequence contains, regardless of where.
 
-The complement of `PositionalFeaturiser`. It is shift-invariant, so a motif counts the same wherever
-it sits, at the cost of knowing where that was.
+It complements `PositionalFeaturiser`, because a count is shift-invariant: a motif counts the same
+wherever it sits, and where it sat is lost.
 
 `k` is a range the caller states, inclusive at both ends. The vocabulary is **learned from the
-training sequences** and not enumerated over the alphabet, for two reasons. The complete product
+training sequences** instead of enumerated over the alphabet, for two reasons. The complete product
 space is `|alphabet|^k` summed over the range, which is 5,460 columns for four symbols up to k=6
 but 19,530 for five, and soon grows past anything usable. Learning it also makes the vocabulary a
-fitted property, which is the same discipline STREME motifs and calibrated PWM thresholds would
-need.
+fitted property, learned from the fitting rows as the discovered motifs and the kept motif counts
+are (`seqmaestro.features.motif`).
 
 **A count grows with the sequence.** Where sequences differ in length, a longer one holds more of
-every k-mer, so a count carries the length. `normalise="per_length"` divides each count by the
-number of k-mer positions in the sequence, `length - k + 1`, which gives a rate, and
+every k-mer, so a count also measures the length. `normalise="per_length"` divides each count by
+the number of k-mer positions in the sequence, `length - k + 1`, which gives a rate, and
 `normalise="counts"` leaves the counts as they are. On sequences of one length the two differ only
 by a constant factor per k. A run states which it takes (`sources.kmer.normalise`), so the class
 has no default for it.
@@ -44,8 +44,8 @@ class KmerFeaturiser(Featuriser):
     """One count column per *k*-mer seen in training, for every `k` in `k_range`.
 
     `k_range` is inclusive at both ends: `(1, 6)` means k = 1, 2, 3, 4, 5 and 6. `normalise` is one
-    of `NORMALISATIONS` (see the module docstring). A sequence shorter than some k simply holds no
-    k-mer of that length.
+    of `NORMALISATIONS` (see the module docstring). A sequence shorter than some k holds no k-mer
+    of that length.
     """
 
     def __init__(self, k_range: tuple[int, int], normalise: str) -> None:
@@ -97,7 +97,7 @@ class KmerFeaturiser(Featuriser):
                 description=self._description(kmer),
                 kind="kmer",
                 origin=ORIGIN_SEQMAESTRO,
-                # A normalised record says so in its recipe, which is then not a count's.
+                # A normalised feature states it in its recipe, so the recipe differs from a count's.
                 params={"kmer": kmer, "k": len(kmer),
                         **({"normalise": self.normalise} if self.normalise != "counts" else {})},
                 provenance=PROVENANCE_SELECTED,
@@ -125,9 +125,9 @@ class KmerFeaturiser(Featuriser):
                 self._column_of[kmer]
                 for k in self.k_values
                 for start in range(len(sequence) - k + 1)
-                # A k-mer of known symbols that was never seen in training is legitimately absent,
-                # because it carried no training signal. An unknown *symbol* is the alarm, and
-                # `check_symbols` above has already raised on that.
+                # A k-mer of known symbols that was never seen in training is rightly left out,
+                # because the model learned nothing from it. An unknown *symbol*, by contrast, is a
+                # fault in the data, and `check_symbols` above has already raised on that.
                 if (kmer := sequence[start : start + k]) in self._column_of
             ]
             if columns:
@@ -144,7 +144,7 @@ class KmerFeaturiser(Featuriser):
             "vocabulary_size": len(self.vocabulary) if self.vocabulary else None,
             "n_features": len(self._records) if self.is_fitted else None,
         }
-        # Stated where they differ from counts on sequences long enough for every k.
+        # Stated only where they differ from plain counts over sequences long enough for every k.
         if self.normalise != "counts":
             described["normalise"] = self.normalise
         if self.n_shorter_than_k:
@@ -160,8 +160,8 @@ class KmerFeaturiser(Featuriser):
                 f"sequence (the count over length - {len(kmer) - 1}), overlapping")
 
     def _per_length(self, counts: np.ndarray, sequences) -> np.ndarray:
-        """Each count over the number of k-mer positions in its sequence. A sequence too short to
-        hold any k-mer of a length has none, so its rate is zero."""
+        """Each count divided by the number of k-mer positions in its sequence. A sequence too short
+        to hold any k-mer of a length has none, so its rate is zero."""
         lengths = np.array([len(sequence) for sequence in sequences], dtype=np.float64)
         ks = np.array([len(kmer) for kmer in self.vocabulary], dtype=np.float64)
         positions = lengths[:, None] - ks[None, :] + 1

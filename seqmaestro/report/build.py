@@ -2,10 +2,11 @@
 
 `files.py` names each file, and `experiments/analysis/build_report_figures.py` draws the figures
 from `figure_inputs.json`. The steps run in dependency order. `collect` builds the facts from the
-run alone. Concepts need the columns the reduction kept for each profiled arm evaluated on D, and
-the drawn models need to be read from their saved files. Both can mean calling a vendored method's
-interpreter, so the caller (`seqmaestro.pipeline.report`) does them and passes the results to
-`arm_columns` and `write`. `write` then writes everything.
+run alone, whereas the concepts need the columns the reduction kept for each profiled arm,
+evaluated on D (the training and validation rows), and the drawn models need to be loaded from
+their saved files. Either can mean calling a vendored method's interpreter, so the caller
+(`seqmaestro.pipeline.report`) does both and passes the results to `arm_columns` and `write`,
+which then writes everything.
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ def collect(run: Run, matcher: Matcher) -> dict[str, Any]:
         "baseline": facts_module.baseline(run, stage3a["feature_budget"], names),
         "stage3a": stage3a,
         "stage3b": facts_module.stage3b(run, names),
+        # Which language model the run called, for what, and how.
+        "language_models": facts_module.language_models(run),
     }
     found["headline_set"] = facts_module.headline_set(
         {arm: entry[f"reduced_{headline}"] for arm, entry in found["stage3a"]["arms"].items()}, kind)
@@ -85,9 +88,10 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def write(out_dir: str | Path, facts: dict[str, Any], concepts: list[concept_module.Concept],
-          internals: dict[str, dict]) -> dict[str, Any]:
-    """Write the report inputs. `internals` maps a headline slot to its model's exported structure.
-    Returns what was written, by kind."""
+          internals: dict[str, dict], agents: list[dict[str, Any]]) -> dict[str, Any]:
+    """Write the report inputs. `internals` maps a headline slot to its model's exported structure,
+    and `agents` holds the agents the run records (`seqmaestro.pipeline.agents.recorded`). Returns
+    what was written, by kind."""
     out_dir = Path(out_dir)
     facts = {**facts,
              "concepts": [concept.to_dict() for concept in concepts],
@@ -97,7 +101,8 @@ def write(out_dir: str | Path, facts: dict[str, Any], concepts: list[concept_mod
                            for slot in internals}}
     _write_json(out_dir / FACTS_FILE, facts)
 
-    rendered = {**tables.build(facts, concepts), **tables.equation(facts, internals)}
+    rendered = {**tables.build(facts, concepts), **tables.equation(facts, internals),
+                tables.AGENTS_TABLE: tables.agents(agents)}
     table_dir = out_dir / TABLES_DIR
     table_dir.mkdir(parents=True, exist_ok=True)
     for stale in table_dir.glob("*.md"):

@@ -1,19 +1,20 @@
 #!/usr/bin/env python
-"""What a design can detect, worked out before a run is spent on it.
+"""What a design can detect, worked out before any compute is spent on it.
 
     python experiments/prepare/design_power.py --n-positive 334 --n-negative 334
     python experiments/prepare/design_power.py --n-rows 11000
-    python experiments/prepare/design_power.py --splits data/<dataset>/<splits> \
-        --target-column <target> --target-kind binary|continuous [--weight-column <weights>] \
+    python experiments/prepare/design_power.py --splits data/<dataset>/<splits> \\
+        --target-column <target> --target-kind binary|continuous [--weight-column <weights>] \\
         [--out <path>.csv]
 
 A planning tool for Stage 1. `finalise_dataset.py` records these numbers in every finalised
 dataset's `dataset.json`, and reports quote them from there. This script answers the earlier
 question: what could a split of a given size, or each of several candidate splits, show?
 
-A full grid costs tens of millions of tokens and several hours. A design whose test set cannot
-separate the effect from chance spends all of that and reports near chance with a wide interval,
-which cannot be told apart from the effect being absent. The arithmetic here takes seconds.
+A full grid takes several hours and tens of millions of tokens, and a design whose test set cannot
+separate the effect from chance spends all of that to report a score near chance with a wide
+interval, which cannot be told apart from the effect being absent. The arithmetic here takes
+seconds.
 
 It reports two numbers, and a design can fail on either:
 
@@ -25,8 +26,8 @@ It reports two numbers, and a design can fail on either:
   design is Kish's figure (per class and combined harmonically, for a binary target) and not the
   row count. This is what decides whether there is anything to state.
 
-The arithmetic is in `seqmaestro.harness.power`, and a split is sized by its kind's object in
-`seqmaestro.target`. This script formats the table.
+The arithmetic is in `seqmaestro.harness.power`, and a split is sized by the object for its kind of
+target in `seqmaestro.target`. This script formats the table.
 """
 
 from __future__ import annotations
@@ -74,7 +75,8 @@ def describe_rows(name: str, n_rows: float) -> dict:
 
 def from_splits(directory: Path, target_column: str, target_kind: str,
                 weight_column: str | None) -> pd.DataFrame:
-    """Both numbers for a split directory: what its test set can show, what its train set holds."""
+    """Both numbers for a split directory: what its test set can show and what its training set
+    holds."""
     test = pd.read_csv(directory / "test.csv")
     train = pd.read_csv(directory / "train.csv")
     weights = (train[weight_column].to_numpy(dtype=float)

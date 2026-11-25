@@ -1,39 +1,40 @@
-"""Stage 2: the cells of a run's arms.
+"""Stage 2: fit the cells of a run's arms.
 
     python experiments/runners/run_arm.py --run-dir experiments/runs/<date>_<name>
     python experiments/runners/run_arm.py --run-dir ... --arms ebm/positional --labels real --seeds 42
     python experiments/runners/run_arm.py --run-dir ... --arms l1_logistic/llm_generated --show-prompt
 
-A cell is one model fitted on one pool, under one condition of the labels, at one seed
-(`seqmaestro.harness.cell`). The driver starts this once per arm, labels and seed, many at once.
+A cell is one model fitted on one pool, under one label condition, at one seed
+(`seqmaestro.harness.cell`). The driver starts this command once per arm, label condition and seed,
+many at once.
 
-**Every setting comes from the run's recorded config**, `<run>/config.yaml`: the grid, how each
-source is computed, each model's settings. The command line only narrows which of the config's
-cells a call fits. A setting changed in the config therefore reaches every stage, and no call can
-fit a cell under a setting the run does not record.
+**Every setting comes from the run's recorded config** (`<run>/config.yaml`): the grid, how each
+feature source is computed, and each model's settings. The command line only narrows which of the
+config's cells a call fits. A setting changed in the config therefore reaches every stage, and a
+call cannot fit a cell under a setting the run does not record.
 
 **How a cell is fitted depends on the kind of arm** (`seqmaestro.arms.kind`):
 
 - A Core model on a fixed pool is fitted in this process, on columns that follow from the rows by
-  rule. It needs no language model and no credentials.
+  rule. It needs neither a language model nor credentials.
 - A Core model on a pool the proposer writes into is fitted in this process too, after a language
-  model has proposed the pool's written features: in one proposal for `llm_generated`, and in
-  further proposals, each shown a fit of the cell's model, for `llm_generated_iterative`
-  (`seqmaestro.proposer`). A proposal is made for its arm, labels and seed, so two models compared
-  on a written source are compared on separate draws. It is kept under `proposals/`, so a cell
-  fitted again asks nothing twice.
+  model has proposed the pool's written features: in one proposal for `llm_generated`, and for
+  `llm_generated_iterative` in further proposals, each of which is shown a fit of the cell's model
+  (`seqmaestro.proposer`). Each proposal is made for one arm, label condition and seed, so two
+  models compared on a written source are compared on separate draws. It is kept under
+  `proposals/`, so a cell fitted again does not make the same request twice.
 - DEFT's tree and IGSR are fitted under their methods' interpreters, from files written here, and
   hand back a bundle (`seqmaestro.pipeline.vendored`).
 
-**Credentials** are needed by an arm whose pool holds a written source: `set -a && source .env &&
-set +a`. The dataset's description, which every language model is told, is
-`experiments/datasets/<task>.json`, the one file the judge and the recurrence analysis also read.
+**Credentials** are needed by an arm whose pool holds a written source (`set -a && source .env &&
+set +a`). The task description, which every language model is told, is
+`experiments/datasets/<task>.json`, and the judge and the recurrence analysis read the same file.
 
 A finished cell is skipped unless `--force` is given. A cell that fails is recorded in the call's
-failures file and the others go on. A revealed run is refused.
+failures file while the others go on. A revealed run is refused.
 
 A DEFT cell needs more care, because a second fit draws another tree, and on a permuted cell a
-choice between two trees would choose which draw of the null is kept. An unfinished cell whose
+choice between two trees would decide which draw of the null is kept. An unfinished cell whose
 bundle holds no grown tree is fitted again like any other. One whose tree was grown is refused:
 `--reuse-tree` completes it from that tree, and only `--force` grows a new one.
 """
@@ -50,11 +51,11 @@ from typing import Any
 
 from seqmaestro import arms as registry
 from seqmaestro.arms import Arm, arm_name, split_arm
-from seqmaestro.dataset import Dataset, load_dataset
+from seqmaestro.dataset import load_dataset
 from seqmaestro.features import (
     LLM_GENERATED,
     LLM_ITERATIVE,
-    make_featuriser,
+    MOTIF_DISCOVERED,
     parse_pool,
     pool_name,
 )
@@ -67,9 +68,10 @@ from seqmaestro.harness.runner import (
     run_model,
     subsample_training_rows,
 )
-from seqmaestro.llm import LiteLLMClient, TaskContext, blinding_leaks, load_task
+from seqmaestro.llm import LiteLLMClient, TaskContext, blinding_leaks, guidance_leaks, load_task
 from seqmaestro.llm.columns import describe_columns
 from seqmaestro.models import make_model
+from seqmaestro.motifs.discovery import MEME_ENVIRONMENT
 from seqmaestro.pipeline.config import ConfigError, ExperimentConfig, load_recorded
 from seqmaestro.pipeline.layout import (
     PROPOSALS_DIR,
@@ -81,6 +83,7 @@ from seqmaestro.pipeline.layout import (
 from seqmaestro.pipeline.records import Failures, snapshot_environments
 from seqmaestro.pipeline.repository import DESCRIPTIONS
 from seqmaestro.pipeline.rows import Rows
+from seqmaestro.pipeline.sources import pool_featuriser
 from seqmaestro.pipeline.vendored import deft, igsr
 from seqmaestro.proposer import (
     IterativeGeneratedFeaturiser,
@@ -93,7 +96,7 @@ from seqmaestro.proposer import (
 from seqmaestro.proposer.prompt import SYSTEM_PROMPT
 from seqmaestro.provenance import missing_python, record_call
 
-#: What a proposal cost and what became of it, beside the cell fitted on it.
+#: The record, beside a cell, of the tokens its proposal used and what became of the proposal.
 TOKEN_USAGE_FILE = "token_usage.json"
 
 
@@ -101,24 +104,12 @@ TOKEN_USAGE_FILE = "token_usage.json"
 
 def cell_settings(config: ExperimentConfig, labels: str, seed: int) -> dict[str, Any]:
     """What a cell of the run is fitted and scored with, as `run_model` takes it: the grid's
-    settings, and this cell's seed and condition of the labels."""
+    settings, and this cell's seed and label condition."""
     grid = config.grid
     return {"seed": seed, "train_fraction": grid.train_fraction,
             "permute_labels": labels == cells.PERMUTED,
             "permutation_scope": grid.permutation_scope, "n_bootstrap": grid.n_bootstrap,
             "permutation_repeats": grid.permutation_repeats}
-
-
-def pool_featuriser(config: ExperimentConfig, dataset: Dataset, pool: str,
-                    proposer: Proposer | None = None) -> Featuriser:
-    """The featuriser of `pool` as the run computes its sources: the k-mers as `sources.kmer`
-    states, the positions over the dataset's declared window, and the dataset's covariates where
-    the pool holds them."""
-    kmer = config.sources.kmer
-    return make_featuriser(pool, proposer=proposer, covariates=dataset.covariates_for(pool),
-                           window=dataset.positional_window,
-                           k_range=None if kmer is None else kmer.k_range,
-                           kmer_normalise=None if kmer is None else kmer.normalise)
 
 
 def cell_call(model: str, pool: str, labels: str, seed: int) -> str:
@@ -128,9 +119,9 @@ def cell_call(model: str, pool: str, labels: str, seed: int) -> str:
 
 def run_cells(planned: Iterable[tuple[str, Path, Callable[[], dict]]], *, target_kind: str,
               force: bool, failures: Failures) -> None:
-    """Fit each planned cell: its name for the log, its directory, and the call that fits it,
-    writes it and returns its manifest. A finished cell is skipped unless `force`, and one that
-    raises is recorded in `failures` while the rest go on."""
+    """Fit each planned cell, given as its name for the log, its directory, and the function that
+    fits it, writes it and returns its manifest. A finished cell is skipped unless `force` is set,
+    and one that raises is recorded in `failures` while the rest go on."""
     planned = list(planned)
     for index, (name, directory, fit) in enumerate(planned, start=1):
         where = f"[{index}/{len(planned)}] {name}"
@@ -141,7 +132,7 @@ def run_cells(planned: Iterable[tuple[str, Path, Callable[[], dict]]], *, target
         cells.unfinish(directory)
         try:
             run = fit()
-        except Exception:  # one cell must not take the others with it
+        except Exception:  # a failure in one cell must not stop the others
             failures.record(name)
             continue
         print(f"{where}  {validation_line(run['metrics'], target_kind)}  "
@@ -151,22 +142,26 @@ def run_cells(planned: Iterable[tuple[str, Path, Callable[[], dict]]], *, target
 # ------------------------------------------------------------------------- the Core arms
 
 class FixedArm:
-    """A Core model on a fixed pool: fitted in this process, on columns that follow from the rows
-    by rule."""
+    """A Core model on a fixed pool, fitted in this process on columns that follow from the rows
+    by rule. `run_dir` holds what a motif source shares across the run's cells: its copy of the
+    collection and its store of scans."""
 
-    def __init__(self, config: ExperimentConfig, rows: Rows, model: str, pool: str) -> None:
-        self.config, self.rows = config, rows
+    def __init__(self, config: ExperimentConfig, rows: Rows, run_dir: Path, model: str,
+                 pool: str) -> None:
+        self.config, self.rows, self.run_dir = config, rows, Path(run_dir)
         self.model, self.pool = model, pool
         self.dataset = rows.dataset
-        #: The columns the arm reads. The covariates are among them only when its pool holds them.
+        #: The columns the arm uses, which include the covariates only when its pool holds them.
         self.columns = rows.dataset.columns_for(pool)
 
     def new_model(self, seed: int):
         return make_model(self.model, target_kind=self.dataset.target_kind, seed=seed,
-                          class_weight=self.config.grid.class_weight)
+                          class_weight=self.config.grid.class_weight,
+                          **self.config.settings_for(self.model))
 
     def fit(self, cell: Path, labels: str, seed: int) -> dict:
-        return self.fit_on(pool_featuriser(self.config, self.dataset, self.pool), cell, labels, seed)
+        return self.fit_on(pool_featuriser(self.config, self.dataset, self.pool, run_dir=self.run_dir),
+                           cell, labels, seed)
 
     def fit_on(self, featuriser: Featuriser, cell: Path, labels: str, seed: int,
                reports: Callable[[], Mapping[str, Any]] | None = None) -> dict:
@@ -177,7 +172,7 @@ class FixedArm:
 
 
 def built_pool(pool: str) -> str:
-    """The pool a proposer cell's featuriser is built from: the cell's, with `llm_generated` in
+    """The pool a proposer cell's featuriser is built from: the cell's pool with `llm_generated` in
     place of `llm_generated_iterative`, whose proposal the iterative featuriser then wraps."""
     return pool_name(tuple(LLM_GENERATED if member == LLM_ITERATIVE else member
                            for member in parse_pool(pool)))
@@ -185,7 +180,7 @@ def built_pool(pool: str) -> str:
 
 def proposal_part(featuriser):
     """The part of an arm's featuriser that holds the proposal and its reports: the featuriser
-    itself, or the member of its pool the proposer wrote when the pool holds more."""
+    itself, or, when the pool holds more than one source, the member the proposer wrote."""
     for part in getattr(featuriser, "parts", [featuriser]):
         if hasattr(part, "fit_report"):
             return part
@@ -194,52 +189,57 @@ def proposal_part(featuriser):
 
 def proposal_settings(config: ExperimentConfig) -> ProposalSettings:
     """How the run's proposer writes: `sources.llm_generated` for the requests, and the grid's
-    policy for a written feature that fails on the rows."""
+    policy for every arm on a written source, including its guidance on the form of the
+    features."""
     proposer, generated = config.sources.proposer, config.grid.generated_features
     return ProposalSettings(
         n_rounds=proposer.proposal_rounds, n_per_round=proposer.n_per_round,
         n_examples=proposer.n_examples, repair_rounds=generated.repair_rounds,
         max_undefined_share=generated.max_undefined_share,
-        max_example_length=generated.max_example_length, max_seconds=generated.max_seconds)
+        max_example_length=generated.max_example_length, max_seconds=generated.max_seconds,
+        guidance=generated.guidance)
 
 
 class ProposerArm(FixedArm):
     """A Core model on a pool the proposer writes into, alone or beside fixed sources.
 
-    The proposer is shown the same rows whatever else the pool holds. In an iterative pool each
-    informed round is shown a fit over every column of the pool, the fixed ones included.
+    The proposer is shown the same rows whatever else the pool holds. In an iterative pool, each
+    informed round is shown a fit over every column of the pool, including the fixed ones.
     """
 
     def __init__(self, config: ExperimentConfig, rows: Rows, run_dir: Path, model: str,
                  pool: str) -> None:
-        super().__init__(config, rows, model, pool)
+        super().__init__(config, rows, run_dir, model, pool)
         self.context = load_task(DESCRIPTIONS, config.dataset.task)
         self.settings = proposal_settings(config)
-        # Proposals live with the run, so a frozen run directory carries the features it was built
-        # from as well as the results. Each is keyed by its arm, so no two arms share one.
+        # Proposals are kept in the run, so a frozen run directory holds the features it was built
+        # from as well as the results. Each proposal is keyed by its arm, so two arms never share
+        # one.
         self.cache = ProposalCache(Path(run_dir) / PROPOSALS_DIR)
 
     def proposer(self, seed: int) -> Proposer:
         dataset = self.dataset
         return Proposer(
-            LiteLLMClient(), self.context, settings=self.settings, cache=self.cache, seed=seed,
+            LiteLLMClient(self.config.language_model), self.context, settings=self.settings,
+            cache=self.cache, seed=seed,
             sequence_column=dataset.sequence_column, target_column=dataset.target_column,
             target_kind=dataset.target_kind, covariates=dataset.covariates_for(self.pool),
             arm=arm_name(self.model, self.pool))
 
     def featuriser(self, proposer: Proposer, labels: str, seed: int) -> Featuriser:
-        written = pool_featuriser(self.config, self.dataset, built_pool(self.pool), proposer)
+        written = pool_featuriser(self.config, self.dataset, built_pool(self.pool), proposer,
+                                  run_dir=self.run_dir)
         if LLM_ITERATIVE not in parse_pool(self.pool):
             return written
-        # The pool holds the blind proposal, the first round, whose features count as `selected`
-        # because this arm only chose among them. `rounds` counts the loop's proposals. The first
-        # is the pool's, which the loop takes as its round one, so the number of informed rounds
-        # equals `sources.llm_generated_iterative.feedback_rounds`.
+        # The pool holds the first round's proposal (made before any fit is shown), whose features
+        # count as `selected` because this arm only chose among them. `rounds` counts the loop's
+        # proposals. The first is the pool's, which the loop takes as its round one, so the number
+        # of informed rounds equals `sources.llm_generated_iterative.feedback_rounds`.
         #
         # **The validation labels are permuted for a permuted cell.** `run_model` shuffles only the
-        # training labels, and validation stays real so a control can be scored against real
-        # labels. The loop, however, selects features against the validation labels, so leaving
-        # them real would hand the control real signal and leave no null.
+        # training labels, and the validation labels stay real so that a control can be scored
+        # against real labels. The loop, however, selects features against the validation labels,
+        # so leaving them real would hand the control real signal and leave no null.
         grid = self.config.grid
         chosen_on = labels_to_choose_on(
             self.rows.val, seed=seed, columns=self.columns,
@@ -261,7 +261,7 @@ class ProposerArm(FixedArm):
             return {TOKEN_USAGE_FILE: {
                 "usage": proposer.usage(),
                 # Every proposal the cell's proposer made, counted together: one for the one-round
-                # source, and one a round for the iterative source.
+                # source, and one per round for the iterative source.
                 "proposal_stats": proposer.total.as_dict(),
                 "fit_report": proposal.fit_report,
                 "transform_failures": proposal.transform_failures,
@@ -281,7 +281,7 @@ class ProposerArm(FixedArm):
 
     def show_prompt(self, seed: int) -> None:
         """Print what the first request of a cell at `seed` would send. It draws the rows the cell
-        would fit on, so a prompt inspected here is the prompt paid for later."""
+        would fit on, so the prompt inspected here is the one the cell will send."""
         dataset, settings = self.dataset, self.settings
         fit_rows, y_fit = subsample_training_rows(
             self.rows.train, seed=seed, columns=dataset.columns,
@@ -295,7 +295,7 @@ class ProposerArm(FixedArm):
             target_kind=dataset.target_kind,
             columns=describe_columns(shown, dataset.sequence_column,
                                      dataset.covariates_for(self.pool)),
-            max_example_length=settings.max_example_length)
+            max_example_length=settings.max_example_length, guidance=settings.guidance)
         print(f"--- system ---\n{SYSTEM_PROMPT}\n\n--- user (round 1 of {settings.n_rounds}) ---\n"
               f"{user}")
         print(f"\n--- {len(fit_rows)} fit rows, {len(examples)} shown, "
@@ -306,40 +306,44 @@ class ProposerArm(FixedArm):
 
 def arm_of(config: ExperimentConfig, rows: Rows, run_dir: Path, model: str, pool: str, *,
            reuse_tree: bool = False, force: bool = False):
-    """What fits the cells of the arm `model` on `pool`, by its kind. Each has `fit(cell, labels,
-    seed)`, which fits one cell, writes it and returns its manifest."""
+    """The object that fits the cells of the arm `model` on `pool`, chosen by the arm's kind. Each
+    has `fit(cell, labels, seed)`, which fits one cell, writes it and returns its manifest."""
     kind = registry.kind(model, pool)
     if reuse_tree and kind != registry.DEFT:
         raise ConfigError(f"--reuse-tree is for an arm of {registry.DEFT_OR_CART}, and "
                           f"{arm_name(model, pool)} is not one.")
     if kind == registry.DEFT:
-        return deft.Arm(config, rows, model, pool, reuse_tree=reuse_tree, force=force)
+        return deft.Arm(config, rows, model, pool, run_dir=run_dir, reuse_tree=reuse_tree,
+                        force=force)
     if kind == registry.IGSR_KIND:
         return igsr.Arm(config, rows, model, pool)
     if kind == registry.PROPOSER:
         return ProposerArm(config, rows, run_dir, model, pool)
-    return FixedArm(config, rows, model, pool)
+    return FixedArm(config, rows, run_dir, model, pool)
 
 
 def check(config: ExperimentConfig) -> None:
     """Refuse a config under which some arm's cells could not be started: one whose settings for
-    a vendored model state a value the grid states too. The driver calls this before it starts
-    anything, so the conflict costs nothing."""
+    a vendored model state a value the grid states too, or whose guidance on the form of the
+    features could not reach DEFT's prompts. The driver calls this before it starts anything, so
+    the conflict is caught before any work is done."""
     for model, pool in config.arm_cells():
         kind = registry.kind(model, pool)
         if kind == registry.DEFT:
             deft.run_overrides(config, pool)
+            deft.check_guidance(config, pool)
         elif kind == registry.IGSR_KIND:
             igsr.run_overrides(config)
 
 
 def blinding_problems(config: ExperimentConfig, context: TaskContext) -> list[str]:
-    """Why the run's blinding cannot stand, or nothing.
+    """The problems with the run's blinding, or an empty list.
 
     `dataset.blinded` must agree with the task description: a blinded run withholds a fact in its
-    `judge_only`, and a run that is not blinded withholds nothing. A blinded run must also not name
-    what it withholds where the models can see it: in a column name, or in the declared description
-    of a covariate any arm is handed (`seqmaestro.llm.blinding_leaks`).
+    `judge_only`, whereas a run that is not blinded withholds nothing. A blinded run must also not
+    name what it withholds where the models can see it: in a column name, in the declared
+    description of a covariate any arm is handed (`seqmaestro.llm.blinding_leaks`), or in the
+    guidance on the form of the features (`seqmaestro.llm.guidance_leaks`).
     """
     task = config.dataset.task
     if config.dataset.blinded and not context.judge_only:
@@ -353,8 +357,12 @@ def blinding_problems(config: ExperimentConfig, context: TaskContext) -> list[st
         return []
     shown = load_dataset(config.dataset.directory).shown_columns(
         pool for _, pool in config.arm_cells())
-    return [f"the run is blinded, and {leak}. Rename the column, or reword `judge_only` in {task}.json "
-            f"so that it does not hold the word." for leak in blinding_leaks(context, shown)]
+    problems = [f"the run is blinded, and {leak}. Rename the column, or reword `judge_only` in "
+                f"{task}.json so that it does not hold the word." for leak in blinding_leaks(context, shown)]
+    return problems + [
+        f"the run is blinded, and {leak}. Reword `grid.generated_features.guidance`, or `judge_only` "
+        f"in {task}.json, so that it does not hold the word."
+        for leak in guidance_leaks(context, config.grid.generated_features.guidance)]
 
 
 # ------------------------------------------------------------------------------ the command
@@ -421,9 +429,9 @@ def main(argv: list[str] | None = None) -> int:
         fitters = {arm: arm_of(config, rows, run_dir, *arm, reuse_tree=args.reuse_tree,
                                force=args.force)
                    for arm in arms}
-        # A description that withholds a fact is a blinded run's, and its models must not be shown
-        # the fact in a column name or a covariate's description either. Checked before a prompt
-        # is printed, which shows what the models would be shown.
+        # A task description that withholds a fact belongs to a blinded run, whose models must not
+        # be shown the fact in a column name or a covariate's description either. This is checked
+        # before a prompt is printed, because the prompt shows what the models would be shown.
         problems = (blinding_problems(config, load_task(DESCRIPTIONS, config.dataset.task))
                     if any(registry.calls_language_model(pool) for _, pool in arms) else [])
     except ValueError as error:
@@ -463,5 +471,7 @@ def main(argv: list[str] | None = None) -> int:
           flush=True)
     failures = Failures(run_dir, call)
     run_cells(planned, target_kind=kind, force=args.force, failures=failures)
-    snapshot_environments(run_dir, {model for model, _ in arms})
+    discovers = any(MOTIF_DISCOVERED in parse_pool(pool) for _, pool in arms)
+    snapshot_environments(run_dir, {model for model, _ in arms},
+                          environments=(MEME_ENVIRONMENT,) if discovers else ())
     return failures.close()

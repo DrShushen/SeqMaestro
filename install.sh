@@ -10,7 +10,8 @@
 # its packages are brought up to what the repository declares. ENVIRONMENTS.md says what each
 # environment holds and why they are kept apart, and README.md what to do after this.
 #
-# Written for the bash that macOS ships (3.2), so it uses no associative array and no `mapfile`.
+# The script is written for the bash that macOS ships (3.2), so it uses no associative array and
+# no `mapfile`.
 
 set -euo pipefail
 
@@ -21,14 +22,19 @@ PYTHON_VERSION=3.12
 PYSR_VERSION=2.5.1
 JULIA_VERSION=1.11.9
 ALPHAGENOME_VERSION=0.9.0
+MEME_VERSION=5.5.9
 # One channel, named in full, so that an environment is built from the same packages whichever
 # conda a machine has, and no channel's terms have to be accepted first.
 CHANNEL=conda-forge
+# The MEME Suite is published on bioconda alone, so its environment takes bioconda beside
+# conda-forge. Neither asks for terms to be accepted.
+BIOCONDA=bioconda
 
 # The environments, by the short name this script takes. A run of the shared config needs the
-# first five. The sixth serves one dataset-preparation script and is built only when asked for.
+# first five. The last two are built only when asked for: the MEME Suite for a run that discovers
+# motifs, and AlphaGenome's client for one dataset-preparation script.
 DEFAULT_SET="core deft igsr pysr localutils"
-EVERY_NAME="core deft igsr pysr localutils alphagenome"
+EVERY_NAME="core deft igsr pysr localutils meme alphagenome"
 
 environment_of() {
     case "$1" in
@@ -37,6 +43,7 @@ environment_of() {
         igsr) echo SeqMaestro_Method_igsr ;;
         pysr) echo SeqMaestro_Method_pysr ;;
         localutils) echo SeqMaestro_LocalUtils ;;
+        meme) echo SeqMaestro_Method_meme ;;
         alphagenome) echo SeqMaestro_Method_alphagenome ;;
         *) return 1 ;;
     esac
@@ -50,14 +57,16 @@ variable_of() {
         igsr) echo IGSR ;;
         pysr) echo PYSR ;;
         localutils) echo LOCALUTILS ;;
+        meme) echo MEME ;;
         alphagenome) echo AG ;;
     esac
 }
 
-# What each environment must be able to import to do its part.
+# What each environment must be able to import to do its part. PySR's and the MEME Suite's
+# environments are checked by running what they run instead (`check_environment`).
 imports_of() {
     case "$1" in
-        core) echo "seqmaestro, sklearn, xgboost, interpret, litellm, psutil, yaml, pytest" ;;
+        core) echo "seqmaestro, sklearn, xgboost, interpret, litellm, psutil, yaml, jinja2, typer, questionary, dotenv, pytest" ;;
         deft) echo "deft, sklearn, litellm, hydra, dill" ;;
         igsr) echo "igsr, sklearn, litellm, hydra" ;;
         pysr) echo "pysr" ;;
@@ -67,13 +76,14 @@ imports_of() {
 }
 
 # The variable naming the provider every language-model call goes to, the providers it can name,
-# and the variables a call to each cannot be made without (.env.example). The list is
-# seqmaestro/llm/client.py's, which a test holds this one to.
+# and the variables each provider's calls require (.env.example). The list is
+# seqmaestro/llm/client.py's, and a test checks that this one matches it.
 PROVIDER_VARIABLE=SEQMAESTRO_LLM_PROVIDER
-PROVIDERS="azure openai claude"
+PROVIDERS="azure azure_foundry openai claude"
 credentials_of() {
     case "$1" in
         azure) echo "SEQMAESTRO_AZURE_OPENAI_KEY SEQMAESTRO_AZURE_OPENAI_DEPLOYMENT SEQMAESTRO_AZURE_OPENAI_ENDPOINT" ;;
+        azure_foundry) echo "SEQMAESTRO_AZURE_FOUNDRY_KEY SEQMAESTRO_AZURE_FOUNDRY_DEPLOYMENT SEQMAESTRO_AZURE_FOUNDRY_ENDPOINT" ;;
         openai) echo "SEQMAESTRO_OPENAI_KEY SEQMAESTRO_OPENAI_MODEL" ;;
         claude) echo "SEQMAESTRO_CLAUDE_KEY SEQMAESTRO_CLAUDE_MODEL" ;;
     esac
@@ -89,8 +99,10 @@ SeqMaestro_LocalUtils), copies .env.example to .env where there is no .env, and 
 result. An environment that exists is kept and its packages are brought up to date.
 
   --only NAMES          build these only, separated by commas:
-                        core, deft, igsr, pysr, localutils, alphagenome
+                        core, deft, igsr, pysr, localutils, meme, alphagenome
   --skip NAMES          build every default environment but these
+  --with-motifs         also build SeqMaestro_Method_meme, the MEME Suite, which a run that
+                        discovers motifs needs (from bioconda, free for non-profit use only)
   --with-alphagenome    also build SeqMaestro_Method_alphagenome, which one dataset-preparation
                         script uses and no run needs
   --check               build nothing: check the environments, the credentials file and the
@@ -117,6 +129,7 @@ INSTALL_MINIFORGE=no
 ACTION=install
 ONLY=""
 SKIP=""
+WITH_MOTIFS=no
 WITH_ALPHAGENOME=no
 
 # Run a command, printing it first. Under --dry-run it is printed and not run.
@@ -157,6 +170,7 @@ while [ $# -gt 0 ]; do
         --only=*) ONLY=$(names_from "${1#--only=}") ;;
         --skip) [ $# -ge 2 ] || fail "--skip needs the environments to leave out"; SKIP=$(names_from "$2"); shift ;;
         --skip=*) SKIP=$(names_from "${1#--skip=}") ;;
+        --with-motifs) WITH_MOTIFS=yes ;;
         --with-alphagenome) WITH_ALPHAGENOME=yes ;;
         --check) ACTION=check ;;
         --check-llm) ACTION=check_llm ;;
@@ -186,10 +200,13 @@ if [ -n "$ONLY" ]; then
     SELECTED=$ONLY
 else
     for name in $DEFAULT_SET; do
-        listed "$name" "$SKIP" || SELECTED="$SELECTED $name"
+        listed "$name" "$SKIP" || SELECTED="${SELECTED:+$SELECTED }$name"
     done
+    if [ "$WITH_MOTIFS" = yes ]; then
+        SELECTED="${SELECTED:+$SELECTED }meme"
+    fi
     if [ "$WITH_ALPHAGENOME" = yes ]; then
-        SELECTED="$SELECTED alphagenome"
+        SELECTED="${SELECTED:+$SELECTED }alphagenome"
     fi
 fi
 
@@ -292,15 +309,15 @@ need_conda() {
 }
 
 # The prefix of a named environment, or nothing where this conda has none of that name. It never
-# fails, and awk takes in the whole listing, so that neither a conda that cannot start nor a
-# closed pipe ends the script here without a word.
+# fails, and awk reads the whole listing, so that neither a conda that cannot start nor a closed
+# pipe ends the script here without a word.
 prefix_of() {
     { "$CONDA" env list 2>/dev/null || true; } |
         awk -v name="$1" '$1 == name && !found { found = $NF } END { if (found) print found }'
 }
 
-# The same once the environment is built. Under --dry-run, where nothing was built, it stands for
-# the place the environment would be.
+# The prefix of an environment that must exist by now, since it was just created or kept. Under
+# --dry-run, where nothing was built, it stands for the place the environment would be.
 prefix_for() {
     local prefix
     prefix=$(prefix_of "$1")
@@ -346,7 +363,7 @@ build_core() {
     fi
     local prefix
     prefix=$(prefix_for SeqMaestro_Core)
-    pip_install "$prefix" -e ".[models,llm,driver,dev]"
+    pip_install "$prefix" -e ".[models,llm,driver,cli,dev,docs]"
 }
 
 build_deft() {
@@ -432,6 +449,18 @@ build_localutils() {
     pip_install "$prefix" -e ".[localutils]"
 }
 
+build_meme() {
+    step "SeqMaestro_Method_meme: the MEME Suite's STREME and Tomtom, for the discovered motifs"
+    say "The MEME Suite is free for educational, research and non-profit use. Commercial use needs"
+    say "a licence from UC San Diego (https://meme-suite.org/meme/doc/copyright.html)."
+    if [ -n "$(prefix_of SeqMaestro_Method_meme)" ]; then
+        say "SeqMaestro_Method_meme exists, and is kept."
+        return 0
+    fi
+    run "$CONDA" create -y -n SeqMaestro_Method_meme --override-channels -c "$CHANNEL" \
+        -c "$BIOCONDA" "python=$PYTHON_VERSION" "meme=$MEME_VERSION"
+}
+
 build_alphagenome() {
     step "SeqMaestro_Method_alphagenome: AlphaGenome's client, for one dataset-preparation script"
     ensure_environment SeqMaestro_Method_alphagenome
@@ -477,6 +506,14 @@ check_environment() {  # short name
         fi
         return 0
     fi
+    if [ "$name" = meme ]; then
+        if reason=$("$prefix/bin/streme" --version 2>&1) && "$prefix/bin/tomtom" --version >/dev/null 2>&1; then
+            fine "$environment runs STREME and Tomtom $reason"
+        else
+            problem "$environment cannot run STREME and Tomtom. Run: ./install.sh --only meme"
+        fi
+        return 0
+    fi
     # -I: what is imported is what the environment holds, and not this folder or the home directory.
     if reason=$("$prefix/bin/python" -I -c "import $modules" 2>&1); then
         fine "$environment imports $modules"
@@ -497,7 +534,7 @@ sys.exit("\n".join(missing) if missing else 0)
 '
 
 # Whether a stage running under Core finds the other environments' interpreters, which it looks
-# for beside its own (ENVIRONMENTS.md, "How the pipeline finds the other interpreters").
+# for beside its own (ENVIRONMENTS.md, "Finding the other interpreters").
 check_discovery() {
     local core name environment reason expected=""
     core=$(prefix_of SeqMaestro_Core)
@@ -523,6 +560,11 @@ check_discovery() {
         fine "the driver starts (experiments/runners/run_experiment.py --help)"
     else
         problem "the driver does not start: $core/bin/python experiments/runners/run_experiment.py --help"
+    fi
+    if "$core/bin/seqmaestro" --help >/dev/null 2>&1; then
+        fine "the command line starts (seqmaestro --help, in SeqMaestro_Core)"
+    else
+        problem "the command line does not start: $core/bin/seqmaestro --help. Run: ./install.sh --only core"
     fi
 }
 
@@ -616,14 +658,23 @@ check_llm() {
         fi
         "$core/bin/python" -I - <<'EOF'
 import sys
+from pathlib import Path
 
-from seqmaestro.llm.client import LiteLLMClient, missing_settings
+import yaml
+
+from seqmaestro.llm.client import CallSettings, LiteLLMClient, missing_settings
 
 missing = missing_settings()
 if missing:
     sys.exit(f"not set: {', '.join(missing)}. Fill them in .env (.env.example says what each is).")
-client = LiteLLMClient(num_retries=0, request_timeout=60)
-reply = client.complete("You reply with one word.", "Reply with the word: ready")
+# The reasoning effort the shared config states for every run, so that a model which refuses it
+# fails here, with no retry and a short wait, so that a wrong setting is reported at once.
+stated = yaml.safe_load(Path("experiments/configs/_shared.yaml").read_text())["language_model"]
+client = LiteLLMClient(CallSettings(reasoning_effort=stated["reasoning_effort"], retries=0,
+                                    timeout_seconds=60))
+# Room for a one-word reply, and for any reasoning before it.
+reply = client.complete("You reply with one word.", "Reply with the word: ready",
+                        max_completion_tokens=4096)
 if not reply.ok:
     sys.exit(f"The call to {client.model} failed.\n{reply.error}")
 print(f"{client.model} answered {reply.text.strip()!r}, for {client.usage()['total_tokens']} "
@@ -668,7 +719,7 @@ case "$ACTION" in
         ;;
 esac
 
-say "SeqMaestro: building$SELECTED"
+say "SeqMaestro: building $SELECTED"
 say "with $CONDA, from $REPO"
 for name in $SELECTED; do
     "build_$name"
@@ -696,5 +747,6 @@ The environments are built and checked, in $took.
 
 Next (README.md has the detail):
   1. Fill in .env with your language model's provider and key, then try it:   ./install.sh --check-llm
-  2. Start a run with Claude Code:   set -a && source .env && set +a && claude "/seqmaestro ..."
+  2. Start a run with an agent:   ./agent.sh claude   (or codex, openhands, claude-science)
+     or from the command line:    conda activate SeqMaestro_Core && seqmaestro run <table>
 EOF

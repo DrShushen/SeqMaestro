@@ -15,8 +15,8 @@ from seqmaestro.harness.power import (
     smallest_detectable_auroc,
 )
 
-# The command-line front end is a script, so it is loaded by path. It holds only the split reading
-# and formatting, and the arithmetic imported above is library code with its own tests.
+# The command-line front end is a script, so it is loaded by path. It only reads the splits and
+# formats the result, whereas the arithmetic imported above is library code with its own tests.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "experiments" / "prepare"))
 from design_power import describe, describe_rows, from_splits
 
@@ -91,8 +91,8 @@ def test_from_splits_reports_test_precision_and_training_information(tmp_path):
 
 
 def test_unequal_weights_reduce_the_training_figure_and_say_so(tmp_path):
-    """Many unequally weighted rows can carry little information, and the tool exists to make that
-    visible."""
+    """Many unequally weighted rows can amount to little information, and the tool exists to make
+    that visible."""
     _write_splits(tmp_path / "weighted",
                   weights=lambda n: np.concatenate([np.ones(n // 4), np.full(n - n // 4, 1e-4)]))
     table = from_splits(tmp_path / "weighted", "is_positive", BINARY, "fit_weight")

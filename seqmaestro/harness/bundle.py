@@ -1,39 +1,27 @@
 """What an arm running in another environment hands back.
 
-Some methods cannot run in this interpreter, because they are vendored libraries with their own
-dependency sets, pinned to their own conda environments. Their results must still go into the same
-run directory as everything else, so that the downstream analyses read them the same way.
-
-**The handover is a directory of files, and this module defines it.** A method's adapter writes a
-bundle in its own environment using only the standard library and numpy. This side reads it, checks
-it, and scores it exactly as it scores an in-process arm. Neither side imports the other, so their
-environments are free to differ in every dependency.
+A vendored method cannot run in this interpreter, because its dependencies are pinned in a separate
+conda environment. Its adapter therefore writes a bundle, a directory of files, using only the
+standard library and numpy, and this side reads the bundle, checks it and scores it with the same
+code as an arm fitted in Core, so that neither side imports the other:
 
     <bundle>/
-        arm.json             `bundle_version`, what produced this (the model, the seed, and any
-                             cost the method wants to carry, such as tokens or wall clock), and
-                             `fitted_model`, the path inside the bundle of the model it fitted
+        arm.json             bundle_version and fitted_model, which are required, then whatever
+                             the method records (its model's name, the settings it ran with, its
+                             environment, its wall clock and token usage)
         predictions.npz      val_true, val_score
         features.json        the features the method used, in the shared record schema
-        feature_values.npz   those features evaluated on the reference split
-        effect_values.npz    those features over the training rows, with the real labels, which is
-                             where `marginal_effect` is measured
+                             (schema_version, importance_kind, direction_kind, features)
+        feature_values.npz   names, values: those features evaluated on the reference split
+        effect_values.npz    names, values, y: those features over the training rows with the
+                             real labels, on which marginal_effect is measured
+        <fitted_model>       the model the adapter fitted, in the method's own format
 
-**Row alignment is the failure to guard against.** An adapter that returns predictions in a
-different order from the split it was given produces a score that looks plausible and means
-nothing. So the bundle carries the labels it saw, and `read_bundle` refuses it unless they agree
-with the split's on every row (`_agree`). Inspecting the numbers afterwards cannot catch this error.
-
-**No test split.** An adapter's fit is never given the test rows, and a bundle carrying test
-predictions is refused. The test split is opened once, at the reveal, which hands the adapter the
-test rows without their labels and asks it to predict them with the model named in `fitted_model`
-(see `seqmaestro.harness.heldout`). That model is therefore mandatory: without it the cell could
-never be scored on the test split.
-
-**Features are mandatory.** An arm that reports no features has not been measured on the axis this
-project exists to measure, and an adapter that silently fails to extract them looks identical to
-one that worked. `"features": []` is allowed, because it says the method selected nothing, which is
-a real result. The key itself must be present.
+`read_bundle` refuses a bundle whose labels disagree with the split's on any row (`_agree`), one
+that holds test predictions, one without the model `fitted_model` names, and one without the
+`features` key, whereas `"features": []` is a real result (the method selected nothing).
+`describe_contract()` returns the contract as data, and `experiments/adapters/README.md` explains
+each rule for whoever writes an adapter.
 """
 
 from __future__ import annotations
@@ -54,17 +42,17 @@ from seqmaestro.harness.features import (
 from seqmaestro.harness.heldout import TEST_ARRAYS
 from seqmaestro.target import target_for
 
-#: Bumped when the layout below changes in a way an existing adapter would get wrong, so that an
+#: Bumped when the bundle's layout changes in a way an existing adapter would get wrong, so that an
 #: adapter writing an older version fails loudly instead of being misread.
 #:
-#: An older bundle is refused, never adapted. One without `effect_values.npz` has no training rows
-#: to measure `marginal_effect` on, and measuring it on validation for those arms alone would give
-#: one column two meanings inside a single run. One without `fitted_model` can never be scored at
-#: the reveal.
+#: A bundle of an older version is refused, never adapted. One without `effect_values.npz` has no
+#: training rows to measure `marginal_effect` on, and measuring it on validation for those arms
+#: alone would give one column two meanings within one run. One without `fitted_model` can never be
+#: scored at the reveal.
 BUNDLE_VERSION = 3
 
 PREDICTION_KEYS = ("val_true", "val_score")
-#: Arrays a bundle must not carry: the reveal adds them to the cell.
+#: Arrays a bundle must not hold, because the reveal adds them to the cell.
 WITHHELD_KEYS = TEST_ARRAYS
 REQUIRED_FILES = ("arm.json", "predictions.npz", "features.json", "feature_values.npz",
                   "effect_values.npz")
@@ -72,7 +60,7 @@ REQUIRED_FILES = ("arm.json", "predictions.npz", "features.json", "feature_value
 
 @dataclass(frozen=True)
 class Bundle:
-    """A validated handover from a foreign arm."""
+    """A validated bundle from an arm fitted in another environment."""
 
     arm: dict
     y_val: np.ndarray
@@ -92,14 +80,14 @@ class Bundle:
 
     @property
     def direction_kind(self) -> str | None:
-        """What the adapter took its `direction` field from. `None` when the adapter reports no
-        direction, which is allowed: the marginal effect is computed on this side and does not
-        depend on it."""
+        """What the adapter took its `direction` field from, or `None` when the adapter reports no
+        direction. That is allowed, because the marginal effect is computed on this side and does
+        not depend on it."""
         return self.header.get("direction_kind")
 
 
 def read_bundle(path: str | Path, target_kind: str, y_val: np.ndarray | None = None) -> Bundle:
-    """Read and validate a bundle of an arm fitted against a `target_kind` target.
+    """Read and validate the bundle of an arm fitted to a target of kind `target_kind`.
 
     Pass the validation labels to check row alignment. They are optional only so that a bundle can
     be inspected on its own. **`ingest_bundle` always passes them**, because without them an adapter
@@ -219,9 +207,9 @@ def _check_alignment(path: Path, split: str, reported: np.ndarray, expected: np.
 
 def _agree(reported: np.ndarray, expected: np.ndarray) -> np.ndarray:
     """Which rows hold the same value. A continuous target written to an adapter's CSV and read back
-    can return a unit in the last place away, because pandas' default parser does not always return
-    the nearest float, so floating values agree within a relative 1e-12. A row out of order differs
-    by far more."""
+    can come back one unit in the last place away, because pandas' default parser does not always
+    return the nearest float. Floating-point values therefore agree within a relative tolerance of
+    1e-12, whereas a row out of order differs by far more."""
     if np.issubdtype(reported.dtype, np.floating):
         return np.isclose(reported, expected, rtol=1e-12, atol=0.0)
     return reported == expected

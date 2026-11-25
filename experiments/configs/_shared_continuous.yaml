@@ -1,6 +1,6 @@
 # What every dataset with a continuous target has in common. It extends `_shared.yaml` and states
 # only what the kind of target changes, so wherever the two kinds agree they share one setting.
-# It is not runnable on its own, because it names no dataset.
+# It cannot run on its own, because it names no dataset.
 extends: _shared.yaml
 
 grid:
@@ -8,12 +8,13 @@ grid:
   # used, as for every kind.
   class_weight: null
 
-# `l1` in `_shared.yaml`'s arms is l1_linear here: the same sparse linear model, fitted by least
-# squares. EBM and XGBoost fit the continuous target with their regressors. XGBoost's regressor stops
-# adding trees on a part of its fitting rows set aside for that (`seqmaestro/models/boosting.py`),
-# since a fixed number of trees fits a heavy tail's noise. `pysr` fits its equation under squared
-# error, as it fits the log-odds under the logistic loss for a binary target. DEFT grows a
-# regression tree, by variance reduction, with prompts written for a continuous target.
+# `l1` in `_shared.yaml`'s arms is l1_linear here, the sparse linear model fitted by least squares.
+# EBM and XGBoost fit the continuous target with their regressors. XGBoost's regressor decides when
+# to stop adding trees on a part of its fitting rows set aside for that
+# (`seqmaestro/models/boosting.py`), since a fixed number of trees fits a heavy tail's noise.
+# `pysr` fits its equation under squared error, as it fits the log-odds under the logistic loss for
+# a binary target. DEFT grows a regression tree, by variance reduction, with prompts written for a
+# continuous target.
 models:
   igsr:
     # Influence-guided symbolic regression: a linear model over terms a language model writes as
@@ -26,13 +27,13 @@ models:
       # The paper's IGSR: terms pruned by influence alone, with no second model call.
       - experiment.algorithmic_pruning=true
       # Terms kept at each pruning: the reduction's budget, so the search arrives at a model of the
-      # size Stage 3A cuts every arm to.
+      # size Stage 3A reduces every arm to.
       - experiment.keep_n_terms=10
       # The tree search's budget, reduced from the paper's 30 expansions and 5 successors per node,
-      # as DEFT's reflections are reduced from its paper's. Each expansion adds one node, and a
-      # node's successors are proposed together, one model call each, when the search first reaches
-      # it, so a cell makes a little more than one call per expansion, and more where a term is sent
-      # back for repair.
+      # as DEFT's reflections are reduced from its paper's. Each expansion adds one node, and when
+      # the search first reaches a node its agent runs once for each successor, each run making one
+      # to three calls, so a cell makes 12 to 54 calls at these settings, more where a run fails and
+      # is made again (seqmaestro/pipeline/calls.py counts them).
       - experiment.total_budget=10
       - experiment.n_successors=3
 

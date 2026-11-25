@@ -3,32 +3,27 @@
     python experiments/runners/run_reliability.py --run-dir experiments/runs/<date>_<name>
     python experiments/runners/run_reliability.py --run-dir ... --after-reveal
 
-Where the config has a `reliability` section, the panel profiles every reduced arm but those of a
-black-box model and those an entry of `arms` leaves out with a reason (`not_profiled`). For every
-candidate feature of each profiled arm, the panel asks three things: would the arm's selection have
-chosen it on another half of the data (Tier 1), does it go with the target on its own (Tier 2),
-and does the reduced model get worse without it (Tier 3). `docs/reliability.md` says what is
-computed and why.
+Where the config has a `reliability` section, the panel profiles every reduced arm except those of
+a black-box model and those an entry of `arms` leaves out with a reason (`not_profiled`).
+`docs/developer/reliability.md` says what is computed and why.
 
-**Before the reveal** (the default; refuses a revealed run): Step 0 and its reproduction checks,
-Tier 2 in-sample on train + val, the leave-one-out refits saved as cells, and Tier 1's selections.
-Each selection is the arm's whole selection run again on half of train + val (fit the pool, keep
-what the model used, eliminate to N), and an arm makes `2 * pairs` of them, or three times that on
-the check arm, so `--workers` fans them out, in as many workers as fit in the memory the panel may
-hold (`--memory-gb`, or what the driver gave the process); the results depend on neither. Given no
-`--workers`, the panel runs as many as the threads the driver gave it, and follows the number as
-the driver lends it the threads that free up while it runs and takes them back. Each arm ends with
-its record, which the reveal checks for and seals. The reveal then scores the refits and computes
-Tier 2 on the test split. The driver runs this side once per arm (`--arms`), each call as soon as
-its arm is reduced.
+**Before the reveal** (the default, which refuses a revealed run): Step 0 and its reproduction
+checks, Tier 2 in-sample on the training and validation rows, the leave-one-out refits saved as
+cells, and Tier 1's selections. An arm makes `2 * pairs` selections (three times that on the check
+arm), so `--workers` spreads them over parallel workers, limited to as many as fit in the memory the
+panel may hold (`--memory-gb`, or what the driver gave the process), and the results depend on
+neither setting. Without `--workers`, the panel runs as many workers as the driver gave it threads,
+and follows that number as the driver lends it the threads that free up while it runs and takes
+them back. Each arm ends with its record, which the reveal checks for and seals. The driver runs
+this part once per arm (`--arms`), each call as soon as its arm is reduced.
 
-**After the reveal** (`--after-reveal`; refuses a run that has not been revealed): Tier 3 from the
-revealed predictions, the global-null and planted-signal checks, and each arm's tables, with one row
-per arm in `reliability/summary.csv`.
+**After the reveal** (`--after-reveal`, which refuses a run that has not been revealed): Tier 3
+from the revealed predictions, the global-null and planted-signal checks, and each arm's tables,
+with one row per arm in `reliability/summary.csv`.
 
 The panel's fits are made wherever the arm's model lives (`seqmaestro.pipeline.sides`). Before the
-reveal, every step of every arm is skipped when its files are there, unless `--force` is given.
-After it, Tier 3, the checks and the tables are computed again on every call.
+reveal, every step of every arm whose files exist is skipped unless `--force` is given, whereas
+after it, Tier 3, the checks and the tables are computed again on every call.
 """
 
 from __future__ import annotations
@@ -109,8 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def tier1_workers(args: argparse.Namespace) -> tuple[int, Path | None]:
     """How many workers Tier 1 starts with, and the file it follows as the driver lends the panel
-    threads and takes them back: `--workers` where given, which stays fixed, and otherwise the
-    threads this process was given, or every core."""
+    threads and takes them back. A number given with `--workers` stays fixed. Otherwise Tier 1
+    starts with the threads this process was given (or every core) and follows the file."""
     if args.workers is not None:
         return args.workers, None
     return allowed_threads() or os.cpu_count(), threads_file()
@@ -160,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 panel.before_reveal(workers=workers, memory=memory, threads_file=follow,
                                     force=args.force, log=print)
-        except Exception:  # one arm must not take the others with it
+        except Exception:  # a failure in one arm must not stop the others
             failures.record(arm_name(*arm))
             continue
         print(f"    done in {time.time() - started:.1f}s", flush=True)

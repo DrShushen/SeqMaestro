@@ -1,18 +1,20 @@
-"""A stand-in for PySR's search process, for Core's tests: no Julia, no PySR, a front in seconds.
+"""A stand-in for PySR's search process, for the tests run under `SeqMaestro_Core`. It needs
+neither Julia nor PySR, and it returns a front of equations in seconds.
 
-It runs under Core's interpreter and serves through the search process's own loop
+It runs under Core's interpreter and serves through the real search process's loop
 (`seqmaestro/models/symbolic_search.py`, loaded by its path), so the request, the reply and the
-reply channel are the real ones. Only the search is replaced. By default the front is fitted on the
-searched rows in the loss the request names, squared error or the logistic loss on labels of -1
-and +1: the constant, then linear equations over the best 1, 2, 4 and 8 columns, the best being
-those most correlated with the target.
+reply channel are the real ones, and only the search is replaced. By default the front is fitted on
+the searched rows under the loss the request names (squared error, or the logistic loss on labels
+of -1 and +1). It holds the constant, then linear equations over the best 1, 2, 4 and 8 columns,
+where the best columns are those most correlated with the target.
 
-A test that needs other equations copies this script into a directory of its own and writes
+A test that needs other equations copies this script into a separate directory and writes
 `front.json` beside it: `{"trees": [...], "losses": [...], "perturb": 0.0}`. The trees are
-returned as the front, with the losses given as PySR's (or squared error when none are given), and
-PySR's values are the trees evaluated here and multiplied by `1 + perturb`. A copy with a file named
-`keep_requests` beside it keeps each request there as `last_request.npz`, with the thread count the
-process was started with, so a test can see what the model sent.
+returned as the front, and the losses as PySR's (when none are given, the loss the request names
+is computed here). PySR's prediction of each equation is the tree evaluated here and multiplied by
+`1 + perturb`. A copy with a file named `keep_requests` beside it keeps each request there as
+`last_request.npz`, with the thread count and the temporary directory the process was started
+with, so that a test can see what the model sent.
 """
 
 from __future__ import annotations
@@ -32,8 +34,9 @@ SEARCH = Path(equation.__file__).with_name("symbolic_search.py")
 
 
 def fitted_line(design, y, w, logistic):
-    """Weighted least squares, or a weighted logistic regression of labels of -1 and +1 by
-    Newton's method with a small ridge, which keeps a separable design finite."""
+    """The coefficients of a weighted least-squares fit, or of a weighted logistic regression of
+    labels of -1 and +1 fitted by Newton's method with a small ridge penalty, which keeps the
+    coefficients finite on a separable design."""
     if not logistic:
         root = np.sqrt(w)[:, None]
         return np.linalg.lstsq(design * root, y * root[:, 0], rcond=None)[0]

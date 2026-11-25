@@ -1,15 +1,15 @@
 """Class weighting, defined once so every arm means the same thing by it.
 
-On an imbalanced dataset (a 10% positive rate, say), every model left alone spends its capacity on
-the majority class: a tree's impurity gain is dominated by it, and a boosted model's early rounds
-chase it. The comparison is between *feature sources*, so any difference in how the models handle
-imbalance is noise in the thing being measured.
+On an imbalanced dataset (a 10% positive rate, say), every model fitted without weights spends its
+capacity on the majority class: a tree's impurity gain is dominated by it, and a boosted model's
+early rounds chase it. The comparison is between *feature sources*, so any difference in how the
+models handle imbalance is noise in what is being measured.
 
 **One definition.** `balanced` here is scikit-learn's, `n_samples / (n_classes * count)` per class,
-which is also what DEFT's tree resolves `class_weight="balanced"` to. The agreement matters more
-than the formula. The models fitted in Core and the vendored tree sit on opposite sides of an
-environment boundary and cannot share code, so they share the arithmetic instead. If one side's
-definition of "balanced" drifts, the arms stop being comparable and nothing reports it.
+which is also what DEFT's tree resolves `class_weight="balanced"` to. That the two agree matters
+more than the formula: the models fitted in Core and the vendored tree run in different conda
+environments and cannot share code, so they share the arithmetic instead. If one side's definition
+of "balanced" drifted, the arms would stop being comparable without any error being raised.
 
 **Weights are for fitting only.** Metrics are computed on unweighted rows, validation and test
 alike, because the prevalence a model is scored against is the one the data has. Weighting the
@@ -46,7 +46,7 @@ def resolve_fit_weights(y, class_weight: str | None, given: np.ndarray | None) -
     Per-row weights **replace** class weighting and are not combined with it. They exist for a
     matched design expressed as weights instead of subsampling. Such weights already equalise the
     classes within each stratum, so a class correction on top would correct twice. Every model
-    resolves this here, in the same way.
+    resolves its weights here, so all of them resolve the weights in the same way.
     """
     if given is None:
         return sample_weight(y, class_weight)
@@ -58,9 +58,9 @@ def resolve_fit_weights(y, class_weight: str | None, given: np.ndarray | None) -
     if given.sum() <= 0:
         raise ValueError("sample_weight sums to zero; nothing would be fitted.")
 
-    # **Rescaled to mean 1, which changes the fit.** A regularised objective is
+    # **The weights are rescaled to mean 1, which changes the fit.** A regularised objective is
     # `C * sum_i w_i * loss_i + penalty`, so the *total* weight sets how much the data counts
-    # against the penalty. Weights that balance strata, `1 / n_class(stratum)`, are small, and their
+    # against the penalty. Weights that balance strata (`1 / n_class(stratum)`) are small, and their
     # sum can be a small fraction of the row count. Unnormalised, they multiply the effective
     # regularisation by the ratio of row count to total weight, which can be enough for an L1 fit
     # to zero every coefficient. Normalising leaves every *relative* weight untouched, and matches
@@ -71,8 +71,8 @@ def resolve_fit_weights(y, class_weight: str | None, given: np.ndarray | None) -
 def sample_weight(y, class_weight: str | None) -> np.ndarray | None:
     """Per-row fitting weights, or `None` when no weighting is asked for.
 
-    `None` instead of an array of ones, because a model handed uniform weights is not always
-    identical to one handed none (libraries take different code paths), and the unweighted
+    It returns `None` instead of an array of ones, because a model handed uniform weights is not
+    always identical to one handed none (libraries take different code paths), and the unweighted
     configuration should be the library's unweighted fit.
     """
     if resolve_class_weight(class_weight) is None:

@@ -1,34 +1,37 @@
-"""Open the test split, once, and score every saved model on it.
+"""Open the held-out split once and score every saved model on it.
 
     python experiments/runners/run_reveal.py --run-dir experiments/runs/<date>_<name>
     python experiments/runners/run_reveal.py --run-dir ... --check    # is it ready? reveals nothing
 
-Every stage before this one works on the training and validation rows. This step opens the test
-split:
+Every stage before this one works on the training and validation rows, whereas this step opens the
+held-out split:
 
-1. **Check the run is finished.** Every cell the run's recorded config should have produced must
-   exist, have been scored on validation, and have saved its model, and every arm the reliability
-   panel profiles must have its record. Otherwise the reveal refuses and lists what is missing.
-   With `--override-incomplete REASON` it goes ahead, and records the reason and what was missing
-   in `reveal.json`, because a reveal over a partial run qualifies every number it produces.
-2. **Seal it.** `reveal.json` is written before any test row is read, listing everything the reveal
-   will score. From then on the stages that fit or select refuse to run in this directory.
-3. **Read the test split**, checked against the digest Stage 1 recorded for it.
+1. **Check that the run is finished.** Every cell the run's recorded config should have produced
+   must exist, must have been scored on the validation split and must have saved its model, and
+   every arm the reliability panel profiles must have its record. Otherwise the reveal refuses and
+   lists what is missing. With `--override-incomplete REASON` it goes ahead and records the reason
+   and what was missing in `reveal.json`, because a reveal over a partial run qualifies every
+   number it produces.
+2. **Seal the run.** Before any held-out row is read, `reveal.json` is written with a list of
+   everything the reveal will score. From then on, the stages that fit or select refuse to run in
+   this directory.
+3. **Read the held-out split** and check it against the digest Stage 1 recorded for it.
 4. **Predict and score each sealed cell**: the arms', the baseline's, each reduced arm's three
    models and each profiled arm's leave-one-out refits. Each cell's model predicts wherever it
    lives (`seqmaestro.pipeline.sides`, by the `predict_with` its `run.json` records): a Core model
-   in this process, and a vendored method's on its side of the environment boundary, which is
-   handed the rows without their labels. Each cell's test block is scored with a binary target's
-   threshold chosen on validation and the seed and bootstrap count the cell recorded, and written
-   into the cell's `metrics.json` and `predictions.npz` (see `seqmaestro.harness.heldout`).
-5. **Compute each profiled arm's Tier 2 on the test split**, the only test-side work that does not
-   score a model. The arm's prefiltered pool is evaluated on the test rows by the featuriser, tree
-   or terms it came from, and the association of each feature with the real labels, with a
-   permutation of them and, on the check arm, with the planted labels is calibrated (see
-   `seqmaestro.reliability.panel`).
+   in this process, and a vendored method's model on its side of the environment boundary, which
+   is handed the rows without their labels. Each cell's test block is scored with the seed and
+   bootstrap count the cell recorded (and, for a binary target, with the threshold chosen on the
+   validation split), and is written into the cell's `metrics.json` and `predictions.npz` (see
+   `seqmaestro.harness.heldout`).
+5. **Compute each profiled arm's Tier 2 on the held-out split**, which is the only held-out work
+   that does not score a model. The arm's prefiltered pool is evaluated on the held-out rows by the
+   featuriser, tree or terms it came from, and the association of each feature is computed with the
+   real labels, with a permutation of them and, on the check arm, with the planted labels, and then
+   calibrated (see `seqmaestro.reliability.panel`).
 
-Nothing is refitted. The reveal is resumable: run again after an interruption, it does whatever on
-the sealed list is not done yet, and nothing else.
+The reveal refits nothing. It is resumable: when it is run again after an interruption, it does
+whatever on the sealed list is not yet done, and nothing else.
 """
 
 from __future__ import annotations
@@ -78,14 +81,15 @@ CALL = "reveal"
 #: How many missing cells a refusal lists before summarising the rest.
 SHOWN = 12
 
-#: What `reveal.json` counts a profiled arm's Tier 2 under, beside the cells counted by directory.
+#: The key under which `reveal.json` counts the profiled arms' Tier 2, beside the cells, which it
+#: counts by directory.
 PANEL_KIND = "reliability_tier2"
 
 
 def readiness(cell: Path, target_kind: str) -> str | None:
     """Why a cell cannot be revealed for a dataset of this kind of target, or None when it can.
-    Everything scoring a cell needs is asked for here, so that no cell fails once the seal is
-    written."""
+    Everything that scoring a cell needs is checked here, so that a cell cannot fail once the seal
+    is written."""
     if not cells.is_finished(cell):
         return f"no {cells.METRICS_FILE}: the cell did not finish"
     if cells.VALIDATION not in cells.read_metrics(cell):
@@ -119,15 +123,15 @@ def cells_on_disk(run_dir: Path) -> set[str]:
 
 def panels_of(config: ExperimentConfig) -> dict[str, Arm]:
     """Each arm the reliability panel profiles, by its directory relative to the run: the item the
-    reveal seals for its Tier 2 on the test split."""
+    reveal seals for its Tier 2 on the held-out split."""
     return {str(reliability_dir("", *arm)): arm for arm in config.profiled_arms()}
 
 
 def predict(run_dir: Path, cell: Path, test: pd.DataFrame, dataset: Dataset
             ) -> tuple[np.ndarray, int | None]:
     """The saved model's score for every test row, in row order, and how many rows took the
-    model's constant prediction (`Side.predict`). The rows carry every covariate the dataset
-    declares, and no label."""
+    model's constant prediction (`Side.predict`). The rows hold every covariate the dataset
+    declares and no label."""
     run = cells.read_run(cell)
     return side_of(run, cell).predict(run_dir, cell, run, dataset.inputs(test), dataset)
 
@@ -136,8 +140,8 @@ def survey(run_dir: Path, config: ExperimentConfig) -> tuple[list[str], dict[str
     """What the run should hold, what of it is not ready and why, and what it holds besides.
 
     The config names the cells and the panels. A panel's leave-one-out cells depend on what the
-    reduction and the panel found, so they are listed by its record; a panel without one is not
-    ready, and nothing of it is sealed.
+    reduction and the panel found, so they are listed by its record. A panel without a record is
+    not ready, and none of it is sealed.
     """
     expected_cells = [str(cell) for cell in config.expected_cells()]
     not_ready = {}
@@ -182,9 +186,9 @@ def seal(run_dir: Path, config: ExperimentConfig, dataset: Dataset, override: st
 
 
 def summarise(run_dir: Path, sealed: list[str], headline: str) -> str:
-    """Mean test headline per arm (AUROC for a binary target, R-squared for a continuous one), for
-    the log: every label condition of the arms, and each reduced model. The cells hold the full
-    blocks."""
+    """The mean held-out score of each arm on the headline metric (AUROC for a binary target,
+    R-squared for a continuous one), for the log: every label condition of the arms and each
+    reduced model. The cells hold the full blocks."""
     table = []
     for relative in sealed:
         parts = Path(relative).parts
@@ -265,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 scores, filled = predict(run_dir, item, test, dataset)
                 score_cell(item, y_test, scores, target_kind=dataset.target_kind, filled=filled)
-        except Exception:  # one item must not stop the rest; the reveal resumes
+        except Exception:  # a failed item must not stop the rest, and a rerun retries it
             failures.record(relative)
             continue
         scored[kind] += 1

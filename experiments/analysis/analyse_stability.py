@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Stability of every arm of a run across seeds, against its permuted-label null.
+"""Stability of every arm of a run across seeds, compared with its permuted-label null.
 
     experiments/analysis/analyse_stability.py --run-dir experiments/runs/<date>_<name>
 

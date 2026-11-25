@@ -1,18 +1,18 @@
-"""The fraction of the sequence each symbol makes up: *how much* of each base, and nothing more.
+"""The fraction of the sequence that each symbol makes up: *how much* of each base there is.
 
 This is the featurisation of the composition baseline, which every run fits before its arms, so an
 arm's score can be compared with what base composition alone achieves on the same rows. It is the
-plainest description of a sequence there is: no position, no order, no neighbours. A dataset whose
-target goes with composition is predicted by it, whatever else the target goes with, and an arm
-that scores no better than it has not shown that it found anything composition does not already
-give.
+simplest description of a sequence, with no position, order or neighbouring bases. Where the target
+is associated with composition, these columns predict it, whatever else the target is associated
+with, so an arm that scores no better than the baseline has not shown that it found anything beyond
+composition.
 
-It is not a pool member. The baseline is a reference line and not an arm, and an arm handed these
-columns would be measured against itself.
+It is not a feature source, because the baseline is the reference line every arm is compared with,
+and an arm handed these columns would be compared with itself.
 
 Each column is a fraction and not a count, so sequences of different lengths are comparable. The
 fractions of a row sum to one, so the columns are collinear by construction. The baseline's model
-is regularised and fits on standardised columns, which copes with that.
+is regularised and fits on standardised columns, which copes with the collinearity.
 """
 
 from __future__ import annotations
@@ -38,7 +38,8 @@ class CompositionFeaturiser(Featuriser):
     """One column per symbol seen in training: the fraction of the sequence it makes up.
 
     The alphabet is learned from the training sequences, like every other featuriser's, so a symbol
-    such as `N` becomes a column when the data holds it rather than being assumed away.
+    such as `N` becomes a column when the data holds it, instead of being dropped by an assumed
+    alphabet.
     """
 
     def __init__(self) -> None:

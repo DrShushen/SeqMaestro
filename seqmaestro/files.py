@@ -1,13 +1,14 @@
-"""Writing a file whole.
+"""Writing a file in one step, so that a reader never finds half of it.
 
-Several files of a run mark work as finished by existing: a cell's `metrics.json`, an arm's
+Several files of a run mark work as finished by their existence: a cell's `metrics.json`, an arm's
 `reduction.json`, a panel's record. A process killed in the middle of writing one would leave half
 a file under the name that says the work is done, and the next call would skip it. Every function
 here therefore writes under a temporary name in the same directory and renames the result into
-place, which the file system does in one step. A reader sees the earlier file or the new one.
+place, which the file system does in one step, so a reader sees either the earlier file or the new
+one.
 
-The temporary name holds the number of the writing process, so two processes that write the same
-file cannot write into each other's.
+The temporary name holds the ID of the writing process, so two processes that write the same file
+never write into each other's temporary file.
 """
 
 from __future__ import annotations
@@ -35,13 +36,13 @@ def write_text(path: str | Path, text: str) -> Path:
 
 
 def write_json(path: str | Path, payload: Any, default: Callable[[Any], Any] | None = None) -> Path:
-    """`payload` as indented JSON. `default` turns a value JSON has no form for into one that it
-    has, as in `json.dumps`."""
+    """Write `payload` as indented JSON. `default` converts a value JSON cannot represent into one
+    it can, as in `json.dumps`."""
     return write_text(path, json.dumps(payload, indent=2, default=default) + "\n")
 
 
 def write_arrays(path: str | Path, **arrays: Any) -> Path:
-    """The arrays as a compressed `.npz`, read back with `numpy.load`."""
+    """Write the arrays as a compressed `.npz`, which `numpy.load` reads back."""
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **arrays)
     return write_bytes(path, buffer.getvalue())

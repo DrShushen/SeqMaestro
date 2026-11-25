@@ -1,31 +1,13 @@
-"""The composition baseline: base fractions into a standardised sparse linear model, every seed.
+"""The composition baseline: a standardised sparse linear model on base fractions, at every seed.
 
     python experiments/runners/run_baseline.py --run-dir experiments/runs/<date>_<name>
 
-The reference line every arm is judged against: what the proportion of each base, and nothing
-else, achieves on the same rows. When a dataset's target goes with composition the baseline
-predicts it, so an arm that does no better has not shown it found anything composition alone does
-not give.
-
-**The baseline is fixed and simple.** The features and the model are set here and nowhere else
-(neither the config nor the dataset's preparation can change them), so every dataset gets the same
-baseline, computed the same way, and it cannot be tuned towards a conclusion. The run's config
-supplies only what the baseline must share with the arms for the comparison to hold: the rows each
-seed fits on (the same stratified subsample, through the same harness), the class weighting of a
-binary target and the per-row weights, and how a cell is scored.
-
-The model is the arms' sparse linear model for the target's kind, on columns standardised on the
-fitting rows as in every L1 fit: `L1Logistic` at a fixed C = 1 instead of the arms' default 0.1 for
-a binary target, and `L1Linear` at a hundredth of the universal penalty the arms use for a
-continuous one. Base fractions are a handful of columns with nothing to select
-among, and the reference line should not be penalised towards chance.
-
-Cells go to `<run>/baseline/seed_<n>/`, outside `results/`, in the standard cell format. They use
-the real target only, because the arms' permuted controls already measure chance.
-
-The baseline reads the sequences only, so a dataset's covariates never enter it, and the reference
-line means the same thing on every dataset. A finished seed is skipped unless `--force` is given,
-and a revealed run is refused.
+The features and the model are set here and nowhere else, so that every dataset gets the same
+baseline, and the run's config supplies only what the baseline shares with the arms: the rows each
+seed fits on, the class weighting or per-row weights, and how a cell is scored. The cells are
+written to `<run>/baseline/seed_<n>/` in the standard cell format, on the real labels only. A
+finished seed is skipped unless `--force` is given, and a revealed run is refused.
+`docs/developer/baseline.md` gives the settings and the reasons for them.
 """
 
 from __future__ import annotations
@@ -48,16 +30,16 @@ from seqmaestro.pipeline.stage2 import cell_settings, run_cells
 from seqmaestro.provenance import record_call
 from seqmaestro.target import BINARY, CONTINUOUS
 
-#: What the baseline's cells report as their model and their pool. Neither is one an arm can have.
+#: The model and the pool the baseline's cells report. An arm cannot have either name.
 MODEL_NAME = "composition_baseline"
 POOL = "composition"
 #: The name of the baseline's call (`layout.call_name`).
 CALL = "baseline"
 
-#: The baseline's model for each kind of target, and its penalty: weak in both, so the few fraction
-#: columns are essentially unpenalised, since there is nothing to select among. A C of 1 against the
-#: arms' 0.1 for the logistic model, and a hundredth of the universal penalty the arms use for the
-#: linear one.
+#: The baseline's model for each kind of target, with its penalty. Both penalties are weak, because
+#: there is nothing to select among the few fraction columns, which are left essentially
+#: unpenalised: C = 1 for the logistic model (the arms use 0.1), and a hundredth of the arms'
+#: universal penalty for the linear one.
 MODEL = {BINARY: ("l1_logistic", {"C": 1.0}),
          CONTINUOUS: ("l1_linear", {"strength": 0.01})}
 

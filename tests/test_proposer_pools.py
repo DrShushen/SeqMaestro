@@ -1,17 +1,20 @@
-"""The proposer arms handed a fixed vocabulary beside the proposal: Stage 2 builds the pool, fits
-its models on the proposal and the vocabulary together, and makes each arm a proposal of its own
-draw, the arm handed the proposal alone included. An entry of a config's `arms` offers such an arm
-to the pipeline, whose later stages take it as any other."""
+"""Proposer arms whose pool adds a fixed vocabulary (positions, k-mers) to the proposal.
+
+Stage 2 builds the pool, fits its models on the proposal and the vocabulary together, and requests
+a separate proposal for each arm, including the arm given the proposal alone. Such an arm is
+declared by an entry of a config's `arms`, and the later stages treat it like any other arm.
+"""
 
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 import pytest
 import yaml
 
 from seqmaestro.llm import ScriptedClient
-from tests.planted import ANALYSES, LENGTH, MOTIF, SEQUENCE, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, LENGTH, MOTIF, SEQUENCE, planted_dataset
 
 CODE = f"def motif_count(X):\n    return X['{SEQUENCE}'].str.count('{MOTIF}')"
 REPLY = json.dumps([{"name": "motif_count", "description": "copies of the planted motif",
@@ -26,12 +29,13 @@ def scripted(runners, monkeypatch, tmp_path):
     was sent kept in `calls`."""
     calls = {"n": 0, "prompts": []}
 
-    def client():
+    def client(settings):
         def answer(system, user):
             calls["n"] += 1
             calls["prompts"].append(user)
             return REPLY
-        return ScriptedClient(answer)
+        # The stand-in reports the settings the arm built it with, as the real client's record does.
+        return ScriptedClient(answer, described={"model": "scripted", **asdict(settings)})
 
     datasets = tmp_path / "datasets"
     datasets.mkdir()
@@ -47,7 +51,7 @@ def scripted(runners, monkeypatch, tmp_path):
 
 def a_run(tmp_path, runners, arms: dict, seeds=(1,), labels=("real",), feedback_rounds=None,
           **sections):
-    """A run directory holding the resolved config of a planted run on these arms. Returns it."""
+    """Make and return a run directory holding the resolved config of a planted run on `arms`."""
     dataset = planted_dataset(tmp_path)
     source = tmp_path / "planted.yaml"
     source.write_text(yaml.safe_dump({
@@ -57,13 +61,14 @@ def a_run(tmp_path, runners, arms: dict, seeds=(1,), labels=("real",), feedback_
                  "n_bootstrap": 10, "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "sources": {
             **({"kmer": {"k_range": [1, 2], "normalise": "counts"}}
                if any("kmer" in pool for pool in arms) else {}),
             "llm_generated": {"proposal_rounds": 1, "n_per_round": 1, "n_examples": 20},
             **({} if feedback_rounds is None
                else {"llm_generated_iterative": {"feedback_rounds": feedback_rounds}})},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms, **sections}))
     run_dir = tmp_path / "run"
@@ -90,11 +95,14 @@ def test_a_pool_with_the_vocabulary_fits_it_beside_a_proposal_made_for_that_arm(
     assert len(list((run_dir / "proposals").glob("*.json"))) == 2
     usage = json.loads((alone / "token_usage.json").read_text())
     assert usage["fit_report"]["n_proposed"] == 1, "what the proposal cost is kept with its cell"
+    assert run_alone["featuriser"]["proposer"]["language_model"] == {
+        "model": "scripted", **LANGUAGE_MODEL}, "the cell records the model it called and how"
 
 
 def test_the_iterative_arms_first_round_makes_the_one_round_arms_request(scripted, tmp_path):
-    """The two arms share no proposal, and the iterative arm's blind first round asks what the
-    one-round arm asks, so one round of the iterative arm is the one-round arm's procedure."""
+    """The two arms share no proposal, but the iterative arm's blind first round makes the same
+    request as the one-round arm, so one round of the iterative arm follows the one-round arm's
+    procedure."""
     run_dir = a_run(tmp_path, scripted, {"llm_generated": {"models": ["l1_logistic"]},
                                          "llm_generated_iterative": {"models": ["l1_logistic"]}},
                     feedback_rounds=1)
@@ -110,8 +118,8 @@ def test_the_iterative_arms_first_round_makes_the_one_round_arms_request(scripte
 
 
 def test_a_stage_fits_only_what_the_runs_config_names(scripted, tmp_path, capsys):
-    """An arm, a seed or a label condition the config does not name is refused, since a cell
-    fitted under a setting the run does not record could not be told from the run's."""
+    """An arm, seed or label condition the config does not name is refused, because a cell fitted
+    under a setting the run does not record could not be told apart from the run's cells."""
     run_dir = a_run(tmp_path, scripted, {"llm_generated": {"models": ["l1_logistic"]}})
     flags = ["--run-dir", str(run_dir)]
     for narrowing, message in ((["--arms", "ebm/llm_generated"], "arms the run's config names"),
@@ -124,8 +132,8 @@ def test_a_stage_fits_only_what_the_runs_config_names(scripted, tmp_path, capsys
 
 def test_an_iterative_arm_over_the_kmers_is_reduced_profiled_revealed_and_reported(
         scripted, tmp_path):
-    """From an entry of the config's `arms` to the report's inputs, with the language model
-    scripted."""
+    """Run an arm from its entry in the config's `arms` to the report's inputs, with the language
+    model scripted."""
     arm = "l1_logistic/kmer+llm_generated_iterative"
     run_dir = a_run(tmp_path, scripted, {"kmer+llm_generated_iterative": {"models": ["l1_logistic"]}},
                     seeds=(1, 2), labels=("real", "permuted"), feedback_rounds=1,
@@ -143,4 +151,8 @@ def test_an_iterative_arm_over_the_kmers_is_reduced_profiled_revealed_and_report
     facts = json.loads((run_dir / "report" / "facts.json").read_text())
     assert list(facts["stage3a"]["arms"]) == [arm]
     assert list(facts["stage3b"]["arms"]) == [arm]
-    assert facts["stage2"]["arms"][arm]["label"] == "L1 Logistic Regression · motifs + written, iterative"
+    assert facts["stage2"]["arms"][arm]["label"] == "L1 Logistic Regression · k-mers + written, iterative"
+    # The report names the model the arm's cells called, from their records.
+    (called,) = facts["language_models"]
+    assert called["model"] == "scripted" and called["used_for"] == ["llm_generated_iterative"]
+    assert called["reasoning_effort"] == LANGUAGE_MODEL["reasoning_effort"]

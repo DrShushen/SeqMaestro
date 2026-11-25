@@ -1,19 +1,18 @@
-"""A symbolic model's equation, drawn: each feature's Shapley values, and the front it was chosen
-from.
+"""Draw a symbolic model's equation: each feature's Shapley values, and the front the equation was
+chosen from.
 
 **The Shapley figure** has one panel per feature the equation names, strongest first. Each dot is
 one training sequence the fit explained: the feature's value on the horizontal axis, and on the
 vertical axis the feature's Shapley value there, its share of that sequence's prediction in the
 model's scale (`scale`: log-odds for a binary target, the target's units for a continuous one).
-The dots of one panel sum, with the other panels' dots for the same sequence, to that sequence's
-prediction less the average prediction. A feature the equation uses alone draws a curve; a
-feature that interacts with another draws a band, since its share depends on the other feature's
-value too.
+For one sequence, its dots across all the panels sum to its prediction less the average
+prediction. A feature the equation uses alone traces a curve, whereas a feature that interacts with
+another traces a band, since its share depends on the other feature's value too.
 
 **The front** shows the equations the search found, one per complexity, with each one's loss on the
 rows it searched and on the rows set aside, and marks the one chosen.
 
-Drawn from `seqmaestro.report.internals.pysr_equation`.
+Both figures are drawn from `seqmaestro.report.internals.pysr_equation`.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from seqmaestro.report.figures import style
 
 def draw_shapley(internals: dict, path: Path, note: str, columns: int, title: str) -> Path:
     """Every feature's Shapley values against its values, one panel each, strongest first. `note`
-    says which way above and below the line point."""
+    says what a dot above or below the line means."""
     import matplotlib.pyplot as plt
 
     style.apply()
@@ -65,8 +64,8 @@ def draw_shapley(internals: dict, path: Path, note: str, columns: int, title: st
 
 
 def draw_front(internals: dict, path: Path, title: str, note: str) -> Path:
-    """Each front equation's loss on the rows searched and on the rows set aside, by complexity,
-    with the chosen equation, the one lowest on the rows set aside, filled."""
+    """Each front equation's loss on the rows searched and on the rows set aside, by complexity.
+    The chosen equation, which has the lowest loss on the rows set aside, is drawn filled."""
     import matplotlib.pyplot as plt
     from matplotlib.ticker import MaxNLocator
 

@@ -1,37 +1,14 @@
-"""Stability of every arm across seeds, against its own permuted-label null.
-
-One row per (model, pool, labels) over the run's seeds, so a row describes an *arm* under
-one label condition (a cell is one seed of one arm). Each seed was fitted on its own stratified
-subsample of the training rows, and reseeding is the perturbation that stability is measured
-against. There are two views per arm: the full set each model reports, and its top N by importance.
-The top-N view is the comparable one, because these models disagree by orders of magnitude about how
-many features they "use".
-
-The permuted rows are essential. A stability number on real labels means nothing on its own, because
-it has to clear the number the same arm returns on noise.
-
-**Report `top_n_kappa`.** It is the chance-corrected agreement
-`(J_real - J_permuted) / (1 - J_permuted)`, and the only figure here that means the same thing for
-every arm: 0 when an arm reproduces its features no better than on shuffled labels, 1 when the seeds
-returned identical sets. Each arm is corrected against its own measured chance level, because that
-level differs sharply between arms. A fixed vocabulary is drawn from many columns and rarely agrees
-with itself by accident. A language-model proposer draws from a small, concentrated prior and agrees
-with itself readily on shuffled labels, because it proposes similar features whatever the labels say.
-Both columns are in `stability.csv`, so check the gap instead of assuming it.
-
-**It measures whether an arm *selects* the same set again, and that is not the only sense of stable.**
-An arm that writes its features renames one idea between seeds, so it scores near zero here while
-proposing the same repertoire every time. `analyse_recurrence.py` is the companion that asks the
-other question, and neither replaces the other.
-
-`full_phi`, `top_n_phi`, `full_jaccard` and `top_n_jaccard` are computed and written for
-diagnosis, but they are **not the reported numbers**. Phi-hat needs a universe size that a
-generative arm does not have, and its union-of-discovered fallback both breaks comparability between
-arms and drives the value negative. Raw Jaccard ignores the chance level entirely, which flatters
-whichever arm has the highest chance level. That is often a generative arm, because two selections
-agree cheaply when both are drawn from a small pool.
+"""Stability of every arm across seeds, against its own permuted cells.
 
     python experiments/analysis/analyse_stability.py --run-dir experiments/runs/<date>_<name>
+
+`results/stability.csv` has one row per model, pool and label condition over the run's seeds, with
+two views of each arm: the full set its model reports, and its top N by importance. **Report
+`top_n_kappa`**, the agreement of the top N corrected for the arm's own chance level,
+`(J_real - J_permuted) / (1 - J_permuted)`. `full_phi`, `top_n_phi`, `full_jaccard` and
+`top_n_jaccard` are written for diagnosis and are not reported.
+`docs/developer/analyses/stability_and_co_discovery.md` explains each number and how to interpret
+it.
 """
 
 from __future__ import annotations
@@ -60,11 +37,11 @@ TABLE = "stability.csv"
 
 
 def arms(results: Path) -> list[tuple[str, str, str]]:
-    """Every (model, pool, labels) present, discovered rather than enumerated.
+    """Every (model, pool, labels) present, found from the run's directories instead of enumerated.
 
-    A hardcoded list would silently skip every arm it does not name, such as the DEFT and
-    language-model arms, which are the ones the comparison is about. A missing row looks the same as
-    an arm that was never run, so nothing would reveal the omission.
+    A hardcoded list would silently skip every arm it does not name, such as the DEFT arms and the
+    arms on written sources, which are the ones the comparison is about. A missing row looks the
+    same as an arm that was never run, so the omission would go unnoticed.
     """
     found = set()
     for run_file in results.rglob(cells.RUN_FILE):
@@ -76,8 +53,8 @@ def arms(results: Path) -> list[tuple[str, str, str]]:
 def universe_size(cell: Path, runs: list) -> int | None:
     """The Nogueira `d`, or `None` when the arm has no fixed vocabulary to quote one from.
 
-    Read from the cells and not from a table here, so it cannot go stale when a featuriser's
-    parameters change.
+    It is read from the cells instead of from a table here, so it cannot go stale when a
+    featuriser's parameters change.
 
     **The test is whether the recorded vocabulary covers the features actually seen**, which is the
     estimator's precondition. A weaker test, such as the recorded count agreeing across seeds,
@@ -108,15 +85,16 @@ def add_chance_corrected(frame: pd.DataFrame) -> pd.DataFrame:
 
     Kappa is a property of an *arm*, not of one of its label conditions, because it needs the
     real-label agreement and the permuted-label agreement of the same (model, pool). Both rows
-    carry the same value so that a filter on either condition still finds it. An arm missing one
+    hold the same value, so that a filter on either condition still finds it. An arm missing one
     condition gets NaN instead of a number computed against an absent null.
 
-    **Only the top-N view.** The full view cannot support a chance-corrected figure, because an arm
-    that keeps every feature it is given agrees with itself almost perfectly on shuffled labels too.
-    Dividing by `1 - chance` then explodes, and where the permuted Jaccard reaches exactly 1.0 the
-    figure is undefined. Both are artifacts of comparing sets of very different sizes, which the
-    top-N view exists to remove. A column that mixes a well-behaved value for an arm that selects
-    with a large negative one for an arm that does not is worse than no column.
+    **Kappa is computed on the top-N view only.** The full view cannot support a chance-corrected
+    figure, because an arm that keeps every feature it is given agrees with itself almost perfectly
+    on shuffled labels too. The division by `1 - chance` then turns a small difference into a huge
+    one, and where the permuted Jaccard reaches exactly 1.0 the figure is undefined. Both are
+    artifacts of comparing sets of very different sizes, which the top-N view exists to remove. A
+    column that mixes a well-behaved value for an arm that selects with a large negative one for an
+    arm that does not is worse than no column.
     """
     if frame.empty:
         return frame
@@ -201,9 +179,9 @@ def main(argv: list[str] | None = None) -> int:
               f"top{args.top_n} J {row['top_n_jaccard']:.3f} phi {row['top_n_phi']:.3f}", flush=True)
 
     if not rows:
-        # A run of one seed has no set of runs to agree, so there is nothing to write, and a table
-        # left by an earlier attempt would be taken for this one's. The report inputs then say
-        # stability was not measured, which is what happened.
+        # A run with one seed has no set of fits that could agree, so there is nothing to write. A
+        # table left by an earlier attempt would be taken for this one's, so it is removed, and the
+        # report's inputs then say that stability was not measured, which is true.
         (results / TABLE).unlink(missing_ok=True)
         print("\nNo arm has two seeds or more, so stability is undefined for every arm and no table "
               "is written.", flush=True)

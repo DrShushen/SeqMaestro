@@ -1,18 +1,19 @@
-"""An equation over a feature matrix's columns, in SeqMaestro's own form. **numpy only.**
+"""An equation over a feature matrix's columns, in SeqMaestro's representation, using **numpy
+only**.
 
 A symbolic search (`seqmaestro.models.symbolic`) finds closed-form equations in another
 environment and hands each one back as a tree built from a small vocabulary. Everything after the
 search happens here, in Core: evaluating an equation on new rows, writing it in the features'
-names, and attributing its output to the features it uses. Keeping the equation as our own data,
-and not as the search library's object, means a fitted model loads and predicts without that
-library, and a later version of it cannot refuse a saved cell.
+names, and attributing its output to the features it uses. Keeping the equation as plain data,
+instead of as the search library's object, means a fitted model loads and predicts without that
+library, and a later version of the library cannot refuse a saved cell.
 
-**The tree** is nested lists, so it travels as JSON and pickles as plain data:
+**The tree** is nested lists, so it can be passed as JSON and pickled as plain data:
 
     ["add", a, b, ...]     a sum of two or more trees
     ["mul", a, b, ...]     a product of two or more trees
-    ["pow", a, e]          a tree raised to a constant exponent e; a division is a product with a
-                           power of -1
+    ["pow", a, e]          a tree raised to a constant exponent e (a division is a product with a
+                           power of -1)
     ["exp", a], ["log", a]
     ["col", i]             the i-th column of the matrix the equation was found on
     ["const", c]           a constant, kept at full precision
@@ -22,8 +23,9 @@ give a value that is not finite. `evaluate` returns it as it is, and the model d
 row gets (`fill`). A tree is evaluated in float64 with numpy, operator by operator, in the order the
 tree holds them.
 
-**Names.** A tree refers to columns by position and never by a name, so no placeholder name the
-search used internally can reach a reader. `terms` writes an equation in the names it is given.
+**Names.** A tree refers to columns by position and never by a name, so a placeholder name the
+search used internally (such as PySR's `x0`) never reaches a reader. `terms` writes an equation in
+the names it is given.
 """
 
 from __future__ import annotations
@@ -94,7 +96,7 @@ def columns(tree) -> list[int]:
 
 
 def remap(tree, mapping: dict[int, int]):
-    """The same tree over other column positions: column `i` becomes `mapping[i]`."""
+    """The tree with its columns renumbered: column `i` becomes `mapping[i]`."""
     op = tree[0]
     if op == "col":
         return ["col", mapping[tree[1]]]
@@ -106,7 +108,8 @@ def remap(tree, mapping: dict[int, int]):
 
 
 def evaluate(tree, X: np.ndarray) -> np.ndarray:
-    """The tree's value on each row of `X`, in float64. Not finite where the equation is undefined.
+    """The tree's value on each row of `X`, in float64, which is not finite where the equation is
+    undefined.
 
     Columns are taken by position from `X`, which must have every column the tree names.
     """
@@ -159,16 +162,16 @@ def shapley(tree, X: np.ndarray, background: np.ndarray, fill: float
     Returns the values, one column per column the tree names (in `columns(tree)`'s order), those
     columns, and the share of the evaluations that were undefined and took `fill`.
 
-    A feature's value on a row is its average marginal contribution over every subset of the
-    other features the tree names. A subset's worth on a row is the tree's mean output when the
-    subset's features take the row's values and the rest take a background row's, averaged over the
-    background: the interventional form, which asks what the equation does and not how the features
-    are correlated. The subsets are enumerated, 2 to the power K of them for K features, so the
-    values are exact for this background, and on each row they sum to the output (filled) less the
-    background's mean output.
+    A feature's Shapley value on a row is its average marginal contribution over every subset of
+    the other features the tree names. A subset's worth on a row is the tree's output when the
+    subset's features take the row's values and the rest take a background row's, averaged over
+    the background rows. This is the interventional form, which measures what the equation does
+    with each feature, whatever the correlations between the features. All 2 to the power K
+    subsets of K features are enumerated, so the values are exact for this background, and on each
+    row they sum to the output (filled) less the background's mean output.
 
     An undefined output takes `fill` wherever it arises, on a mixed row as on a real one, so the
-    values describe the model that predicts, which fills the same way.
+    values describe the model that predicts, which fills in the same way.
     """
     X, background = np.asarray(X, dtype=float), np.asarray(background, dtype=float)
     used = columns(tree)
@@ -178,7 +181,8 @@ def shapley(tree, X: np.ndarray, background: np.ndarray, fill: float
     local = remap(tree, {column: j for j, column in enumerate(used)})
     rows, others = X[:, used], background[:, used]
 
-    # worth[s] is subset s's mean output on each row; bit j of s says feature j takes the row's value.
+    # worth[s] is subset s's mean output on each row. Bit j of s says whether feature j takes the
+    # row's value.
     worth = np.empty((2 ** k, n))
     undefined = 0
     for subset in range(2 ** k):
@@ -209,13 +213,13 @@ def sample_rows(n_rows: int, size: int, rng: np.random.Generator) -> np.ndarray:
 # ------------------------------------------------------------------------------ writing it out
 
 def terms(tree, names: list[str], *, digits: int = 3, latex: bool = False) -> list[str]:
-    """The equation as its top-level terms, in the features' names, constants to `digits`
+    """The equation as its top-level terms, in the features' names, with constants to `digits`
     significant figures. Every term after the first starts with its sign, so the terms joined by
     spaces are the whole equation, and a long equation can be broken between them.
 
-    Plain text uses `*`, `/` and `^`; `latex=True` writes the names as upright text for a typeset
-    equation. Numbers multiplied together in a product are shown as one coefficient, which is only
-    a way of writing the same value.
+    Plain text uses `*`, `/` and `^`, whereas `latex=True` writes the names as upright text for a
+    typeset equation. Numbers multiplied together in a product are shown as one coefficient, which
+    changes only how the value is written.
     """
     writer = _Writer(names, digits, latex)
     parts = _summands(tree)

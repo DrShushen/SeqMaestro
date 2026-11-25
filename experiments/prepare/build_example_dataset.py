@@ -6,9 +6,9 @@
         --declared experiments/prepare/declarations/example__splits.yaml
 
 The example shows every file a prepared dataset has, on data anyone can make, and gives a run
-something to work on before there is real data. **Nothing in it is biology.** The sequences are
-random bases with one rule planted in them: most sites of the bound class carry one motif at their
-centre.
+something to work on before there is real data. **The data is synthetic and holds no biology**: the
+sequences are random bases with one rule planted in them, so that most sites of the bound class
+have one motif at their centre.
 
 It takes the steps a builder of a real delivery takes, one function each:
 
@@ -30,11 +30,11 @@ It takes the steps a builder of a real delivery takes, one function each:
 
 What these steps decided is stated in the declaration, `declarations/example__splits.yaml`.
 `finalise_dataset.py` counts and checks everything else and writes `dataset.json` beside the splits
-(`docs/dataset.md`). The description the language models are told is
+(`docs/developer/dataset.md`). The description the language models are told is
 `experiments/datasets/example.json`, and the run config is `experiments/configs/example.yaml`.
 
 The number of sites of each class and of each length is fixed, and only the bases and the order
-are drawn. The rows the declaration states for each step therefore hold on any machine.
+are drawn. The row counts the declaration states for each step therefore hold on any machine.
 """
 
 from __future__ import annotations
@@ -62,9 +62,9 @@ CLASS_NAMES = {1: "bound", 0: "not bound"}
 #: and bound.
 N_SITES, SITES_PER_REGION = 1200, 4
 #: The lengths the sites of each class are delivered at, in equal numbers. The bound sites are
-#: delivered a little longer, so the window costs the two classes different shares of their rows.
+#: delivered a little longer, so the window removes different shares of the two classes' rows.
 DELIVERED_LENGTHS = {1: tuple(range(56, 136, 8)), 0: tuple(range(48, 128, 8))}
-#: The planted rule: this share of the bound sites carry the motif, centred on the site.
+#: The planted rule: this share of the bound sites have the motif, centred on the site.
 MOTIF, MOTIF_SHARE = "GATTACA", 0.7
 DELIVERY_SEED = 20261008
 
@@ -100,12 +100,12 @@ def write_delivery(path: Path) -> None:
 
 
 def per_class(frame: pd.DataFrame) -> dict[int, int]:
-    """The rows of each class, positive first."""
+    """The number of rows of each class, positive first."""
     return {label: int((frame[TARGET_COLUMN] == label).sum()) for label in CLASS_NAMES}
 
 
 def build(delivery: Path) -> tuple[pd.DataFrame, dict]:
-    """One window per site, cut around its centre, with what the cut cost each class."""
+    """One window per site, cut around its centre, with the rows the cut removed from each class."""
     sites = pd.read_csv(delivery, dtype={SEQUENCE_COLUMN: str})
     missing = {SITE_COLUMN, GROUP_COLUMN, SEQUENCE_COLUMN, TARGET_COLUMN} - set(sites.columns)
     if missing:
@@ -162,14 +162,15 @@ def split(built: pd.DataFrame, directory: Path) -> dict[str, pd.DataFrame]:
 
     directory.mkdir(parents=True, exist_ok=True)
     for name, part in parts.items():
-        # The sequence and the label alone, so a column that is no feature cannot become one.
+        # The sequence and the label alone, so that a column that is not a feature cannot become
+        # one.
         part[[SEQUENCE_COLUMN, TARGET_COLUMN]].to_csv(directory / f"{name}.csv", index=False)
     group_map(built, SEQUENCE_COLUMN, [GROUP_COLUMN]).to_csv(directory / GROUP_FILE, index=False)
     return parts
 
 
 def write_readme(path: Path, step: dict, parts: dict[str, pd.DataFrame]) -> None:
-    """The dataset's README, with the sections `docs/dataset.md` lists for one."""
+    """The dataset's README, with the sections `docs/developer/dataset.md` lists for one."""
     rows_in, rows_out = step["rows_in"], step["rows_out"]
     centre, half = WINDOW // 2, len(MOTIF) // 2
     lost = {label: 1 - rows_out[label] / rows_in[label] for label in CLASS_NAMES}
@@ -203,26 +204,26 @@ there. The builder writes that file. A real dataset starts with the delivered fi
 
 `{TARGET_COLUMN}` is 1 for a site where the factor was found bound, and 0 for a candidate site
 where it was not. Both classes come from the one delivered table. What separates them is planted:
-{MOTIF_SHARE:.0%} of the bound sites carry the motif `{MOTIF}` centred on the site, and beyond that
+{MOTIF_SHARE:.0%} of the bound sites have the motif `{MOTIF}` centred on the site, and beyond that
 both classes are random bases.
 
 ## The window and its anchor
 
-One window of {WINDOW} nt, cut around the centre of each site. Position {centre} is the site's
-centre in every row, and the motif, where a site carries it, covers positions {centre - half} to
+One window of {WINDOW} nt, taken around the centre of each site. Position {centre} is the site's
+centre in every row, and the motif, where a site has it, covers positions {centre - half} to
 {centre + half}. The sites are delivered at different lengths, and the bound ones a little longer.
 A model given the whole sequences could predict from the length alone, which the window removes.
 
-## The preparation steps, and what each cost
+## The preparation steps and the rows each removed
 
-| step | bound | not bound |
+| Step | Bound | Not bound |
 |---|---:|---:|
-| delivered | {rows_in[1]:,} | {rows_in[0]:,} |
+| Delivered | {rows_in[1]:,} | {rows_in[0]:,} |
 | {step["step"]} | {rows_out[1]:,} | {rows_out[0]:,} |
 
-The cut drops {lost[1]:.0%} of the bound sites and {lost[0]:.0%} of the others, because the
-shorter deliveries are more often sites that are not bound. A narrower window would drop fewer
-sites and show less of the sequence around each.
+The window removes {lost[1]:.0%} of the bound sites and {lost[0]:.0%} of the others, because the
+shorter sequences delivered are more often sites that are not bound. A narrower window would remove
+fewer sites and show less of the sequence around each.
 
 ## The grouping
 

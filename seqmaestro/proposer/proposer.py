@@ -1,28 +1,29 @@
-"""Ask a language model for candidate features, and keep the ones that are well-formed and safe.
+"""Ask a language model for candidate features and keep the ones that are well-formed and safe.
 
 The proposer arms test whether a language model proposes features that a fixed vocabulary cannot
-express. This module turns a task and some labelled rows into `FeatureRecord`s carrying executable
+express. This module turns a task and some labelled rows into `FeatureRecord`s holding executable
 code. It runs that code only to check it, on the rows it proposed from. Computing the columns a
 model is fitted and scored on is left to `GeneratedFeaturiser`, which evaluates the records on
 whatever rows it is given.
 
 **Every rejection is counted.** In the results table, a guard that silently drops most of what the
-model writes looks the same as a model that had nothing to say. A model that writes illegal
-identifiers can lose most of its generations this way, with nothing in any artifact to show it.
-Every rejection here is counted in `stats`, which the cached proposal keeps in its header and the
-stage writes into the cell's `token_usage.json` (`seqmaestro.pipeline.stage2.ProposerArm`).
+language model writes looks the same as a language model that had nothing to say. One that writes
+illegal identifiers can lose most of its generations this way, with nothing in any output file to
+show it. Each rejection is therefore counted in `stats`, which the cached proposal keeps in its
+header and the stage writes into the cell's `token_usage.json`
+(`seqmaestro.pipeline.stage2.ProposerArm`).
 
-**A candidate that fails on the rows is sent back to the model.** After each round, the round's
-candidates are run on the rows the proposer was given (`seqmaestro.proposer.checks`). Those that
-raise, run past the time limit, return the wrong shape, are undefined on too many rows or are
-constant go back to the model together in one call, each with its code and its failure, and the
-corrected code is kept where it now works, marked `extra["repaired"]`. A code fault, or code too
-slow for these sequences, is fixed without changing what the feature measures. A feature constant
-or mostly undefined on these rows can only be corrected by measuring something a little different,
-and then comes back under a name and description for what it now measures, with the name it was
-proposed under in `extra["renamed_from"]`. `repair_rounds` is how many such calls a round may make,
-and `stats` counts what came of them. A code path the model did not foresee, such as a short
-sequence, then costs a call instead of the feature.
+**A candidate that fails on the rows is sent back to the language model.** After each round, the
+round's candidates are run on the rows the proposer was given (`seqmaestro.proposer.checks`). Those
+that raise, run past the time limit, return the wrong shape, are undefined on too many rows or are
+constant go back to the language model together in one call, each with its code and its failure,
+and the corrected code is kept where it now works, marked `extra["repaired"]`. A code fault, or
+code too slow for these sequences, is fixed without changing what the feature measures. A feature
+constant or mostly undefined on these rows can only be corrected by measuring something a little
+different, and then comes back under a name and description for what it now measures, with the
+name it was proposed under in `extra["renamed_from"]`. `repair_rounds` is how many such calls a
+round may make, and `stats` counts what came of them. A case the language model did not foresee,
+such as a short sequence, then takes one more call instead of losing the feature.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from seqmaestro.features.base import IDENTIFIER, ORIGIN_SEQMAESTRO, FeatureRecord, Inputs, as_inputs
-from seqmaestro.llm import TaskContext
+from seqmaestro.llm import TaskContext, reply_conditions
 from seqmaestro.llm.columns import describe_columns, render_columns
 from seqmaestro.proposer.cache import (
     ProposalCache,
@@ -51,8 +52,8 @@ from seqmaestro.proposer.prompt import (
     wording_digest,
 )
 
-#: The `kind` of any feature a language model wrote, whichever method's model wrote it. `origin`
-#: says which method that was. Keeping the two apart lets the share of generated features be counted
+#: The `kind` of any feature a language model wrote, whichever method's language model wrote it.
+#: `origin` says which method that was. Keeping the two apart lets the share of generated features be counted
 #: the same way for DEFT and for SeqMaestro (see `experiments/adapters/deft_bundle.py`).
 KIND_LLM_GENERATED = "llm_generated"
 
@@ -61,38 +62,40 @@ KIND_LLM_GENERATED = "llm_generated"
 class ProposalSettings:
     """The proposal budget, set mainly by the number of rounds and the features asked for in each.
 
-    A **round is one request for features**, one API call, and up to `repair_rounds` further calls
-    that send back the round's candidates that failed on the rows. The request asks for
-    `n_per_round` features and lists what earlier rounds already produced, so the model is told to
-    propose different ones. DEFT's reflection is a different mechanism: it critiques and revises
-    the same features, so rounds widen the pool where reflection deepens it. The costs differ too.
-    Rounds cost `n_rounds` calls in total and at most `repair_rounds` more each, while DEFT makes
-    `2 x n_samples_per_prompt` calls per reflection round for a single node, which is orders of
-    magnitude more tokens.
+    A **round is one request for features** (one API call), plus up to `repair_rounds` further
+    calls that send back the round's candidates that failed on the rows. The request asks for
+    `n_per_round` features and lists what earlier rounds already produced, and the language model
+    is told to propose different ones. DEFT's reflection is a different mechanism: it critiques and
+    revises the same features, so rounds add new features, whereas reflection refines the ones it
+    has. The number of calls differs too: rounds make `n_rounds` calls in total, plus at most
+    `repair_rounds` each, whereas DEFT writes `n_samples_per_prompt` candidates in each of
+    `1 + 2 x n_reflections` prompts at every node of its tree, and makes a call for each candidate's
+    code (`seqmaestro.pipeline.calls` counts them), which is orders of magnitude more tokens.
 
-    **Rounds make the set less redundant without making it larger.** A model asked for the whole
-    budget in one call returns the whole budget, so splitting the request adds no features. It
-    changes what comes back. Four ways of writing GC fraction over slightly different windows are
-    one hypothesis, and a round shown what the earlier ones proposed is pushed away from them. This
-    matters because near-duplicates chain clusters together in the stability estimator and crowd
-    out distinct hypotheses in the judge's top slice.
+    **Rounds make the set less redundant without making it larger.** A language model asked for the
+    whole budget in one call returns the whole budget, so splitting the request adds no features,
+    but it changes which features come back. Four ways of writing GC fraction over slightly
+    different windows are one hypothesis, and a round shown what the earlier ones proposed is
+    pushed away from them. This matters because near-duplicates chain clusters together in the
+    stability estimator and crowd out distinct hypotheses in the judge's top slice.
 
     The extra tokens do not matter, because these arms cost orders of magnitude less than the
     per-node generation they are compared against.
 
-    `n_per_round` x `n_rounds` should stay well above `DEFAULT_TOP_N`. Otherwise an arm's top slice
-    is its whole set and is no longer a selection.
+    `n_per_round` x `n_rounds` should stay well above `DEFAULT_TOP_N` (`seqmaestro.harness.features`),
+    or an arm's top slice would be its whole set instead of a selection.
     """
 
     n_rounds: int = 3
     n_per_round: int = 10
     n_examples: int = 20
     max_completion_tokens: int = 8000
-    #: The most characters of one sequence an example row shows. A longer one is shown by its ends
-    #: with its length stated (`prompt.shown_sequence`), since a whole transcript fills the prompt.
+    #: The largest number of characters of one sequence that an example row shows. A longer one is
+    #: shown by its ends with its length stated (`prompt.shown_sequence`), because a whole
+    #: transcript would fill the prompt.
     max_example_length: int = 300
-    #: How many times a round's failed candidates are sent back to the model, one call each time.
-    #: 0 sends nothing back.
+    #: How many times a round's failed candidates are sent back to the language model, one call
+    #: each time. 0 sends nothing back.
     repair_rounds: int = 1
     #: The largest share of rows on which a candidate may be undefined (NaN or infinite) and still
     #: be kept. Above it the candidate has failed (`seqmaestro.proposer.checks`).
@@ -101,6 +104,10 @@ class ProposalSettings:
     #: candidate has failed, and on more rows it is given proportionally longer
     #: (`seqmaestro.proposer.checks`).
     max_seconds: float = 60.0
+    #: What the person running the analysis asks of the form of the features, shown word for word
+    #: in every request, or None for no guidance. As a setting, it enters the cache key, so a
+    #: proposal made under other guidance is never reused.
+    guidance: str | None = None
 
     def __post_init__(self) -> None:
         if not self.max_seconds > 0:
@@ -112,7 +119,8 @@ class ProposalSettings:
 
 @dataclass
 class ProposalStats:
-    """Where the model's output went. Written beside the features, never inferred from the count."""
+    """Where the language model's output went. The stats are written beside the features, never
+    inferred from the count."""
 
     rounds: int = 0
     returned: int = 0
@@ -122,7 +130,7 @@ class ProposalStats:
     rejected_name: int = 0
     duplicates: int = 0
     #: Calls that sent failed candidates back, candidates they corrected, and candidates still
-    #: failing when the repair rounds ran out. Those stay as proposed, for the featuriser to drop.
+    #: failing when the repair rounds ran out. The last stay as proposed, for the featuriser to drop.
     repair_calls: int = 0
     repaired: int = 0
     unrepaired: int = 0
@@ -133,7 +141,7 @@ class ProposalStats:
         return asdict(self)
 
     def __add__(self, other: ProposalStats) -> ProposalStats:
-        """Two proposals counted together. `cache_hit` holds where both were read from the cache."""
+        """Two proposals counted together. `cache_hit` is true only where both came from the cache."""
         together = {name: getattr(self, name) + getattr(other, name)
                     for name in self.__dataclass_fields__ if name != "cache_hit"}
         return ProposalStats(**together, cache_hit=self.cache_hit and other.cache_hit)
@@ -143,13 +151,13 @@ class Proposer:
     """Turns (task, rows, labels) into feature records, over `n_rounds` requests and their repair
     calls. A proposal is cached under everything that would change it, the arm included (`key_for`).
 
-    **Label-aware.** Shown only sequences, it would propose the same features for a permuted-label
-    arm as for a real one, and the control arm would have no noise-derived features to serve as a
-    null.
+    **It is label-aware.** Shown only sequences, it would propose the same features for a permuted
+    cell as for a real one, and the permuted cells would have no features fitted to noise to serve
+    as a control.
 
-    **Shown the covariates the rows carry**, each with the description `covariates` gives it (the
-    dataset's, `Dataset.covariates`), so the code it writes may use them. Rows carrying a covariate
-    it has no description for are refused.
+    **It is shown the covariates the rows hold**, each with the description `covariates` gives it
+    (the dataset's, `Dataset.covariates`), so the code the language model writes may use them. Rows
+    holding a covariate it has no description for are refused.
     """
 
     def __init__(
@@ -160,10 +168,10 @@ class Proposer:
         policy: CodeGuardPolicy | None = None,
         cache: ProposalCache | None = None,
         seed: int = 0,
-        # Keyword-only and required. The prompt tells the model which column its code will be
-        # handed, which one carries the target and what kind of target it is. A wrong name here
-        # raises no error: it makes a wrong prompt, and every feature the model writes indexes a
-        # column that is not there.
+        # Keyword-only and required. The prompt tells the language model which column its code
+        # will be handed, which one holds the target and what kind of target it is. A wrong name
+        # here does not raise an error: it makes a wrong prompt, and every feature the language
+        # model writes indexes a column that is not there.
         *,
         sequence_column: str,
         target_column: str,
@@ -181,12 +189,12 @@ class Proposer:
         self.target_column = target_column
         self.target_kind = target_kind
         self.covariates = dict(covariates or {})
-        #: The arm the proposals are made for, `model/pool`. It enters the cache key, so no two arms
-        #: share a proposal, and each arm's written features are a separate draw. None for a
+        #: The arm the proposals are made for, `model/pool`. It enters the cache key, so two arms
+        #: never share a proposal, and each arm's written features are a separate draw. None for a
         #: proposer used outside an arm.
         self.arm = arm
         self.last_key: str | None = None
-        #: Where the output of the proposal made last went.
+        #: Where the output of the last proposal went.
         self.stats = ProposalStats()
         #: The same for every proposal this proposer has made, counted together, which for an arm
         #: that proposes in rounds is the cell's whole count. None until the first proposal.
@@ -207,8 +215,8 @@ class Proposer:
         # Kept so the run can record which entry an arm drew on. Two arms reporting one key would
         # not be independent evidence of anything. The co-discovery analysis finds such arms by this
         # key (`seqmaestro.pipeline.analyses.co_discovery.linked_groups`), so a new arm needs no
-        # hand-maintained list to be counted correctly. A proposer given its arm shares a key with
-        # no other arm.
+        # hand-maintained list to be counted correctly. A proposer given its arm never shares a key
+        # with another arm.
         self.last_key = key
 
         # Held while the entry is looked up and made, so a process running beside this one and
@@ -224,8 +232,9 @@ class Proposer:
                 self.cache.put(
                     key, records,
                     proposal_stats=self.stats.as_dict(),
-                    # Blind, matching the key: an entry records the conditions a reply was produced
-                    # under, and a fact the model was never shown is not one of them.
+                    # The blind context, matching the key: an entry records the conditions a reply
+                    # was produced under, and a fact the language model was never shown is not one
+                    # of them.
                     context=self.context.as_dict_blind(),
                     settings=self.settings.as_dict(),
                 )
@@ -235,18 +244,22 @@ class Proposer:
     def key_for(self, inputs, y=None, feedback: dict | None = None) -> str:
         """The cache key: a digest of everything that would change the answer.
 
-        **Keyed on the arm and on the feedback.** The arm, so that no two arms share a proposal: two
-        models compared on a written source are compared on separate proposals. The iterative
-        source's blind first round makes the one-round source's request, under its arm's key. The
-        feedback, so that each informed round of an iterative arm asks a new question.
+        **The key includes the arm and the feedback.** The arm is included so that two arms never
+        share a proposal: two models compared on a written source are compared on separate
+        proposals. The iterative source's blind first round makes the one-round source's request,
+        under its arm's key. The feedback is included so that each informed round of an iterative
+        arm makes a new request.
 
-        **The context enters blind**, since a proposer is never shown `judge_only` and so cannot
-        answer differently for it. Keying on the disclosing form would discard every cached
-        proposal whenever the judge's half of a description was edited, and pay again for replies
-        that could not have changed.
+        **The context enters in its blind form**, because a proposer is never shown `judge_only`,
+        so its replies cannot depend on it. Keying on the disclosing form would discard every
+        cached proposal whenever the judge's half of a description was edited, and pay again for
+        replies that could not have changed.
 
-        **The columns block enters where the prompt carries one**, so a covariate described
-        differently asks a different question. Rows with no columns block are keyed without one.
+        **The columns block enters where the prompt has one**, so a covariate described differently
+        makes a different request. Rows with no columns block are keyed without one.
+
+        **The language model enters with the effort it is asked to reason at** (`reply_conditions`),
+        and without the retries and the wait, which do not change a reply.
         """
         inputs = as_inputs(inputs)
         parts = {
@@ -256,7 +269,10 @@ class Proposer:
             # The prompt wording, as distinct from the task it asks about. Editing the shared prompt
             # changes every reply, and without this the cache would keep serving the old ones.
             "wording": wording_digest(),
-            "model": getattr(self.client, "model", "scripted"),
+            # How a function's values are rounded before they are checked, which decides whether a
+            # function counts as constant and so goes back to the language model for repair.
+            "significant_digits": SIGNIFICANT_DIGITS,
+            "language_model": reply_conditions(self.client.describe()),
             "seed": self.seed,
             "rows": digest_rows(inputs, y),
             "feedback": digest_feedback(feedback),
@@ -269,29 +285,31 @@ class Proposer:
         return proposal_key(**parts)
 
     def columns(self, inputs) -> dict[str, Any]:
-        """What the model is told about the columns of these rows (`describe_columns`)."""
+        """What the language model is told about the columns of these rows (`describe_columns`)."""
         return describe_columns(inputs, self.sequence_column, self.covariates)
 
     def describe(self) -> dict[str, Any]:
-        """For the run manifest, so a result names the conditions that produced it.
+        """For the cell's record (`run.json`), so a result names the conditions that produced it.
 
-        The context is the blind one, because **each consumer records what it was told**, which
-        keeps a blinded run readable afterwards. A proposer arm's manifest shows the description
-        without the withheld fact, and the judge's own output carries it, because the judge had it.
+        The context is the blind one, because **each consumer records what it was told**, so the
+        records of a blinded run show afterwards who was told what. A proposer arm's record shows
+        the description without the withheld fact, whereas the judge's output includes it, because
+        the judge was told it.
         """
         described = {
             "kind": "llm_proposer",
-            "model": getattr(self.client, "model", "scripted"),
+            # Which language model was called, and how.
+            "language_model": self.client.describe(),
             "seed": self.seed,
             "settings": self.settings.as_dict(),
             "guard": self.policy.describe(),
             "context": self.context.as_dict_blind(),
-            # The cache entry of the proposal made last. Two arms reporting one key would have
-            # consumed one proposal, and would corroborate nothing by agreeing.
+            # The cache entry of the last proposal. Two arms reporting one key would have used one
+            # proposal, so their agreement would corroborate nothing.
             "proposal_key": self.last_key,
         }
         if self.covariates:
-            # What the model was told each covariate measures.
+            # What the language model was told each covariate measures.
             described["covariates"] = dict(self.covariates)
         return described
 
@@ -319,6 +337,7 @@ class Proposer:
                 feedback=feedback,
                 columns=columns,
                 max_example_length=self.settings.max_example_length,
+                guidance=self.settings.guidance,
             )
             completion = self.client.complete(
                 SYSTEM_PROMPT, user, max_completion_tokens=self.settings.max_completion_tokens
@@ -353,15 +372,16 @@ class Proposer:
 
     def _repair(self, names: list[str], records: dict[str, FeatureRecord], inputs: Inputs,
                 columns: dict[str, Any], round_index: int) -> None:
-        """Run a round's candidates on the rows, and send those that fail back to the model.
+        """Run a round's candidates on the rows, and send those that fail back to the language
+        model.
 
         Each call sends every candidate still failing, with the code last tried for it and how that
-        code failed. The model is asked to fix a code fault without changing what the feature
-        measures, and to change a feature that cannot work on these rows as little as it can,
-        naming and describing it for what it then measures (`prompt.render_repair_request`). A
-        correction that works takes its original's place, under its new name where it has one.
-        One still failing when the calls run out stays as proposed, so the featuriser drops it with
-        its reason counted.
+        code failed. The language model is asked to fix a code fault without changing what the
+        feature measures, and to change a feature that cannot work on these rows as little as it
+        can, naming and describing it for what it then measures (`prompt.render_repair_request`). A
+        correction that works takes the place of the original, under its new name where it has
+        one. A candidate still failing when the calls run out stays as proposed, so the featuriser
+        drops it with its reason counted.
         """
         frame = inputs.frame(self.sequence_column)
         # Each failing candidate, under the name it was proposed with: the code last tried for it,
@@ -387,7 +407,7 @@ class Proposer:
             if error:
                 self.stats.errors.append(f"round {round_index} repair: {error}")
             for proposal in proposals:
-                # Matched on the name it says it replaces, or, where it says none, on its own.
+                # Matched on the name it says it replaces, or, where it names none, on its own name.
                 target = proposal.replaces or proposal.name
                 if target not in failing:
                     continue
@@ -414,8 +434,9 @@ class Proposer:
 
     @staticmethod
     def _naming_problem(proposal, target: str, records: dict[str, FeatureRecord]) -> str | None:
-        """Why a working correction's name cannot be kept, or None. A new name must be legal and
-        free, and must come with a description of what the feature now measures."""
+        """Why a working correction's name cannot be kept, or None. A new name must be a legal
+        identifier that no other feature has, and must come with a description of what the feature
+        now measures."""
         if proposal.name == target:
             return None
         if not IDENTIFIER.match(proposal.name):
@@ -429,8 +450,9 @@ class Proposer:
 
     @staticmethod
     def _replace(records: dict[str, FeatureRecord], target: str, proposal) -> None:
-        """Put a working correction in its original's place. A renamed one records the name it was
-        proposed under, and its description is the correction's own."""
+        """Put a working correction in place of the original. A renamed correction records the
+        original's name in `extra["renamed_from"]`, and its description is the one the correction
+        came with."""
         original = records[target]
         renamed = proposal.name != target
         corrected = replace(
@@ -447,8 +469,8 @@ class Proposer:
     def _accept(self, proposal, taken: dict) -> FeatureRecord | None:
         """Validate one proposal by compiling it. Evaluation needs rows and happens elsewhere."""
         if not IDENTIFIER.match(proposal.name):
-            # A model can write a name such as `upstream_-15nt_GC`, and every downstream use of
-            # that name then fails to parse. Counted, so the loss is visible.
+            # A language model can write a name such as `upstream_-15nt_GC`, and every downstream
+            # use of that name then fails to parse. It is counted, so the loss is visible.
             self.stats.rejected_name += 1
             return None
         if proposal.name in taken:
@@ -461,9 +483,9 @@ class Proposer:
             self.stats.rejected_unsafe += 1
             return None
         except ValueError:
-            # A bad identifier inside the code or an unbalanced bracket is a model writing badly,
-            # not an attack. Counted apart from `rejected_unsafe` so a run's rejection counts say
-            # which of the two happened.
+            # A bad identifier inside the code or an unbalanced bracket is a language model writing
+            # badly, not an attack. It is counted apart from `rejected_unsafe`, so a run's
+            # rejection counts show which of the two happened.
             self.stats.rejected_syntax += 1
             return None
 

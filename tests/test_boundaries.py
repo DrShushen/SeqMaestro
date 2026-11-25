@@ -1,13 +1,13 @@
-"""Checks for the two architectural rules that hold this repository's shape together.
+"""Checks of the two architectural rules that the repository's structure depends on.
 
 Either rule could break without anything else failing:
 
 1. SeqMaestro must not import a vendored method, and a vendored method must not import SeqMaestro.
-   Methods are meant to become standalone libraries (their changes go back upstream) and live in
-   their own conda environments, and the two sides exchange files on disk (a written feature
-   matrix, a serialized tree, a saved model). An `import` across that line would couple two
-   independent environments, and nothing would show it on a machine where both happen to be
-   installed.
+   Each method is meant to become a standalone library (its changes go back upstream) and lives in
+   a separate conda environment, so the two sides exchange files on disk (a written feature
+   matrix, a serialised tree, a saved model). An `import` across that line would couple two
+   independent environments, and the coupling would go unnoticed on a machine where both happen
+   to be installed.
 
 2. A test run from here must not collect tests under `methods/`. With `testpaths` set but
    `norecursedirs` unset, pytest can fall back to a recursive search and collect DEFT's suite
@@ -15,7 +15,7 @@ Either rule could break without anything else failing:
    passing result from the wrong environment is worse than a failing one, because nobody
    investigates it.
 
-The checks fail if their own discovery breaks, so they cannot pass vacuously.
+The checks fail if they find nothing to check, so they cannot pass vacuously.
 """
 
 from __future__ import annotations
@@ -75,11 +75,11 @@ def imported_names(path: Path):
 
 
 def test_the_discovery_itself_works():
-    """Stops the tests below from passing because they found nothing to forbid.
+    """Keeps the tests below from passing merely because they found nothing to forbid.
 
-    The assertion is per method and names no packages, so a method changing its layout does not
-    fail here. Only a method that contributes no forbidden name fails, because that is the case
-    that would make the tests below vacuous.
+    The assertion is made per method and does not name any package, so a method that changes its
+    layout does not fail here. Only a method that contributes no name to forbid fails, because that
+    is the case that would make the tests below vacuous.
     """
     found = vendored_method_import_names()
     methods = {path.name for path in METHODS.iterdir() if path.is_dir()}
@@ -108,8 +108,8 @@ def test_seqmaestro_does_not_import_a_vendored_method():
 
 
 def test_no_vendored_method_imports_seqmaestro():
-    """The other direction: a method's code and its own tests stand alone, so that the copy can go
-    back upstream and its suite runs in its environment, where `seqmaestro` is not installed."""
+    """The other direction: a method's code and tests stand alone, so that the copy can go back
+    upstream and its suite can run in its environment, where `seqmaestro` is not installed."""
     modules = sorted(path for path in METHODS.rglob("*.py") if "__pycache__" not in path.parts)
     assert modules, "no modules found under methods/"
     offenders = [
@@ -123,9 +123,10 @@ def test_no_vendored_method_imports_seqmaestro():
 
 
 def test_tests_do_not_import_a_vendored_method_either():
-    """A cross-boundary test exercises the file contract, by running the method's own interpreter
-    in a subprocess under the `crossenv` marker. Importing the method here would work only on a
-    machine where both environments happen to be installed, and would hide the coupling."""
+    """A test across the boundary exercises the file contract instead, by running the interpreter
+    of the method's environment in a subprocess under the `crossenv` marker. Importing the method
+    here would work only on a machine where both environments happen to be installed, and would
+    hide the coupling."""
     forbidden = vendored_method_import_names()
     offenders = [
         f"  {path.relative_to(REPO_ROOT)}:{lineno} imports `{name}`"
@@ -146,9 +147,9 @@ def pytest_config() -> dict:
 
 
 def test_collection_does_not_recurse_into_methods(pytest_config):
-    """`testpaths` alone is not enough. When it matches nothing, pytest warns and searches
+    """`testpaths` alone is not enough, because when it matches nothing, pytest warns and searches
     recursively from the current directory, which would run DEFT's suite under the wrong
-    interpreter. `norecursedirs` is what stops that."""
+    interpreter. `norecursedirs` prevents that."""
     assert "methods" in pytest_config["norecursedirs"]
 
 

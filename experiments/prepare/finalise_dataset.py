@@ -7,8 +7,9 @@
 This is the last step of Stage 1 for every dataset, whichever script built it. The declaration
 states what only the builder knows: the columns, the kind of target and what it means (each class,
 or what the number measures), what each covariate measures, the window, the grouping, and every
-filter with what it cost. This script counts and checks everything else from the files. The
-fields are documented in `docs/dataset.md`, and the logic is in `seqmaestro.dataset`.
+filter with the rows it removed. This script counts and checks everything else from the files. The
+logic is in `seqmaestro.dataset`, whose `validate_declared` lists the declaration's fields and
+`run_checks` the checks, and `docs/developer/dataset.md` explains the record.
 
 The Stage 1 checkpoint shows the printed summary to the user before Stage 2 may start. The summary
 can report two kinds of problem:
@@ -17,8 +18,8 @@ can report two kinds of problem:
   read, but Stage 2 refuses the dataset until the check passes or the declaration accepts it with a
   reason.
 - A **flagged** finding means the dataset has a property that only somebody who knows how it was
-  produced can judge. It does not stop a run. It is printed here with the question it raises, so
-  that it is settled at Stage 1 and not rediscovered in a report.
+  produced can judge. It does not stop a run, but it is printed here with the question it raises,
+  so that it is settled at Stage 1 instead of being rediscovered in a report.
 
 In either case the script exits non-zero, so neither can scroll past unanswered.
 
@@ -49,8 +50,8 @@ from seqmaestro.provenance import git_is_dirty, git_sha
 REPO = Path(__file__).resolve().parents[2]
 
 #: The question each advisory check puts to the user. The check can measure the property, but only
-#: somebody who knows how the data was produced can say whether it is a defect. So the summary ends
-#: each finding with a question, and the Stage 1 checkpoint is where it is answered.
+#: somebody who knows how the data was produced can say whether it is a defect, so the summary ends
+#: each finding with a question, which is answered at the Stage 1 checkpoint.
 QUESTIONS = {
     "no_sequence_in_two_splits":
         "Is the same sequence appearing more than once expected here (one measurement repeated "
@@ -178,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--splits", type=Path, required=True,
                         help="the directory holding train.csv, val.csv and test.csv")
     parser.add_argument("--declared", type=Path, default=None,
-                        help="the builder's declaration, YAML or JSON; see docs/dataset.md")
+                        help="the builder's declaration, YAML or JSON; see docs/developer/dataset.md")
     parser.add_argument("--check", action="store_true",
                         help="print the summary of the existing dataset.json without rewriting it")
     args = parser.parse_args(argv)

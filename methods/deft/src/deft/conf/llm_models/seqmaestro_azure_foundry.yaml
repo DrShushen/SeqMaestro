@@ -1,0 +1,11 @@
+# A model deployed on an Azure AI Foundry resource, for SeqMaestro runs.
+#
+# Values come from the SeqMaestro root `.env`. Export them before running:
+#     set -a && source .env && set +a
+#
+# `model` is a LiteLLM model string, so it carries its own provider prefix. `azure_ai/` calls the
+# resource's model inference API, and the part after it is the deployment's name, which the
+# request carries. LiteLLM appends the API's path to the endpoint.
+model: azure_ai/${oc.env:SEQMAESTRO_AZURE_FOUNDRY_DEPLOYMENT}
+api_base: ${oc.env:SEQMAESTRO_AZURE_FOUNDRY_ENDPOINT}
+api_key: ${oc.env:SEQMAESTRO_AZURE_FOUNDRY_KEY}

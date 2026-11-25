@@ -1,0 +1,222 @@
+/* The run's status page: one column per stage, in the colours of the documentation's figures. */
+
+:root {
+  --ink: #1a1a1a;
+  --ink-soft: #5a5a5a;
+  --ink-faint: #9a9a9a;
+  --rule: #d8d8d8;
+  --band: #f4f4f4;
+  --band-edge: #d4d4d4;
+  --stage: #e8f6fc;
+  --stage-edge: #96dcf8;
+  --head: #0b76a0;
+  --tag: #d7e9f0;
+  --code: #f8f6f0;
+  --code-edge: #e3ddcd;
+  --done: #1b7a47;
+  --failed: #b2182b;
+  --gate-text: #7a3236;
+  --running: #e69f00;
+  --waiting: #9a9a9a;
+  --positional: #3e8fc0;
+  --kmer: #e69f00;
+  --written: #009e73;
+  --empty: #f1f1ef;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 18px;
+  background: #ffffff;
+  color: var(--ink);
+  font: 14px/1.45 "Helvetica Neue", Helvetica, "Nimbus Sans", "Liberation Sans", Arial, sans-serif;
+}
+
+a { color: var(--head); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: "DejaVu Sans Mono", Menlo, Consolas, monospace; font-size: 12px; }
+
+/* The bands above and below the stages. */
+.band {
+  background: var(--band);
+  border: 1px solid var(--band-edge);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.band > h1, .band > h2 { margin: 0 0 10px; font-size: 18px; }
+.band-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+
+/* The stages, left to right. */
+.stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(250px, 1fr));
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 16px;
+}
+@media (max-width: 1100px) { .stages { grid-template-columns: repeat(2, minmax(250px, 1fr)); } }
+@media (max-width: 640px) { .stages { grid-template-columns: 1fr; } }
+
+.stage {
+  background: var(--stage);
+  border: 1.5px solid var(--stage-edge);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.stage > header {
+  background: var(--head);
+  color: #ffffff;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stage > header .number { font-size: 18px; font-weight: 700; }
+.stage > header .name { font-size: 16px; font-weight: 700; flex: 1; }
+.stage > .subtitle { font-style: italic; color: var(--ink-soft); padding: 7px 12px 0; }
+.stage > .body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 9px; }
+
+.card {
+  background: #ffffff;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  padding: 9px 11px;
+}
+.card > h3 { margin: 0 0 6px; font-size: 14px; }
+.card p { margin: 4px 0; }
+
+/* State of a stage, a process or a check. */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--waiting); }
+.state.done::before { background: var(--done); }
+.state.running::before { background: var(--running); animation: pulse 1.6s ease-in-out infinite; }
+.state.failed::before { background: var(--failed); }
+.state.held::before { background: var(--failed); }
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+/* The checkpoint that ends each stage. */
+.checkpoint {
+  border: 1.5px dashed var(--ink-faint);
+  border-radius: 7px;
+  padding: 8px 11px;
+  background: #ffffff;
+}
+.checkpoint.signed { border: 1.5px solid var(--failed); background: #fcefef; color: var(--gate-text); }
+.checkpoint > h3 { margin: 0 0 5px; font-size: 14px; }
+.checkpoint ul { margin: 0; padding: 0; list-style: none; }
+.checkpoint li { padding-left: 20px; position: relative; margin: 3px 0; }
+.checkpoint li::before { position: absolute; left: 0; font-weight: 700; }
+.checkpoint li.ok::before { content: "✓"; color: var(--done); }
+.checkpoint li.no::before { content: "✗"; color: var(--failed); }
+.checkpoint li.open::before { content: "…"; color: var(--ink-faint); }
+
+/* Tables of facts and results. */
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th, td { text-align: left; padding: 3px 5px; border-bottom: 1px solid #eeeeee; vertical-align: top; }
+th { font-weight: 600; color: var(--ink-soft); }
+td.number, th.number { text-align: right; font-variant-numeric: tabular-nums; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; margin: 0; }
+dl.facts dt { color: var(--ink-soft); }
+dl.facts dd { margin: 0; }
+
+/* The grid of arms: pools down, models across. */
+.grid td.arm { text-align: center; border-radius: 4px; }
+.grid td.arm.none { background: var(--empty); }
+.grid td.arm .score { font-weight: 600; }
+.grid td.arm .cells { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; margin-top: 2px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rule); display: inline-block; }
+.dot.done { background: var(--done); }
+.dot.running { background: var(--running); }
+.dot.failed { background: var(--failed); }
+.dot.control { border-radius: 1px; }
+
+/* A share drawn as a bar, for a selection frequency. */
+.bar { position: relative; height: 10px; background: #eef3f6; border-radius: 3px; min-width: 60px; }
+.bar > span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--positional); border-radius: 3px; }
+
+/* Collapsed details. */
+details > summary { cursor: pointer; color: var(--head); font-weight: 600; margin: 3px 0; }
+details > summary::marker { color: var(--head); }
+details[open] > summary { margin-bottom: 5px; }
+
+/* A figure, small until clicked. */
+figure { margin: 6px 0; }
+figure img { width: 100%; border: 1px solid var(--rule); border-radius: 5px; background: #ffffff; }
+figure figcaption { font-size: 12px; color: var(--ink-soft); margin-top: 3px; }
+
+.muted { color: var(--ink-faint); }
+.warning { color: var(--failed); font-weight: 600; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+
+/* The band above the stages. */
+.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+.title-row h1 { margin: 0; font-size: 20px; }
+.description { margin: 2px 0 8px; color: var(--ink-soft); }
+.band > .band-grid { margin-top: 10px; }
+.band .links { margin-top: 10px; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+ul.plain li { margin: 3px 0; }
+.tag {
+  display: inline-block; min-width: 26px; text-align: center; font-size: 11px; font-weight: 700;
+  color: var(--head); background: var(--tag); border-radius: 4px; padding: 0 4px;
+}
+
+/* Where the run stands, stage by stage. */
+.progress { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 8px 0 0; padding: 0; }
+.progress li {
+  display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px;
+  background: #ffffff; border: 1px solid var(--rule); font-weight: 600; font-size: 13px;
+}
+.progress li span {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px;
+  border-radius: 999px; background: var(--waiting); color: #ffffff; font-size: 12px; padding: 0 5px;
+}
+.progress li.done span { background: var(--done); }
+.progress li.running span { background: var(--running); animation: pulse 1.6s ease-in-out infinite; }
+.progress li.failed span, .progress li.stopped span, .progress li.held span { background: var(--failed); }
+
+/* The classes of a binary target, in the figures' colours. */
+td.class { font-weight: 700; white-space: nowrap; }
+td.class-1 { color: #b2182b; }
+td.class-0 { color: #2166ac; }
+
+.legend { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
+.grid th { font-size: 11.5px; text-align: center; }
+.grid tr > th:first-child { text-align: left; }
+.grid td.arm { background: #f5fafc; }
+.grid td.arm.writes { background: #eef8f4; }
+
+/* The parts of a panel, in the order they run. */
+.parts { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 6px; }
+.part {
+  font-size: 11.5px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--rule);
+  background: #ffffff; color: var(--ink-soft);
+}
+.part.done { background: #e9f4ee; border-color: #b9dcc8; color: var(--done); }
+.part.running { background: #fdf3e1; border-color: #f0cf8f; color: #8a5a00; }
+.part.after { border-style: dashed; }
+.evidence td.called { color: var(--done); font-weight: 700; }
+ol.features { margin: 4px 0; padding-left: 22px; }
+
+/* The reveal, as the figures mark it. */
+.reveal {
+  border: 1.5px solid var(--failed); border-radius: 7px; background: #fcefef; color: var(--gate-text);
+  padding: 8px 11px;
+}
+.reveal:not(.opened) { border-style: dashed; background: #ffffff; }
+
+footer { font-size: 12px; margin-top: 4px; }

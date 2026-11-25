@@ -1,9 +1,9 @@
-"""One description per dataset, read by everything that has to tell a model about the data.
+"""One task description per dataset, read by everything that tells a language model about the data.
 
 The proposer, the judge and the vendored methods all need the same facts, and without one shared
-description each would carry its own copy. Copies of a fact drift silently: a model told the wrong
+description each would keep its own copy. Copies of a fact drift silently: a model told the wrong
 thing answers confidently and the run completes. So most of these tests check that the description
-loads from one place, that a typo in it is refused and not dropped, and that the descriptions in
+loads from one place, that a typo in it is refused instead of dropped, and that the descriptions in
 the repository's folder are usable.
 """
 
@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from seqmaestro.llm import TaskContext, blinding_leaks, load_task
-from tests.planted import ANALYSES, TARGET, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, TARGET, planted_dataset
 
 REPO = Path(__file__).resolve().parents[1]
 DATASETS = REPO / "experiments" / "datasets"
@@ -63,8 +63,9 @@ def test_an_unknown_dataset_says_what_is_available(tmp_path):
 
 
 def test_target_name_is_not_rendered(tmp_path):
-    """`target_name` exists so a method's prompt config can be generated from this description.
-    Rendering it would change prompts that have already been measured, and no model needs it."""
+    """`target_name` exists so that a method's prompt config can be generated from this description.
+    Rendering it would change prompts whose results have already been measured, and no model needs
+    it."""
     context = load_task(write(tmp_path, target_name="thing-ness"), "thing")
 
     assert context.target_name == "thing-ness"
@@ -86,7 +87,7 @@ def test_as_dict_records_every_field_so_a_result_names_how_it_was_asked():
 
 
 # --------------------------------------------------------------------------------------------
-# Blinding: one fact, told to the judge and to nobody else
+# Blinding: a fact told only to the judge
 # --------------------------------------------------------------------------------------------
 #
 # The failure these guard against is silent in both directions. A leak makes a proposer's discovery
@@ -107,8 +108,8 @@ def test_a_withheld_fact_loads_like_any_other_field(tmp_path):
 
 
 def test_the_blind_rendering_is_the_plain_one():
-    """The plain `render` is the blind one, as a safety property. Every model consumer calls
-    `render`, so a caller who reaches for it by habit under-discloses and does not leak."""
+    """The plain `render` is the blind one, for safety. Every consumer that prompts a model calls
+    `render`, so a caller who reaches for it by habit under-discloses instead of leaking."""
     assert WITHHELD not in blinded().render()
     assert WITHHELD in blinded().render_for_judge()
 
@@ -127,8 +128,8 @@ def test_a_dataset_that_withholds_nothing_renders_identically():
 
 
 def test_the_judge_is_told_the_withheld_fact():
-    """Checked end to end through the judge's renderer and not through `render_for_judge`
-    directly, because what matters is that the prompt the judge receives carries the fact."""
+    """The check goes end to end through the judge's renderer instead of calling `render_for_judge`
+    directly, because what matters is that the prompt the judge receives contains the fact."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.judge import PanelSource, build_panel, render
 
@@ -141,8 +142,8 @@ def test_the_judge_is_told_the_withheld_fact():
 
 
 def test_the_proposer_is_not():
-    """The proposer's prompt, checked end to end, does not carry the withheld fact. A proposer
-    shown the phenotype's name can retrieve what is known about it instead of finding it in the
+    """The proposer's prompt, checked end to end, does not contain the withheld fact. A proposer
+    shown the phenotype's name can recall what is known about it instead of finding it in the
     data, and the run would still complete."""
     from seqmaestro.proposer import Example, render_request
 
@@ -179,8 +180,9 @@ def test_a_proposal_key_is_unchanged_by_the_withheld_fact():
 
 
 def test_each_consumer_records_what_it_was_told():
-    """A blinded run can only be read afterwards if the record says which side of the blind each
-    number came from. The proposer's manifest omits the fact, and the judge's output carries it."""
+    """A blinded run can only be interpreted afterwards if the record says which side of the blind
+    each number came from. The proposer's manifest omits the fact, whereas the judge's output
+    records it."""
     from seqmaestro.judge import summarise
     from seqmaestro.llm import ScriptedClient
     from seqmaestro.proposer import ProposalSettings, Proposer
@@ -196,8 +198,8 @@ def test_each_consumer_records_what_it_was_told():
 # The descriptions in the repository's folder
 # --------------------------------------------------------------------------------------------
 #
-# A clone holds the example's. A machine with datasets of its own also holds theirs, which git
-# ignores, and the tests below check those too.
+# A clone holds the example dataset's description. A machine with other datasets also holds theirs,
+# which git ignores, and the tests below check those too.
 
 
 def test_every_description_here_loads():
@@ -249,10 +251,10 @@ def test_a_description_that_withholds_nothing_finds_nothing():
 
 
 def test_every_config_here_is_blinded_as_its_description_is_and_its_columns_give_nothing_away():
-    """Read from each dataset's declaration, which states its columns and describes its covariates,
-    since `data/` is not in git. A declaration is named for its data folder and split directory.
-    The configs are those in the folder: the example's in a clone, and beside it those of the
-    datasets a machine holds. A config that extends another may state no dataset of its own, so
+    """The columns come from each dataset's declaration, which states its columns and describes its
+    covariates, because `data/` is not in git. A declaration is named for its data folder and split
+    directory. The configs are those in the folder: the example's in a clone, and beside it those of
+    the datasets a machine holds. A config that extends another may not state a dataset itself, so
     each is read with what it extends folded in."""
     from seqmaestro.pipeline.config import resolve
 
@@ -272,7 +274,8 @@ def test_every_config_here_is_blinded_as_its_description_is_and_its_columns_give
 
 def test_a_proposer_arm_refuses_a_blinded_run_whose_target_column_names_what_it_withholds(
         runners, tmp_path, monkeypatch, capsys):
-    """Before anything is sent or written: `--show-prompt`, which prints the prompt, refuses too."""
+    """The arm refuses before anything is sent or written, and `--show-prompt`, which only prints
+    the prompt, refuses too."""
     import yaml
 
     datasets = write(tmp_path, name="planted", task="Predicting a class from random windows.",
@@ -288,8 +291,9 @@ def test_a_proposer_arm_refuses_a_blinded_run_whose_target_column_names_what_it_
                  "permutation_scope": "seed", "class_weight": "balanced", "permutation_repeats": 0,
                  "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "sources": {"llm_generated": {"proposal_rounds": 1, "n_per_round": 1, "n_examples": 20}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"llm_generated": {"models": ["l1_logistic"]}}}))
     run_dir = tmp_path / "run"

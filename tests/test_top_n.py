@@ -1,8 +1,9 @@
 """The comparable view: each arm's most important features, capped at a shared N.
 
-An EBM fits a shape function to every input, so it "selects" the whole k-mer vocabulary. L1
-selects a small fraction of it, and a shallow tree names a handful. Comparing those sets directly
-would make stability a measure of set size, so the headline comparison is over the top N of each.
+An EBM fits a shape function to every input, so it "selects" the whole k-mer vocabulary, whereas
+L1 selects a small fraction of it and a shallow tree names a handful. Comparing those sets directly
+would make stability a measure of set size, so the main comparison is over the top N of each. As in
+`seqmaestro.harness.stability`, a run (`FeatureRun`) is one cell's features with their values.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def test_selection_is_by_absolute_importance():
 
 
 def test_a_short_list_is_not_padded():
-    """A model that used three features contributes three, not twenty blanks."""
+    """A model that used three features contributes three, with no blanks to make up twenty."""
     assert len(top_features(records({"a": 1.0, "b": 0.5, "c": 0.1}), n=20)) == 3
 
 

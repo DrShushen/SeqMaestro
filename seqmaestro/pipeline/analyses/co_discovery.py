@@ -1,47 +1,20 @@
-"""Which discoveries are corroborated by several arms, and which belong to one arm alone.
-
-Stability asks whether *one* arm returns the same features when the seed changes. This script asks
-a different question: when several arms are pointed at the same data, do they converge on the same
-properties? A property found by a positional model, a k-mer model and a language-model proposer has
-been reached in three independent ways. A property found by a single arm has not, and is either that
-arm's distinctive contribution or its noise. The analysis exists to tell those two apart.
-
-**How.** Every arm is evaluated on the same reference rows, so the behavioural matcher behind the
-stability analysis works across arms as well as across seeds. Within each (label condition, seed),
-the top-N features of every arm are clustered into *concepts* (connected components of the pairwise
-match graph), and each concept is scored by how many arms found it.
-
-**Why the raw count is misleading.** Some arms agree for reasons unrelated to the data: several
-models over one fixed vocabulary draw from the same features, and DEFT's tree with and without its
-language model starts from the same naive candidates. These structural agreements can dominate the
-raw share so completely that it comes out *higher* on shuffled labels than on real ones. Restricted
-to arms handed different input pools, the same comparison points the right way. Both are written
-out, and arms should be ranked by the cross-pool one. The corrected scalar goes last, for the
-reasons `per_arm_summary` gives.
-
-**Agreeing about a concept is weaker than agreeing about which way it runs.** Two arms can both
-lean on the GC content of one window and use it in opposite directions, which corroborates nothing.
-So each concept also carries the direction its members agree on and the share of them holding it.
-The sign of each match is aligned first, because a feature and its negation are one property, and
-comparing their directions unaligned counts agreement as disagreement.
-
-Two corrections follow, and both are reported:
-
-  * **Definitionally linked arms count once.** CART and DEFT share a tree, its naive candidates
-    and, under `grid.permutation_scope: seed`, the shuffled labels, so much of their agreement is
-    present under *both* label conditions and none of it is evidence. Arms that drew on one
-    proposal would be linked the same way, but each arm's proposal is made for that arm, so no two
-    arms of a run share one. `n_witnesses` collapses such a group to a single witness, and `n_arms`
-    keeps the raw count beside it so the adjustment is visible. See `linked_by_fit` and
-    `linked_groups`.
-  * **A permuted-label null.** The same clustering is run on the permuted arms, which gives the
-    corroboration this machinery produces when there is nothing to find. Per concept, that supplies
-    an empirical p-value. Per arm, it supplies the chance level for a corrected corroborated share.
+"""Which discoveries several arms corroborate, and which belong to one arm alone.
 
     python experiments/analysis/analyse_co_discovery.py --run-dir experiments/runs/<date>_<name>
 
-`docs/analyses/stability_and_co_discovery.md` is the maintained account of this. Change one,
-change the other.
+Within each label condition and seed, the top-N features of every arm are clustered into concepts
+(connected components of the graph of matched features), and each concept is scored by the arms
+that found it: `n_arms` as counted, `n_witnesses` with definitionally linked arms counted once
+(`linked_by_fit`, `linked_groups`), `n_pools`, and the direction its members agree on, with signs
+aligned first. The same clustering of the permuted cells gives each concept an empirical p-value
+and each arm its chance level. Arms are compared by the share of their concepts that an arm on a
+different pool also found, and the chance-corrected share is reported last, for the reasons
+`per_arm_summary` gives.
+
+The command writes two tables under the run's `results/`: `co_discovery.csv`, with one row per
+concept, and `co_discovery_by_arm.csv`, with one row per arm over every seed.
+`docs/developer/analyses/stability_and_co_discovery.md` explains each count, and why the raw count
+of arms misleads.
 """
 
 from __future__ import annotations
@@ -85,20 +58,20 @@ def linked_by_fit(arms: Iterable[str]) -> list[frozenset[str]]:
     Their agreement is a property of the pipeline and not of the data, so each group counts as one
     witness. The two share the vendored tree, the naive candidate enumeration and, under
     `permutation_scope=seed`, the same shuffled label vector. They differ only in whether a
-    language model proposes extra candidates. On shuffled labels those candidates win nothing, so
+    language model proposes extra candidates. On shuffled labels those candidates win no split, so
     the generative tree is close to a copy of CART's, and the pair agrees *more* under the null than
-    under real labels. The chance correction cannot absorb that, because it subtracts a baseline
-    that only exists when there is nothing to find.
+    under real labels. The chance correction cannot remove that, because it subtracts a chance level
+    measured when there is nothing to find, which is where this pair agrees most.
 
     Arms that only share a pool are not grouped: they select independently from a common
-    vocabulary, which is a weaker form of dependence, and it is left visible in the results instead
-    of being corrected away.
+    vocabulary, which is a weaker form of dependence that is left visible in the results instead of
+    being corrected away.
     """
     grouped: dict[tuple[str, tuple[str, ...]], set[str]] = collections.defaultdict(set)
     for arm in arms:
         model, pool = split_arm(arm)
-        # The pool's other sources, in the order every pool lists them. None are left for a model
-        # whose pool is the source it writes and nothing else.
+        # The pool's other sources, in the order every pool lists them. The tuple is empty for a
+        # model whose pool is only the source it writes.
         others = tuple(member for member in parse_pool(pool) if member != LLM_JOINT)
         grouped[model, others].add(arm)
     return [frozenset(group) for group in grouped.values() if len(group) > 1]
@@ -107,9 +80,9 @@ def linked_by_fit(arms: Iterable[str]) -> list[frozenset[str]]:
 def arm_name(cell: Path, results: Path) -> str:
     """The arm a results cell belongs to: everything between the results root and `<labels>/<seed>`.
 
-    Three readers need this name and must agree on it, so it is defined once. A group of arms read
-    off the run is compared against arm names built here, so a name assembled with one component
-    more or fewer matches nothing, and the group silently never applies.
+    Three callers need this name and must agree on it, so it is defined once. A group of arms taken
+    from the run's records is compared with the arm names built here, so a name assembled with one
+    component more or fewer would match nothing, and the group would silently never apply.
     """
     return "/".join(cell.parts[len(results.parts):-2])
 
@@ -129,15 +102,16 @@ def proposal_keys(described) -> set[str]:
 
 def linked_groups(results: Path, labels: str, seed: str) -> list[frozenset[str]]:
     """The groups of arms of this (labels, seed) that do not count as independent witnesses: arms
-    that consumed one proposal, read off the run, and arms linked by their fit (`linked_by_fit`).
+    that consumed one proposal, as the run records them, and arms linked by their fit
+    (`linked_by_fit`).
 
     A proposer records which cache entry it used, so the run itself states which arms shared a
     proposal. Each arm's proposal is made for that arm alone (`Proposer.arm`), so a run of the
     pipeline has no such group.
 
-    The two kinds are **unioned**. Returning only the groups that share a proposal whenever any
-    exist would drop the tree's pair on every such run. Nothing would flag it: the analysis would
-    complete, and only the affected arm's number would be wrong.
+    **The two kinds are combined.** Returning only the groups that share a proposal whenever any
+    exist would drop the tree's pair on every such run, and the omission would go unflagged,
+    because the analysis would complete with only the affected arm's number wrong.
     """
     by_key: dict[str, set[str]] = {}
     present = []
@@ -163,11 +137,11 @@ def independent_witnesses(found_by: set[str], groups: list[frozenset[str]]) -> i
 
 
 def recorded_pools(results: Path, labels: str, seed: str) -> dict[str, frozenset[str]]:
-    """Each arm's input pool at this (labels, seed), read off the run and not off its directory
-    name.
+    """Each arm's input pool at this (labels, seed), taken from what its cells recorded instead of
+    from its directory name.
 
-    A directory name does not identify the pool, since a name is only a label. A cell's `run.json`
-    records the pool's members as `sources`, so this takes what the arm was handed.
+    A directory name does not identify the pool, since a name is only a label, whereas a cell's
+    `run.json` records the pool's members as `sources`, which is what the arm was handed.
 
     A cell whose `run.json` states no `sources` is refused, because Stage 2 records them for every
     cell of an arm.
@@ -183,13 +157,13 @@ def recorded_pools(results: Path, labels: str, seed: str) -> dict[str, frozenset
 
 
 def distinct_pools(found_by: set[str], pools: dict[str, frozenset[str]]) -> int:
-    """How many different input pools found it: the stricter, secondary count.
+    """How many different input pools found a concept: the stricter, secondary count.
 
-    Reported beside `n_witnesses` because arms are not equally independent of one another. Three
-    models over the same positional features are three arms but one representation, and they agree
-    substantially even on shuffled labels, as the permuted rows of the output show. A concept found
-    by a positional model, a k-mer model and a language-model proposer has been reached in three
-    different ways. One found by three models over one vocabulary has not.
+    It is reported beside `n_witnesses` because arms are not equally independent of one another.
+    Three models over the same positional features are three arms but one representation, and they
+    agree substantially even on shuffled labels, as the permuted rows of the output show. A concept
+    found by an arm on positions, an arm on k-mers and an arm on a written source has been reached
+    in three different ways, whereas one found by three models over one vocabulary has not.
     """
     return len({pools[arm] for arm in found_by})
 
@@ -206,19 +180,20 @@ def arms_present(results: Path, labels: str, seed: str) -> list[tuple[str, Path]
 def agreed_direction(members: list[tuple[str, np.ndarray]]) -> tuple[str | None, float | None]:
     """The direction a concept's members agree on, and the share of them holding it.
 
-    **Signs are aligned before they are compared**, and skipping that would invert the answer.
-    Features are matched on *absolute* rank correlation, because a feature and its negation carry
-    the same information. So a cluster may legitimately hold a GC fraction from one arm and an AT
+    **Signs are aligned before they are compared**, because skipping that would invert the answer.
+    Features are matched on *absolute* rank correlation, because a feature and its negation hold
+    the same information, so a cluster may legitimately hold a GC fraction from one arm and an AT
     fraction from another, whose directions are opposite while the finding is the same. Each member
     is therefore compared with the first one and flipped where it runs the other way.
 
     The comparison uses the **model's** direction and not the marginal effect. Two features that
     matched already have near-identical marginal effects by construction, so agreeing about those
-    would only restate the match. Agreeing about how each arm *uses* the property carries new
+    would only restate the match, whereas agreeing about how each arm *uses* the property adds
     information, because every arm conditions on a different set of other features.
 
-    The share is `None` for a concept that only one arm reported a direction for, because there is
-    nothing for it to agree with, and 1.0 would look like unanimity.
+    The share is `None` for a concept in which only one member has a usable direction (a member
+    whose values do not vary on the reference rows cannot be aligned, so it is left out), because
+    there is nothing for it to agree with, and 1.0 would look like unanimity.
     """
     usable = []
     reference = members[0][1] if members else None
@@ -253,7 +228,8 @@ def concepts(results: Path, labels: str, seed: str, top_n: int) -> list[dict]:
     found_by: dict[int, set[str]] = collections.defaultdict(set)
     names: dict[int, list[str]] = collections.defaultdict(list)
     # The values travel with the direction because comparing directions needs them: see
-    # `agreed_direction`, where the sign of the match decides whether two words are the same claim.
+    # `agreed_direction`, where the sign of the match decides whether two direction words make the
+    # same claim.
     pointing: dict[int, list[tuple[str, np.ndarray]]] = collections.defaultdict(list)
     for owner, run, run_labels in zip(owners, runs, consensus_labels(runs, matcher), strict=True):
         for index, (record, cluster) in enumerate(zip(run.records, run_labels, strict=True)):
@@ -279,29 +255,30 @@ def concepts(results: Path, labels: str, seed: str, top_n: int) -> list[dict]:
 def per_arm_summary(frame: pd.DataFrame) -> pd.DataFrame:
     """For each arm: how often another arm found the same thing, at several strengths.
 
-    **Read all the columns.** Corroboration by *any* second arm is a weak criterion, because it
-    fires on some concepts even under shuffled labels, and it flatters whichever arm has the most
-    company: three models over one vocabulary corroborate each other by construction. So the count
-    is reported at rising strengths beside the chance level, instead of being folded into a single
-    figure.
+    **The columns are meant to be judged together.** Corroboration by *any* second arm is a weak
+    criterion, because it fires on some concepts even under shuffled labels, and it flatters
+    whichever arm has the most company: three models over one vocabulary corroborate each other by
+    construction. The count is therefore reported at rising strengths beside the chance level,
+    instead of being folded into a single figure.
 
     | | |
     |---|---|
     | `mean_witnesses` | mean number of independent arms per concept, without a threshold |
-    | `corroborated_share`, `_3`, `_4` | share reached by 2, 3, 4 or more arms |
+    | `corroborated_share`, `_3`, `_4` | share of concepts found by at least 2, 3 or 4 arms |
     | `cross_pool_share` | share an arm from a **different input pool** also found |
     | `unique_share` | the complement of `corroborated_share`: this arm's alone |
     | `corroborated_share_permuted` | the same criterion on shuffled labels |
-    | `corroborated_share_corrected` | `(observed - chance) / (1 - chance)`, to be read last |
+    | `corroborated_share_corrected` | `(observed - chance) / (1 - chance)`, to be considered last |
 
     Use `cross_pool_share` to compare arms with each other, because it does not reward an arm for
     sharing a vocabulary with two others. Its pools come from the members each cell records, so an
     arm that derives a pool for itself counts as that pool whatever its directory is called.
 
-    **The corrected column is kept, and reported last.** It divides by `1 - chance`, so for an arm
-    with a high chance level a small shortfall becomes a large negative. It also assumes the
-    shuffled run differs from the real one only in the labels, which is untrue for an arm whose
-    feature *mix* depends on the labels: a generative arm that finds nothing generates nothing.
+    **The corrected column is kept but reported last.** It divides by `1 - chance`, so for an arm
+    with a high chance level a small shortfall becomes a large negative. It also assumes that the
+    shuffled-label cells differ from the real ones only in the labels, which is untrue for an arm
+    whose feature *mix* depends on the labels: a generative arm that finds nothing generates
+    nothing.
     """
     rows: dict[tuple[str, str], dict] = {}
     for record in frame.itertuples():
@@ -352,8 +329,9 @@ def shares_by_label_set(frame: pd.DataFrame) -> list[str]:
     """The share of each label condition's concepts that two or more input pools found, then the
     share that two or more arms found.
 
-    A label condition can have no concepts at all: on shuffled labels every arm may use no feature,
-    as a sparse model or a symbolic one that chose its constant can, and the line says so.
+    A label condition can have no concepts at all, since on shuffled labels each arm may end up
+    using no feature (a sparse model can, and so can a symbolic one that chose its constant). The
+    line then says so.
     """
     lines = []
     for column, what in (("n_pools", "found by >=2 pools"), ("n_witnesses", "corroborated by >=2 arms")):

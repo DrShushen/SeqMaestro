@@ -1,8 +1,8 @@
-"""The threads a process's fits may use (`seqmaestro.execution`).
+"""The threads and memory a process may use, and the machine it runs on (`seqmaestro.execution`).
 
 A driver that runs processes side by side gives each a number of threads, and the fits inside
 follow it. The tests check that the number reaches the libraries, that a model built with its own
-number keeps it, and that the number changes nothing a fit computes.
+number keeps it, and that the number does not change what a fit computes.
 """
 
 from __future__ import annotations
@@ -175,8 +175,8 @@ def test_a_budget_takes_every_cpu_and_a_share_of_the_memory_lowered_to_its_caps(
 
 
 def test_a_process_is_measured_with_what_it_started(tmp_path):
-    """The memory a process's workers hold is the process's to answer for, so a measurement covers
-    everything below it."""
+    """The memory a process's workers hold counts against the process, so a measurement covers
+    every process it started."""
     child = subprocess.Popen([sys.executable, "-c", "x = bytearray(80 * 2**20); "
                               "open(__import__('sys').argv[1], 'w').close(); "
                               "__import__('time').sleep(30)", str(tmp_path / "ready")])

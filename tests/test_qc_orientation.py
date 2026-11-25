@@ -24,12 +24,12 @@ ALPHABET = ("A", "C", "G", "T")
 
 
 def motif_sequences(n: int, seed: int, length: int = 41) -> list[str]:
-    """Random sequences carrying a strongly asymmetric motif at a fixed position."""
+    """Random sequences with a motif off their centre, so their positional profile is asymmetric."""
     rng = np.random.default_rng(seed)
     out = []
     for _ in range(n):
         s = list(rng.choice(list("ACGT"), size=length))
-        s[length // 2 : length // 2 + 4] = list("GTAC")  # asymmetric: not its own revcomp
+        s[length // 2 : length // 2 + 4] = list("GTAC")  # a palindrome (its own reverse complement)
         out.append("".join(s))
     return out
 
@@ -48,8 +48,8 @@ def test_reverse_complement_basic():
 
 
 def test_reverse_complement_leaves_unknown_symbols_alone():
-    # N and gaps have no complement. They pass through unchanged, without raising or being dropped,
-    # because a single ambiguous base should not cost the whole record.
+    # N and gaps have no complement. They pass through unchanged instead of raising or being dropped,
+    # because one ambiguous base should not make the whole record unusable.
     assert reverse_complement("ANG") == "CNT"
     assert len(reverse_complement("AN-GT")) == 5
 
@@ -67,7 +67,7 @@ def test_positional_profile_shape_and_normalisation():
 
 def test_positional_profile_learns_the_alphabet():
     _, alphabet = positional_profile(["ACAC", "CACA"])
-    assert alphabet == ("A", "C")          # not the four bases: only what is present
+    assert alphabet == ("A", "C")          # only the symbols present
 
 
 def test_positional_profile_rejects_ragged_and_empty():
@@ -86,11 +86,11 @@ def test_reverse_complement_profile_matches_actually_reverse_complementing():
 
 
 def test_reverse_complement_profile_handles_ambiguity_codes():
-    """N is self-complementary, and real assemblies contain it.
+    """The identity holds for an alphabet with N, which is its own complement.
 
-    A full dataset can carry N in a handful of rows out of hundreds of thousands while a subsample
-    of it carries none. Code checked only on a subsample could then look correct and fail on the
-    full dataset.
+    Real assemblies contain N, and a full dataset can have it in a handful of rows out of hundreds
+    of thousands while a subsample has none. Code checked only on a subsample could then look
+    correct and fail on the full dataset.
     """
     alphabet = ("A", "C", "G", "N", "T")
     seqs = [s[:20] + "N" + s[21:] for s in motif_sequences(50, seed=13)]
@@ -105,7 +105,7 @@ def test_orientation_check_survives_ambiguity_codes():
 
 
 def test_reverse_complement_profile_rejects_an_alphabet_that_cannot_express_the_flip():
-    # A complements to T, which is not in the alphabet, so there is no column to map onto.
+    # A complements to T, which is not in the alphabet, so there is no column to map it onto.
     with pytest.raises(KeyError, match="absent from the alphabet"):
         reverse_complement_profile(np.zeros((4, 2)), ("A", "C"))
 
@@ -114,7 +114,7 @@ def test_reverse_complement_profile_rejects_an_alphabet_that_cannot_express_the_
 
 
 def test_detects_data_that_is_already_oriented():
-    # Both strands were written in the same reading direction: profiles agree as-is.
+    # Both strands are in the same reading direction, so their profiles agree without a flip.
     seqs = motif_sequences(200, seed=2)
     strands = ["+"] * 100 + ["-"] * 100
     evidence = orientation_evidence(seqs, strands)
@@ -124,7 +124,7 @@ def test_detects_data_that_is_already_oriented():
 
 
 def test_detects_data_that_is_not_oriented():
-    # The reverse-strand records still carry genomic forward-strand sequence.
+    # The reverse-strand records are still written as genomic forward-strand sequence.
     forward = motif_sequences(100, seed=3)
     reverse = [reverse_complement(s) for s in motif_sequences(100, seed=4)]
     evidence = orientation_evidence(forward + reverse, ["+"] * 100 + ["-"] * 100)
@@ -134,8 +134,8 @@ def test_detects_data_that_is_not_oriented():
 
 
 def test_structureless_data_is_inconclusive_rather_than_guessed():
-    # Random sequences have a near-palindromic profile, which fits both hypotheses. Returning a
-    # confident answer here is the failure mode this guards against.
+    # Random sequences have a nearly palindromic profile, which fits both hypotheses, so a confident
+    # verdict here would be a guess.
     seqs = random_sequences(400, seed=5)
     evidence = orientation_evidence(seqs, ["+"] * 200 + ["-"] * 200)
     assert evidence.verdict == INCONCLUSIVE
@@ -170,10 +170,10 @@ def test_custom_strand_labels():
 
 
 def test_grouping_rescues_an_answer_that_pooling_dilutes():
-    """One class carries the positional signal and the other is noise.
+    """One class has the positional signal and the other is noise.
 
-    Pooled, the structured class is diluted by the structureless one. Checked on its own, it gives
-    a verdict.
+    When all rows are pooled, the structureless class dilutes the structured one, whereas the
+    structured class checked on its own gives a verdict.
     """
     positives = motif_sequences(200, seed=9)
     negatives = random_sequences(600, seed=10)
@@ -183,14 +183,14 @@ def test_grouping_rescues_an_answer_that_pooling_dilutes():
 
     by_group = orientation_by_group(sequences, strands, groups)
 
-    assert by_group[1].verdict == ORIENTED           # the structured class answers
+    assert by_group[1].verdict == ORIENTED           # the structured class gives a verdict
     assert by_group[0].verdict == INCONCLUSIVE       # the noise class cannot
-    assert None in by_group                          # pooled result is reported too
+    assert None in by_group                          # the pooled result is reported too
     assert by_group[1].separation > by_group[0].separation
 
 
 def test_grouping_skips_groups_it_cannot_evaluate():
-    # A group present on only one strand is omitted, not fatal to the rest.
+    # A group present on only one strand is omitted without stopping the check of the others.
     sequences = motif_sequences(120, seed=11)
     strands = ["+"] * 50 + ["-"] * 50 + ["+"] * 20
     groups = ["ok"] * 100 + ["one_strand_only"] * 20
@@ -221,13 +221,13 @@ def test_classify_against_reference_ignores_case_by_default():
 
 
 def test_classify_against_reference_on_a_palindrome():
-    # A palindromic window matches both ways. AS_GIVEN wins, so the caller needs more than one
-    # locus to conclude anything.
+    # A palindromic window matches both ways and is classified AS_GIVEN, so the caller needs more
+    # than one locus to conclude anything.
     assert classify_against_reference("ACGT", "ACGT") == AS_GIVEN
 
 
 def test_non_dna_alphabet_with_a_custom_complement():
-    # Nothing in the module is DNA-specific: RNA works by passing its own complement map.
+    # The module assumes nothing about DNA: RNA works by passing its complement map.
     rna = {"A": "U", "C": "G", "G": "C", "U": "A"}
     assert reverse_complement("AACGU", rna) == "ACGUU"
     seqs = [s.replace("T", "U") for s in motif_sequences(100, seed=12)]

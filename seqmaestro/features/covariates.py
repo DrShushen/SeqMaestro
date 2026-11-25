@@ -1,9 +1,9 @@
 """The covariates as they are: one feature per number measured beside each sequence.
 
 A dataset may declare covariates at Stage 1, such as a chromatin signal over the window or an
-experimental measurement (`docs/dataset.md`). This featuriser hands them to a model unchanged, so
-an arm whose pool holds `covariates` can use them beside whatever it reads from the sequence. It
-never reads the sequence, and no sequence featuriser reads a covariate.
+experimental measurement (`docs/developer/dataset.md`). This featuriser hands them to a model
+unchanged, so an arm whose pool holds `covariates` can use them beside the features it takes from
+the sequence. It never uses the sequence, and a sequence featuriser never uses a covariate.
 
 Each feature is named `covariate_<column>`. The prefix says what kind of feature it is in any
 table, as `pos_` and `kmer_` do, and keeps the name apart from any feature a language model writes
@@ -30,17 +30,17 @@ KIND_COVARIATE = "covariate"
 
 
 def covariate_feature_name(column: str) -> str:
-    """The name of the feature that carries a covariate column as it is."""
+    """The name of the feature that holds a covariate column as it is."""
     return f"{KIND_COVARIATE}_{column}"
 
 
 class CovariateFeaturiser(Featuriser):
-    """One column per covariate the rows carry, holding its values as they are.
+    """One column per covariate of the rows, holding its values as they are.
 
     `descriptions` maps each covariate to what it measures, as the dataset declares it
-    (`Dataset.covariates`), and becomes the description of its feature. Fitting records which
-    covariates the rows carried, and transforming selects those by name, so rows that lack one are
-    refused.
+    (`Dataset.covariates`), and that text becomes the description of its feature. Fitting records
+    which covariates the rows held, and transforming selects those by name, so rows that lack one
+    are refused.
     """
 
     def __init__(self, descriptions: Mapping[str, str]) -> None:
@@ -50,7 +50,7 @@ class CovariateFeaturiser(Featuriser):
 
     def _fit(self, inputs: Inputs, y: np.ndarray | None = None,
              sample_weight: np.ndarray | None = None) -> list[FeatureRecord]:
-        # `y` is ignored: the columns are the rows' own. See `Featuriser._fit`.
+        # `y` is ignored: the columns are the covariates as they are. See `Featuriser._fit`.
         if not inputs.covariate_columns:
             raise ValueError(
                 "The rows carry no covariates, so there is nothing to hold. A pool with "

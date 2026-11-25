@@ -1,29 +1,31 @@
-"""Everything a run's report is written from. **Runs in `SeqMaestro_Core`, after the reveal.**
+"""Build the inputs of a run's report. **Runs in `SeqMaestro_Core`, after the reveal.**
 
     python experiments/analysis/build_report_inputs.py --run-dir experiments/runs/<date>_<name>
 
-Writes `<run>/report/`: `facts.json`, `tables/*.md`, `internals/*.json` and `figure_inputs.json`
-(see `seqmaestro/report/build.py`). `build_report_figures.py` then draws the figures from
-`figure_inputs.json` under `SeqMaestro_LocalUtils`, and the report is written against
-`docs/report/TEMPLATE.md` and expanded by `assemble_report.py`. `process/reporting.md` gives the
-whole sequence.
+This writes `<run>/report/`: `facts.json`, `tables/*.md`, `internals/*.json` and
+`figure_inputs.json` (see `seqmaestro/report/build.py`). `build_report_figures.py` then draws the
+figures from `figure_inputs.json` under `SeqMaestro_LocalUtils`, and the report is written to the
+template `process/report-template.md` and expanded by `assemble_report.py`. `process/reporting.md`
+gives the whole sequence.
 
-**What the run holds is read from its config**, not found on disk: every arm, seed and label of the
-grid, the baseline, the reduced and the profiled arms, and why any reduced arm was not profiled. A
-missing cell stops the build, and every cell must be one the reveal sealed. The run's Stage 2
-analyses are read where they exist, and one the run did not produce is reported as not measured.
+**What the run should hold is taken from its config** instead of being found on disk: every arm,
+seed and label condition of the grid, the baseline, the reduced and the profiled arms, and why any
+reduced arm was not profiled. A missing cell stops the build, and every cell must be one the reveal
+sealed. The run's Stage 2 analyses are read where they exist, and one the run did not produce is
+reported as not measured.
 
-Two things need more than reading files, and both are asked of the side an arm's model lives on
-(`seqmaestro.pipeline.sides`), because both can mean calling a vendored method's interpreter:
+Two things need more than reading files. Both can mean calling a vendored method's interpreter, so
+both are requested from the side where an arm's model lives (`seqmaestro.pipeline.sides`):
 
 - **Concepts** group every profiled arm's reported features by what they compute on D (train +
   val): `Side.reported_columns`.
 - **Model internals** of the models a report draws, one per interpretable class in the headline
-  set: `Side.internals`. A model loaded in this process is read after a check that it reproduces
-  its cell's validation scores, and a DEFT tree is read on DEFT's side.
+  set: `Side.internals`. A model loaded in this process is inspected only after a check that it
+  reproduces its cell's validation scores, and a DEFT tree is inspected on DEFT's side.
 
 The classes, or a continuous target's name and meaning, come from the dataset's `dataset.json`.
-Nothing here refits, scores or reads the test split: every test number is one the reveal wrote.
+This module does not refit, score or read the held-out split: every held-out number is one the
+reveal wrote.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from seqmaestro.arms import arm_name, split_arm
 from seqmaestro.harness import cell as cells
 from seqmaestro.harness.stability import BehaviouralMatcher
 from seqmaestro.llm import load_task
+from seqmaestro.pipeline import agents
 from seqmaestro.pipeline.analyses import co_discovery, judge, recurrence, stability
 from seqmaestro.pipeline.config import ConfigError, ExperimentConfig, load_recorded
 from seqmaestro.pipeline.layout import (
@@ -90,7 +93,7 @@ def inventory(config: ExperimentConfig) -> sources.Inventory:
         profiled={arm_name(*arm): reliability_dir("", *arm) for arm in config.profiled_arms()},
         not_profiled=config.not_profiled(),
         # The judge is listed only where the config runs it, so a run that leaves it out has no
-        # judge column, while one whose judge failed shows it as not measured.
+        # judge column, whereas a run whose judge failed shows it as not measured.
         analyses={name: path for name, path in STAGE2_ANALYSES.items()
                   if name != "judge" or config.grid.judge},
     )
@@ -131,8 +134,9 @@ def drawn_internals(run_dir: Path, run: sources.Run, facts: dict, rows: Rows) ->
 
 
 def blinding(config: ExperimentConfig) -> dict:
-    """Whether the run withheld a fact from the language models, and the fact: the config's
-    `dataset.blinded`, and its task description's `judge_only`, which the driver checked agree."""
+    """Whether the run withheld a fact from the language models, and which fact: the config's
+    `dataset.blinded` and its task description's `judge_only`, which the driver checked for
+    agreement."""
     withheld = (load_task(DESCRIPTIONS, config.dataset.task).judge_only
                 if config.dataset.blinded else None)
     return {"blinded": config.dataset.blinded, "withheld": withheld}
@@ -157,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     rows = Rows.of(config)
     try:
         run = sources.load(run_dir, inventory(config), rows.dataset, REDUCED_ROLES,
-                           blinding=blinding(config))
+                           blinding=blinding(config),
+                           guidance=config.grid.generated_features.guidance)
     except sources.ReportError as error:
         print(error, file=sys.stderr)
         return 2
@@ -176,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         if slot not in drawn:
             print(f"  no {slot}: no arm of that model class was reduced", flush=True)
     out = report_dir(run_dir)
-    written = build.write(out, facts, concepts, drawn)
+    written = build.write(out, facts, concepts, drawn, agents.recorded(run_dir))
     print(f"wrote {out}: {len(written['tables'])} tables, {len(drawn)} model internals, "
           f"{len(written['figures'])} figures to draw", flush=True)
     for name, absent in ((name, found is None) for name, found in run.analyses.items()):

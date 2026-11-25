@@ -1,28 +1,31 @@
 """Propose once per arm, task, settings, rows and labels, and reuse the result wherever it is asked
 for again.
 
-**The key is the question asked.** Anything that would change the proposal is in the key, the arm
-included (`Proposer.arm`), so each arm's proposal is made for that arm and no two arms share one.
-Within an arm, the iterative source asks again for the blind round its pool already holds, and is
-answered from the cache.
+**The key identifies the request.** Anything that would change the proposal is in the key, the arm
+included (`Proposer.arm`), so each arm's proposal is made for that arm, and two arms never share
+one. Within an arm, the iterative source asks again for the blind round that its pool already
+holds, and that request is answered from the cache.
 
-**LLM runs fail part-way through.** A resumed run should not pay again for proposals it already has.
+**A run that calls a language model can fail part-way through**, and when it is resumed it should
+not pay again for the proposals it already has.
 
-**Processes running side by side share it.** The arms of one run read and write one cache from
-several processes at once. The driver gives each arm, labels and seed to one process, but a process
-started by hand may ask for an entry another is making. An entry is therefore looked up and, when
-absent, made while its key is held against the other processes (`held`), so a second process asking
-for an entry the first is making waits and then takes it, and is never answered differently. An
-entry is written whole, in one rename, so no process takes a part-written one.
+**Processes running side by side share the cache.** The arms of one run read and write one cache
+from several processes at once. The driver gives each combination of arm, label condition and seed
+to one process, but a process started by hand may ask for an entry another is making. An entry is
+therefore looked up and, when absent, made while its key is held against the other processes
+(`held`), so a second process asking for an entry the first is making waits and then takes it, and
+is never answered differently. An entry is written whole, in one rename, so a process never takes a
+part-written one.
 
 The cache is a plain keyed store: a directory, one file per key, no expiry and no invalidation
-logic. The key holds what a proposal depends on that a run or an edit of the prompts can change:
-the description, the settings, the guard, the model, the seed, the rows, the feedback, the arm and
-the wording of the prompts (`Proposer.key_for`). It leaves out the code around them: the template
-`render_request` assembles a request from, the precision a feature's values are compared at, and
-the client's reasoning effort. A run continued after a change to one of those is answered from the
-proposals made before it. A cached entry is a `features.json`, so it is validated on read by the
-code that validates every other feature file, and can be inspected with no special tooling.
+logic. The key holds everything a proposal depends on that a run, or an edit of the prompts, can
+change: the task description, the settings, the guard, the language model and the effort it
+reasons at, the seed, the rows, the feedback, the arm and the wording of the prompts
+(`Proposer.key_for`). It leaves out the code around them: the template `render_request` assembles a
+request from, and the precision at which a feature's values are compared. A run continued after a
+change to one of those is answered from the proposals made before it. A cached entry is a
+`features.json`, so it is validated when it is read by the code that validates every other feature
+file, and can be inspected without special tools.
 """
 
 from __future__ import annotations
@@ -45,23 +48,24 @@ def proposal_key(**parts) -> str:
     """A digest of everything that would change the answer.
 
     `Proposer.key_for` passes the task context, the settings, the guard policy, a digest of the
-    prompt's wording, the language model, the seed, digests of the rows with their labels and of the
-    feedback, and, where there is one, the arm and the columns block. Anything omitted here is
-    something two requests could differ in while silently sharing a cache entry, so add rather than
-    trim.
+    prompt's wording, the language model with its effort, the seed, digests of the rows with their
+    labels and of the feedback, and, where there is one, the arm and the columns block. Two requests
+    that differ only in something omitted here would silently share a cache entry, so when in doubt,
+    add a part instead of removing one.
     """
     canonical = json.dumps(parts, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode()).hexdigest()[:32]
 
 
 def digest_feedback(feedback: dict | None) -> str:
-    """Identify what a fitted model told the proposer, so a later round gets its own cache entry.
+    """A digest of what a fitted model told the proposer, so that a later round gets its own cache
+    entry.
 
-    No feedback, which means a blind round, digests to a constant. The blind round of the iterative
+    A blind round has no feedback, which digests to a constant. The blind round of the iterative
     source therefore has the key of the proposal its arm's pool already holds, and is answered from
-    the cache. The arm is in the key as well (`Proposer.key_for`), so no two arms share an entry.
+    the cache. The arm is in the key as well (`Proposer.key_for`), so two arms never share an entry.
     The feedback is dumped as sorted JSON and hashed whole, so a model that adds a new signal
-    changes the key without this function having to know about it.
+    changes the key without any change to this function.
     """
     if not feedback:
         return "none"
@@ -71,11 +75,11 @@ def digest_feedback(feedback: dict | None) -> str:
 
 
 def digest_rows(inputs, y=None) -> str:
-    """Identify the exact rows a proposal was made from: their sequences, their covariates and their
-    labels. Takes `Inputs`, or the sequences alone.
+    """A digest of the rows a proposal was made from: their sequences, their covariates and their
+    labels. It takes `Inputs`, or the sequences alone.
 
-    Including the labels is what gives a permuted-label arm its own proposals instead of the real
-    arm's. The covariates enter only where the rows have some.
+    Including the labels gives a permuted cell its own proposals, separate from those of the real
+    cell. The covariates are included only where the rows have some.
     """
     inputs = as_inputs(inputs)
     hasher = hashlib.sha256()

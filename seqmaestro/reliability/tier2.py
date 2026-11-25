@@ -1,12 +1,13 @@
-"""Tier 2: does the feature go with the target on its own, calibrated against permuted targets.
+"""Tier 2: whether a feature is associated with the target on its own, calibrated against permuted
+targets.
 
-**One statistic for every kind of feature.** For a binary target, T_j = |AUC_j - 1/2|, where AUC_j
-is the Mann-Whitney area under the curve of feature j used directly as a score, with average ranks
-for ties. For a continuous target, T_j = |rho_j|, Spearman's rank correlation of feature j with the
-target, with average ranks for ties on both sides. Indicators, counts and continuous ratios can all
-be ranked, so one statistic covers every candidate and every kind of feature is measured the same
-way. It detects monotone association only: a feature that separates the classes, or moves the
-target, at both extremes but not in the middle can score zero.
+**Every kind of feature is measured by one statistic.** For a binary target, T_j = |AUC_j - 1/2|,
+where AUC_j is the Mann-Whitney area under the curve of feature j used directly as a score, with
+average ranks for ties. For a continuous target, T_j = |rho_j|, Spearman's rank correlation of
+feature j with the target, with average ranks for ties on both sides. Indicators, counts and
+continuous ratios can all be ranked, so one statistic covers every candidate. It detects monotone
+association only: a feature that separates the classes (or moves the target) at both extremes but
+not in the middle can score zero.
 
 **The null permutes the target.** Ranking the columns once and permuting `y` gives every null
 statistic from one matrix product. With R the (n, p) matrix of within-column ranks and Y the (n, B2)
@@ -16,10 +17,10 @@ permutation, and
     AUC = (rank sum of the positives - n1 (n1 + 1) / 2) / (n1 n0)
 
 turns each sum into an AUC, because permuting a binary label leaves n1 fixed. This makes 100,000
-permutations over thousands of features affordable. A continuous target goes through the same
-product with its doubled, centred ranks in place of the labels: R'r is n times the rank
-covariance, and it becomes Spearman's rho on division by the two rank norms, which permuting the
-target leaves fixed.
+permutations over thousands of features feasible. A continuous target goes through the same product
+with its doubled, centred ranks in place of the labels: R'r is proportional to the rank covariance,
+and it becomes Spearman's rho on division by the two rank norms, which permuting the target leaves
+fixed.
 
 **The comparisons are exact.** The ranks are doubled and centred before the product (`2r - (n + 1)`
 is an integer for average ranks), so every statistic is an integer, held exactly in float64 at
@@ -28,29 +29,30 @@ indicator on a few hundred rows takes very few distinct values of the statistic,
 permutation distribution sits on the observed statistic, and a comparison that rounded those ties
 the wrong way would shrink the p-value.
 
-**The p-values and their adjustments.** Each feature gets a raw permutation p-value, with the +1
-correction of Phipson and Smyth; BH and BY q-values and a Holm-adjusted p-value (`multitest.py`
-says what each assumes); and a Westfall-Young min-P adjusted p-value. Westfall-Young controls the
+**Each feature gets a raw p-value and four adjustments of it**: the raw permutation p-value with
+Phipson and Smyth's +1 correction, BH and BY q-values and a Holm-adjusted p-value (`multitest.py`
+says what each assumes), and a Westfall-Young min-P adjusted p-value. Westfall-Young controls the
 family-wise error rate using the dependence present among the candidates, so on positional
 indicators and overlapping *k*-mers it is far less conservative than Bonferroni. The plug-in FDR
-estimate is reported beside them: the average number of features a permuted run calls at a cutoff,
-divided by the number the real run calls. Observed and null p-values share one scale because the
-observed statistic and its B2 permuted counterparts are treated as B2 + 1 exchangeable draws.
+estimate is reported beside them: the average number of features called at a cutoff under one
+permutation of the target, divided by the number called under the real target. Observed and null
+p-values share one scale because the observed statistic and its B2 permuted counterparts are
+treated as B2 + 1 exchangeable draws.
 
-**Model importances are never substituted for T_j.** Permuting `y` calibrates a multivariate
+**Model importances are never used in place of T_j.** Permuting `y` calibrates a multivariate
 importance only under the global null, so a per-feature p-value computed from one is not valid.
 For this reason Tier 2 is model-free, and Tiers 1 and 3, which use the model, make no per-feature
 significance claim of this kind.
 
 **An undefined value is ranked as its column's median over the defined ones**
-(`impute_non_finite`), as the panel's clusters rank it. Our own featurisers fill such values before
-their candidates are built, but a DEFT feature written for one node can return NaN on rows unlike
-those that reach the node. The statistic is then that of the imputed column, and the panel records
-which candidates were undefined and on what share of D.
+(`impute_non_finite`), as in the panel's clusters. SeqMaestro's featurisers fill such values before
+a pool is built, but a DEFT feature written for one node can return NaN on rows unlike those that
+reach the node. The statistic is then that of the imputed column, and the panel records which
+candidates were undefined and on what share of D.
 
-**Unweighted, so a weighted design is refused.** Every row counts once here. A design that fits
-with per-row weights would need a weighted statistic and a null that respects the weights, and
-neither is implemented. `refuse_weighted` raises for such a design, and the panel records the
+**A weighted design is refused**, because every row counts once here. A design that fits with
+per-row weights would need a weighted statistic and a null that respects the weights, and neither
+is implemented. `refuse_weighted` raises an error for such a design, and the panel records the
 refusal instead of computing an unweighted number for it.
 """
 
@@ -66,10 +68,10 @@ from seqmaestro.target import BINARY, CONTINUOUS, target_for
 #: Permutations per block of the label matrix, which bounds the (n, block) array on a large split.
 PERMUTATION_BLOCK = 1000
 
-#: The q-value levels every table carries.
+#: The q-value levels every table reports.
 Q_LEVELS = (0.01, 0.05, 0.1, 0.2)
 
-#: The raw-p cutoffs the plug-in FDR curve is evaluated at.
+#: The raw p-value cutoffs at which the plug-in FDR curve is evaluated.
 ALPHA_LEVELS = (0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2)
 
 #: The signed association Tier 2 reports for each kind of target, and its value for a feature with
@@ -78,7 +80,7 @@ ASSOCIATION = {BINARY: ("auc", 0.5), CONTINUOUS: ("rho", 0.0)}
 
 
 class WeightedDesignError(ValueError):
-    """Tier 2 was asked for on a design that fits with per-row weights."""
+    """Raised when Tier 2 is requested on a design that fits with per-row weights."""
 
 
 def refuse_weighted(weight_column: str | None) -> None:
@@ -182,8 +184,8 @@ def profile(X: np.ndarray, y: np.ndarray, names: list[str], *, target_kind: str,
     }
 
 
-#: The per-feature arrays `profile` returns, which are saved beside its summary, after the
-#: association the kind of target reports (`ASSOCIATION`).
+#: The per-feature arrays that `profile` returns and that are saved beside its summary, after the
+#: association the target's kind reports (`ASSOCIATION`).
 ARRAYS = ("statistic", "p_value", "q_bh", "q_by", "p_holm", "p_westfall_young", "mean",
           "nonzero_rate", "direction")
 
@@ -200,7 +202,7 @@ def _min_p_and_plug_in(null: np.ndarray, observed: np.ndarray, p_value: np.ndarr
     A permutation's p-value for feature j is its rank inside that feature's null row, on the
     same B2 + 1 scale as the observed p-value. The observed statistic counts as one of the draws,
     so a null statistic that beats it is counted exactly once on both sides. The work is done in
-    blocks of features, so nothing the size of the null matrix is held twice.
+    blocks of features, so the null matrix is never copied whole.
     """
     p, n_permutations = null.shape
     min_p = np.ones(n_permutations)

@@ -48,7 +48,8 @@ class Journal:
 
 
 class Machine:
-    """The stand-ins, the clock, and what the scheduler started, with what."""
+    """The stand-in processes, the clock, and every process the scheduler started, with the threads
+    and memory it gave each."""
 
     def __init__(self, tmp_path: Path, stages, budget: Budget) -> None:
         self.now = 0.0
@@ -97,13 +98,40 @@ def budget(cpus: int = 8, memory: int = 100 * GB, model_calls: int = 4) -> Budge
     return Budget(cpus=cpus, memory=memory, model_calls=model_calls, reserve=GB)
 
 
+class Ended(Process):
+    """A process that has ended cleanly by the time the scheduler first looks."""
+
+    def __init__(self) -> None:
+        super().__init__(pid=1)
+        self.code = 0
+
+
+def test_the_scheduler_hands_its_jobs_to_on_step_after_every_step(tmp_path):
+    """The driver keeps the run's status page current from what `on_step` is handed, and the
+    snapshot it writes says what each process is doing."""
+    seen = []
+    scheduler = Scheduler((stage("arm", 2),), budget(), Journal(tmp_path), cwd=tmp_path,
+                          start=lambda argv, log, environment, cwd: (Ended(), None),
+                          usage=lambda pids: {}, available=lambda: 1000 * GB, clock=lambda: 0.0,
+                          sleep=lambda seconds: None,
+                          on_step=lambda jobs, changed: seen.append(
+                              (changed, [job.state for job in jobs])))
+    scheduler.run()
+    assert seen[0] == (True, [schedule.RUNNING, schedule.WAITING]), "the first step started one"
+    assert seen[-1] == (True, [schedule.DONE, schedule.DONE])
+    snapshot = schedule.snapshot(scheduler.jobs, finished=True)
+    assert snapshot["finished"]
+    assert [(job["log"], job["stage"], job["state"]) for job in snapshot["jobs"]] == [
+        ("arm_0", "arm", schedule.DONE), ("arm_1", "arm", schedule.DONE)]
+
+
 def threads_in_use(machine: Machine) -> int:
     """The threads of the running processes, as the scheduler counts them now."""
     return sum(job.threads for job in machine.scheduler.jobs if job.state == schedule.RUNNING)
 
 
 def test_the_threads_of_the_running_processes_stay_within_the_budget(tmp_path):
-    """Each of a stage's processes takes one thread, as the arms fit, until the budget is spent."""
+    """Each process of a stage takes one thread, as an arm's fit does, until the budget is spent."""
     machine = Machine(tmp_path, (stage("arm", 12),), budget(cpus=8))
     machine.step()
     assert machine.running() == ["arm_0"], "the first runs alone until its memory is measured"
@@ -116,8 +144,8 @@ def test_the_threads_of_the_running_processes_stay_within_the_budget(tmp_path):
 
 
 def test_a_stage_that_takes_every_thread_waits_for_half_of_them_and_runs_alone(tmp_path):
-    """A reliability panel runs for hours on the threads it starts with, so it waits until half are
-    free, takes all that are, and does not share the machine with another of its kind."""
+    """A reliability panel runs for hours on the threads it starts with, so it waits until half the
+    threads are free, takes all that are, and does not share the machine with another panel."""
     panels = Stage("panel", tuple(Command(("panel", str(i)), f"panel_{i}", after=("arm_0",))
                                   for i in range(2)), threads=None)
     machine = Machine(tmp_path, (stage("arm", 6), panels), budget(cpus=8))
@@ -174,7 +202,8 @@ def test_a_process_that_takes_every_thread_is_lent_those_that_free_up(tmp_path):
 
 def test_a_process_whose_turn_comes_later_takes_back_what_the_panel_was_lent(tmp_path):
     """A reduction that becomes ready while a panel holds every thread starts at once on the
-    threads it needs, taken back from those the panel was lent, never from those it started with."""
+    threads it needs. They are taken back from the threads the panel was lent, never from those it
+    started with."""
     panel = Stage("panel", (Command(("panel",), "panel", after=("arm_0", "arm_1")),), threads=None)
     reduction = Stage("reduction", (Command(("reduce",), "reduction", after=("arm_5",)),),
                       threads=4)
@@ -198,8 +227,8 @@ def test_a_process_whose_turn_comes_later_takes_back_what_the_panel_was_lent(tmp
 
 
 def test_threads_go_first_to_the_processes_waiting_to_start(tmp_path):
-    """A process whose turn has come starts on the threads that free up, and while one still waits,
-    for whatever reason, the panel is given none of them."""
+    """A process whose turn has come starts on the threads that free up. While such a process still
+    waits, whatever the reason, the panel is given none of them."""
     panel = Stage("panel", (Command(("panel",), "panel", after=("arm_0", "arm_1")),), threads=None)
     reduction = Stage("reduction", tuple(Command(("reduce", str(i)), f"reduction_{i}",
                                                  after=("arm_2",)) for i in range(2)))
@@ -235,8 +264,9 @@ def test_processes_calling_a_language_model_stay_within_their_places(tmp_path):
 
 
 def test_a_measured_light_model_call_starts_whatever_the_threads_of_the_others(tmp_path):
-    """Processes waiting on the network count for the CPU they were measured to use, so they run
-    beside a panel that holds the threads. Holding them back would hold back the longest stages."""
+    """Processes waiting on a language model's replies count only for the CPU they were measured to
+    use, so they run beside a panel that holds the threads. Holding them back would hold back the
+    longest stages."""
     stages = (stage("panel", 1, threads=None), stage("proposer", 3, calls_model=True))
     machine = Machine(tmp_path, stages, budget(cpus=4))
     machine.step()
@@ -362,8 +392,8 @@ def test_the_phases_are_named_in_order(phase):
 
 
 def test_a_stage_with_no_process_is_neither_failed_nor_held(tmp_path):
-    """Held means every process of a stage was kept from starting, which a stage without any
-    cannot be."""
+    """A stage is held when every one of its processes was kept from starting, which cannot happen
+    to a stage without processes."""
     machine = Machine(tmp_path, (Stage("empty", ()), stage("arm")), budget())
     machine.step()
     machine.end("arm")

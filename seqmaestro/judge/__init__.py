@@ -1,23 +1,15 @@
-"""The blinded significance judge: the third evaluation axis, beside accuracy and stability.
-
-Accuracy and stability measure whether a feature predicts and whether it comes back. The judge asks
-one question of every discovered feature:
-
-> **How biologically significant or interesting would this feature be, if it were true?** (1-5)
+"""The judge: a language model that rates how significant each discovered feature would be, if it held.
 
 ```python
-panel = build_panel(sources, top_n=20, seed=0)          # select, blind, shuffle
+panel = build_panel(sources, top_n=20, seed=0)          # select, hide the arms, shuffle
 items = score_panel(panel, engine, context, repeats=3)  # independent calls per feature
 report = summarise(items, context)                      # per-arm means, and any noise floor
 ```
 
-The judge is an **instrument to be characterised**, and its scores are not ground truth. When
-features from permuted-label runs are judged, they sit in the same panel, indistinguishable from
-the rest, and an arm's gap above their mean says how far it rises above noise. Judging them is off
-by default, for the reasons given in the docstring of `seqmaestro.pipeline.analyses.judge`.
-
-The scoring backend sits behind `ScoringEngine`, so everything above can be tested without a
-credential, and a different model can be swapped in without touching the protocol.
+The judge is an instrument to be characterised, and its scores are not ground truth
+(`docs/developer/analyses/judge.md`). The scoring backend is behind the `ScoringEngine` interface,
+so that the protocol can be tested without a credential, and another model can be swapped in without
+changing it.
 """
 
 from __future__ import annotations

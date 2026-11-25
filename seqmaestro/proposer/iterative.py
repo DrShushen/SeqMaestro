@@ -3,9 +3,9 @@
 The one-round source (`llm_generated`) has a language model make one proposal, from the task
 description and a sample of labelled rows. This source (`llm_generated_iterative`) has it make
 several, one per round, and from round two the language model is shown what a fit of the arm's
-model made of the features proposed so far: what it leaned on, what it could not use, and how well
-it scored. The comparison against the one-round source isolates that loop. A round here is one
-proposal, which the proposer may make over several requests (`ProposalSettings.n_rounds`).
+model made of the features proposed so far: which features it relied on, which it could not use,
+and how well it scored. Comparing the two sources isolates the effect of that loop. A round here is
+one proposal, which the proposer may make over several requests (`ProposalSettings.n_rounds`).
 
 **Round one is blind, whatever the pool.** There is no fit to report on yet, so round one makes the
 same request as the one-round source, which makes the two comparable. It is a proposal made for this
@@ -14,18 +14,18 @@ pool from that proposal, with this proposer), and the loop then takes the pool's
 round one: it is neither requested nor checked on the rows a second time. At `rounds=1` this
 featuriser reduces to its pool plus a single one-round proposal.
 
-**Provenance.** The pool is `selected`: it was fixed before fitting, and any arm on the same pool
-could have chosen the same features. What this class proposes is `generated`, because it exists
-only as a consequence of a fit that no other arm ran.
+**Provenance.** The pool's features are `selected`: they were fixed before fitting, and any arm on
+the same pool could have chosen the same features. What this class proposes is `generated`,
+because those features exist only as a result of a fit that only this arm made.
 
-**Deduplication is required.** A language model asked again proposes earlier ideas again, under
-names the arm already holds. `Featuriser.fit` refuses duplicate names, so without deduplication the
-arm would not run at all. With it, `rounds=1` over a pool that holds the same proposal from another
-proposer reproduces the one-round source, which is the check the design rests on.
+**Deduplication is required.** A language model asked again repeats earlier ideas, under names the
+arm already holds. `Featuriser.fit` refuses duplicate names, so without deduplication the arm would
+not run at all. With it, `rounds=1` over a pool that holds the same proposal from another proposer
+reproduces the one-round source, which is the check the design rests on.
 
 **What became of the written features is counted for every round** (`round_report`) and in total
 (`fit_report`): how many were proposed, how many the arm already held, how many were kept, and how
-many were dropped for each reason. The columns of a fixed source in the pool are not among them.
+many were dropped for each reason. The columns of a fixed source in the pool are not counted.
 
 **The fitted model decides what the language model is shown.** Feedback comes from
 `Model.feedback`, so an arm using XGBoost sends gain and cover, and one using an additive model
@@ -88,15 +88,15 @@ class IterativeGeneratedFeaturiser(Featuriser):
         #: limit, sets none.
         self.max_seconds = getattr(getattr(proposer, "settings", None), "max_seconds", None)
         self._parts: list[Featuriser] = []
-        #: The covariates the rows carried at `fit`, which every round's generated code may read.
+        #: The covariates the rows held at `fit`, which every round's generated code may use.
         self.covariate_columns: tuple[str, ...] = ()
         #: One entry per round: the features proposed, those the arm already held under the same
         #: name, those kept, and those dropped for each reason.
         self.round_report: list[dict[str, Any]] = []
         #: The rounds' counts added up, under the keys `GeneratedFeaturiser` reports, so a stage
         #: can summarise this arm without knowing which of the two it is holding. They count the
-        #: written features alone: `n_proposed` is `n_already_present`, `n_kept` and every count of
-        #: `dropped` together.
+        #: written features alone: `n_proposed` is the sum of `n_already_present`, `n_kept` and
+        #: every count of `dropped`.
         self.fit_report: dict[str, Any] = {}
         self.transform_failures: dict[str, int] = {}
         self.transform_undefined: dict[str, int] = {}
@@ -106,7 +106,7 @@ class IterativeGeneratedFeaturiser(Featuriser):
     def __getstate__(self) -> dict[str, Any]:
         """The fitted parts, without what was used to build them.
 
-        `_transform` reads `_parts` and nothing else. The proposer, the model factory and the
+        `_transform` uses `_parts` and nothing else. The proposer, the model factory and the
         validation rows are used only while fitting, so none of them is saved. The factory is
         usually a closure, which cannot be pickled, and the validation rows are data that belongs to
         the run and not to the arm.
@@ -189,8 +189,8 @@ class IterativeGeneratedFeaturiser(Featuriser):
             "covariate_columns": list(self.covariate_columns),
             "pool": None if self.pool is None else self.pool.describe(),
             # Per round: what was proposed, what the arm already held, what was kept and what was
-            # dropped. The place to look when an arm's feature count is not what the round count
-            # would suggest.
+            # dropped. Look here when an arm's feature count is not what the round count would
+            # suggest.
             "rounds_report": self.round_report,
             "proposer": self.proposer.describe(),
         }

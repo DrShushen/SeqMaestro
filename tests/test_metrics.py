@@ -1,7 +1,7 @@
-"""`seqmaestro.harness.metrics`.
+"""The classification metrics (`seqmaestro.harness.metrics`).
 
 The expected values come from cases whose answer is known independently of the implementation (a
-perfect ranker, a constant predictor, a coin flip), so the tests do not simply pin whatever the
+perfect ranker, a perfectly wrong one, a coin flip), so the tests do not simply pin whatever the
 code returns. Several tests check the guards that stop a meaningless number from being reported as
 a valid one.
 """
@@ -41,7 +41,7 @@ def test_a_perfectly_wrong_ranker_scores_zero_auroc():
     assert m["mcc"] == -1.0
 
 
-def test_a_coin_flip_lands_near_chance():
+def test_a_coin_flip_scores_near_chance():
     rng = np.random.default_rng(0)
     y = rng.integers(0, 2, 4000)
     m = classification_metrics(y, rng.random(4000))
@@ -52,8 +52,8 @@ def test_a_coin_flip_lands_near_chance():
 
 
 def test_the_confusion_counts_reconstruct_the_thresholded_metrics():
-    """The stored confusion counts reproduce the thresholded metrics, so a metric that is not
-    computed today can still be recovered from them."""
+    """The stored confusion counts reproduce the thresholded metrics, so a thresholded metric the
+    code does not compute can still be recovered from them."""
     rng = np.random.default_rng(1)
     y = rng.integers(0, 2, 500)
     m = classification_metrics(y, rng.random(500))
@@ -76,11 +76,11 @@ def test_brier_and_log_loss_reward_confidence_only_when_it_is_right():
 
 
 def test_calibration_error_separates_a_calibrated_model_from_an_overconfident_one():
-    """Calibration error tells apart two models that AUROC cannot: both rank identically, and one
-    overstates its certainty. This is why calibration error is recorded."""
+    """Calibration error is recorded because it tells apart two models that AUROC cannot: both rank
+    identically, but one overstates its certainty."""
     rng = np.random.default_rng(3)
     p = rng.random(4000)
-    y = (rng.random(4000) < p).astype(int)  # by construction, p is the true probability
+    y = (rng.random(4000) < p).astype(int)  # By construction, p is the true probability
 
     # Sharpen by cubing the odds. The map is strictly increasing on [0, 1] and stays inside it, so
     # the ranking, and therefore AUROC, is unchanged. Clipping a linear stretch would not work: it
@@ -95,19 +95,19 @@ def test_calibration_error_separates_a_calibrated_model_from_an_overconfident_on
     assert overconfident["auroc"] == pytest.approx(calibrated["auroc"], abs=1e-9)
 
 
-# ------------------------------------------------------- the paper's three, and the whole set
+# ------------------------------------------------- the DEFT paper's metrics and the whole set
 
 
 def test_the_deft_papers_metrics_are_present_and_named_as_it_names_them():
-    """Accuracy and AUPRC are the metrics arXiv 2604.12060 reports in Table 1. AUROC is
-    SeqMaestro's addition."""
+    """Accuracy and AUPRC are the metrics the DEFT paper (arXiv 2604.12060) reports in its Table 1,
+    whereas AUROC is SeqMaestro's addition."""
     m = classification_metrics(PERFECT_TRUE, PERFECT_SCORE)
 
     assert {"accuracy", "auprc", "auroc"} <= set(m)
 
 
 def test_the_result_is_json_serialisable():
-    """The result is written straight into a run's metrics.json, and a numpy scalar in it would
+    """The result is written straight into a cell's `metrics.json`, and a numpy scalar in it would
     break the dump."""
     m = classification_metrics(PERFECT_TRUE, PERFECT_SCORE, n_bootstrap=20)
 
@@ -156,7 +156,7 @@ def test_the_chosen_threshold_beats_the_default_when_scores_are_not_centred():
     """A shallow tree's leaf proportions need not straddle 0.5. At a fixed 0.5 threshold such an
     arm would get a poor accuracy for a reason unrelated to what it learned."""
     y = np.array([0] * 50 + [1] * 50)
-    score = np.concatenate([np.full(50, 0.05), np.full(50, 0.20)])  # separable, but all below 0.5
+    score = np.concatenate([np.full(50, 0.05), np.full(50, 0.20)])  # Separable, but all below 0.5
 
     default = classification_metrics(y, score)["balanced_accuracy"]
     tuned = classification_metrics(y, score, threshold=choose_threshold(y, score))["balanced_accuracy"]
@@ -194,7 +194,7 @@ def test_multiclass_labels_are_refused():
 
 def test_a_single_class_yields_nan_ranking_rather_than_a_crash():
     """A single class occurs on a degenerate split and in bootstrap resamples of a tiny set, so it
-    must give NaN ranking metrics and not raise."""
+    must give NaN ranking metrics instead of raising."""
     m = classification_metrics([1, 1, 1], [0.2, 0.6, 0.9])
 
     assert np.isnan(m["auroc"]) and np.isnan(m["auprc"])

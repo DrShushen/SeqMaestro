@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """Write the group map a grouped split is checked against: `<splits>/groups.csv`.
 
-    python experiments/prepare/write_group_map.py \
-        --dataset data/<dataset>/<built>.csv \
-        --splits data/<dataset>/<splits> \
+    python experiments/prepare/write_group_map.py \\
+        --dataset data/<dataset>/<built>.csv \\
+        --splits data/<dataset>/<splits> \\
         --declared experiments/prepare/declarations/<dataset>__<splits>.yaml
 
 A grouped split promises that rows which are relatives of each other (one gene, one clonal family,
-one identical window) never land on opposite sides of it. Checking that promise needs a record of
-which group each row belongs to, and the record has to be joinable to the split files, which carry
+one identical window) never end up on opposite sides of it. Checking that promise needs a record of
+which group each row belongs to, and the record has to be joinable to the split files, which hold
 only the sequence and the label. So the map is keyed on the sequence: one row per distinct sequence,
 with its group under all the declared relations together.
 
@@ -17,8 +17,8 @@ grouping columns (the gene beside the window, the domain beside the site). The s
 only to find which rows they hold, and are never written. An existing split therefore gains a group
 map without being redrawn, and a split already used by a finished run stays byte for byte as it was.
 
-There is no flag for the relations. They come from the declaration, which is also where the check
-reads them, so the map and the check cannot disagree about what the split was grouped on.
+The relations have no flag: they come from the declaration, which is also where the check reads
+them, so the map and the check cannot disagree about what the split was grouped on.
 """
 
 from __future__ import annotations
@@ -70,15 +70,16 @@ def main(argv: list[str] | None = None) -> int:
         rows_in_split |= set(zip(part[sequence], part[target], strict=True))
 
     # Unlike the split files above, this file is read with missing values left missing.
-    # `connected_groups` relies on a missing value joining nothing, and reading empty fields as text
-    # would put every row whose gene is unknown into one group with all the others.
+    # `connected_groups`, which `group_map` calls, relies on a missing value joining nothing, and
+    # reading empty fields as text would put every row whose gene is unknown into one group with all
+    # the others.
     frame = pd.read_csv(args.dataset, dtype={sequence: str, target: str})
-    # Keep only the rows the splits hold. A build can carry rows that a split then dropped (one design
-    # subsamples the abundant class, another discards a stratum with no contrast). A row in no split
-    # must not attach its sequence to its group, because that would report the grouping as broken
-    # over a row nobody can be shown to have seen.
+    # Keep only the rows the splits hold. A build can hold rows that a split then dropped (one
+    # design subsamples the abundant class, another discards a stratum with no contrast). A row in
+    # no split must not attach its sequence to its group, because that would report the grouping as
+    # broken over a row nobody can be shown to have seen.
     #
-    # Rows are matched on the sequence and the label together. The split files carry only those two
+    # Rows are matched on the sequence and the label together. The split files hold only those two
     # columns, so no finer join exists.
     scoped = frame[[(s, t) in rows_in_split
                     for s, t in zip(frame[sequence], frame[target], strict=True)]]

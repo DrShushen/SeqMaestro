@@ -1,8 +1,8 @@
 """The time estimate a run is checked against before it starts (`seqmaestro/pipeline/estimate.py`):
 its arithmetic on given timings, and real probes on the planted dataset.
 
-A wrong estimate either hides a slow arm, which then costs a night, or flags a cheap one, which
-teaches whoever launches runs to ignore the flag.
+A wrong estimate either hides a slow arm, which then takes a whole night, or flags a fast one,
+which teaches whoever launches runs to ignore the flag.
 """
 
 from __future__ import annotations
@@ -43,8 +43,9 @@ def test_an_elimination_takes_the_reductions_steps(runners):
 
 
 def test_an_arms_cost_follows_from_one_fit(runners, tmp_path):
-    """Two labels and two seeds, N of 3, three pairs, on four threads. The check arm runs three
-    sweeps, a black box none, and the iterative source fits once per round."""
+    """Two label conditions and two seeds, an N of 3 for the reduction and three pairs for the
+    panel, on four threads. The check arm runs three sweeps of the panel's selections, a black box
+    none, and the iterative source fits once per round."""
     experiment_config, estimate, _ = runners
     config = a_config(tmp_path, experiment_config, arms=ARMS)
 
@@ -74,8 +75,9 @@ def test_a_pysr_search_costs_the_same_at_any_width_and_past_its_batches(runners)
 
 
 def test_a_fit_is_scaled_to_every_row_along_its_last_two_samples(runners):
-    """What a fit costs whatever its rows is not multiplied with them: two fits that cost about the
-    same on 250 and 500 rows cost about that on 4,000."""
+    """The time is extended along the line through the last two fits, so the part of a fit's time
+    that does not depend on its rows is not multiplied with them: fits of 10 s on 250 rows and 11 s
+    on 500 give 25 s on 4,000, where scaling in proportion to the rows would give 88 s."""
     _, estimate, _ = runners
     assert estimate.scale_rows([(250, 10.0, 5), (500, 11.0, 5)], 4000) == pytest.approx(25.0)
     assert estimate.scale_rows([(250, 10.0, 5)], 1000) == pytest.approx(40.0), \
@@ -130,7 +132,7 @@ def test_the_driver_estimates_and_starts_nothing(runners, tmp_path, monkeypatch)
     source.write_text(config.to_yaml())
     measured = probe(estimate)
     monkeypatch.setattr(estimate, "estimate_run", lambda config, threads, slow_hours, report: (
-        [measured], [estimate.estimate_arm(measured, config, threads, 150, slow_hours)]))
+        [measured], [estimate.estimate_arm(measured, config, threads, 150, slow_hours)], {}))
     monkeypatch.setattr(run_experiment, "start_process",
                         lambda *args: pytest.fail("the estimate started a process"))
 

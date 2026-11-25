@@ -1,27 +1,27 @@
-"""Where a fitted model lives, and what the stages after Stage 2 ask of it there.
+"""Where a fitted model lives, and what the stages after Stage 2 need from it there.
 
-A model fitted in Core is saved whole in its cell (`fitted.pkl`), and any Core process loads it.
-DEFT's tree carries its features as functions, and an IGSR model's terms are code its language model
-wrote, so both are evaluated only under their method's interpreter, through an adapter. Each of the
-three is a *side*: `CORE`, `DEFT` and `IGSR`.
+A model fitted in Core is saved whole in its cell (`fitted.pkl`), and any Core process can load it.
+By contrast, DEFT's tree holds its features as functions and an IGSR model's terms are code its
+language model wrote, so both are evaluated only under their method's interpreter, through an
+adapter. Each of the three places is a *side*: `CORE`, `DEFT` and `IGSR`.
 
-The stages after Stage 2 ask the same six things of an arm, whichever side its model is on:
+The stages after Stage 2 make the same six requests of an arm, whichever side its model is on:
 
-- `reduce`: eliminate the arm's features to N (Stage 3A).
+- `reduce`: eliminate the arm's features down to N (Stage 3A).
 - `fits`: make the reliability panel's fits (Stage 3B).
 - `is_saved`: say whether a cell holds the model its `predict_with` promises (the reveal, before it
-  opens the test split).
+  opens the held-out split).
 - `predict`: score rows with a cell's saved model (the reveal).
 - `reported_columns`: the reduced model's features over D, for the report's concepts.
 - `internals`: what is inside the reduced model, for the report's drawing of it.
 
-**A cell says which side wrote it**, in the `predict_with` of its `run.json`. Each side has one
+**A cell records which side wrote it** in the `predict_with` of its `run.json`. Each side has one
 value for its Stage 2 cells and one for the cells fitted later from them (a reduced arm's three
 models, the panel's refits), because a later cell keeps a different model: a tree over the Stage 2
 tree's features, or a linear model over the Stage 2 search's terms. `side_of` finds the side from
-the value, so a stage never asks which method an arm belongs to.
+the value, so a stage never needs to know which method an arm belongs to.
 
-A new vendored method adds a side here.
+A new vendored method needs a new side here.
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ from seqmaestro.reliability.fits import InProcess
 from seqmaestro.reliability.panel import Fits
 from seqmaestro.report import internals as insides
 
-#: Writes one of a reduced arm's three models into its cell and returns what the cell's `run.json`
-#: says about it: `(role, cell)`.
+#: A function of `(role, cell)` that writes one of a reduced arm's three models into its cell and
+#: returns what the cell's `run.json` records about it.
 SaveModel = Callable[[str, Path], dict[str, Any]]
 
 
@@ -64,13 +64,14 @@ class Side:
 
     def is_saved(self, cell: Path, run: Mapping[str, Any]) -> bool:
         """Whether the cell, whose `run.json` is `run`, holds the model its `predict_with` promises.
-        The reveal asks before it opens the test split, so that a missing model stops it while it
-        can still be stopped."""
+        The reveal checks this before it opens the held-out split, so that a missing model stops
+        the reveal while it can still be stopped."""
         raise NotImplementedError
 
     def reduce(self, source: Source, rows: Rows, *, n_target: int, out_dir: Path,
                on_step: Callable[[dict], None]) -> tuple[Reduction, SaveModel]:
-        """Eliminate the arm fitted in `source` to `n_target` features, on validation only."""
+        """Eliminate the features of the arm fitted in `source` down to `n_target`, on validation
+        only."""
         raise NotImplementedError
 
     def fits(self, source: Source, discovery: pd.DataFrame, n_train: int, columns: Columns) -> Fits:
@@ -81,9 +82,10 @@ class Side:
     def predict(self, run_dir: Path, cell: Path, run: Mapping[str, Any], inputs: Inputs,
                 dataset: Dataset) -> tuple[np.ndarray, int | None]:
         """The saved model's score for every row of `inputs`, in their order: the probability of
-        the positive class for a binary target, the predicted value for a continuous one. With it,
-        how many rows took the model's constant prediction, for a model that can be undefined on a
-        row, or None. The rows cross to a vendored method without their labels."""
+        the positive class for a binary target, and the predicted value for a continuous one. It
+        also returns how many rows took the model's constant prediction (for a model that can be
+        undefined on a row), or None. The rows are passed to a vendored method without their
+        labels."""
         raise NotImplementedError
 
     def reported_columns(self, run_dir: Path, arm: Arm, names: list[str], source: Source,
@@ -104,8 +106,9 @@ class Side:
 def _loaded(run_dir: Path, cell: Path, record: Mapping[str, Any], rows: Rows,
             marginal: Mapping[str, float | None], *, model, columns: list[str],
             predicted: np.ndarray, values_on: Callable[[Inputs], np.ndarray]) -> dict[str, Any]:
-    """The insides of a reduced model that this process loaded, once its validation predictions are
-    seen to be the ones its cell recorded. `values_on` computes the model's columns on given rows."""
+    """The internals of a reduced model that this process loaded, once its validation predictions
+    have been checked against those its cell recorded. `values_on` computes the model's columns on
+    given rows."""
     dataset = rows.dataset
     insides.check_reproduces(cells.validation_scores(run_dir / cell), predicted, str(cell))
     source = Source.read(run_dir / record["source_cell"])
@@ -143,8 +146,8 @@ class CoreSide(Side):
         return InProcess(source, discovery, columns)
 
     def predict(self, run_dir, cell, run, inputs, dataset):
-        # The rows carry every covariate the dataset declares. A featuriser that reads covariates
-        # picks out the ones it was fitted with, and refuses rows that lack one.
+        # The rows hold every covariate the dataset declares. A featuriser that uses covariates
+        # picks out the ones it was fitted with and refuses rows that lack one.
         fitted = load_fitted(cell)
         if fitted.sequence_column not in (None, dataset.sequence_column):
             raise ValueError(f"{cell} was fitted on column {fitted.sequence_column!r}, but the "
@@ -152,8 +155,8 @@ class CoreSide(Side):
         return fitted.predict_counting(inputs)
 
     def reported_columns(self, run_dir, arm, names, source, rows):
-        # The reduced cell's saved featuriser computes exactly the reduced model's columns, so the
-        # whole pool is not built for them.
+        # The reduced cell's saved featuriser computes the reduced model's columns and no others,
+        # so the whole pool need not be built for them.
         cell = reduction_dir(run_dir, *arm) / REDUCED_MODEL
         fitted = load_fitted(cell)
         if fitted.featuriser.feature_names != names:
@@ -170,9 +173,9 @@ class CoreSide(Side):
 
 
 class VendoredSide(Side):
-    """A method whose models its interpreter alone uses. A cell's `run.json` names the model's
-    file in `fitted_model`: inside the bundle the method handed back for a Stage 2 cell, and inside
-    the cell for one fitted later."""
+    """A method whose models only its interpreter can use. A cell's `run.json` names the model's
+    file in `fitted_model`, which is inside the bundle the method handed back for a Stage 2 cell
+    and inside the cell itself for one fitted later."""
 
     def is_saved(self, cell: Path, run: Mapping[str, Any]) -> bool:
         name = run.get("fitted_model")
@@ -182,7 +185,7 @@ class VendoredSide(Side):
 
 class DeftSide(VendoredSide):
     """DEFT's tree. A Stage 2 cell keeps the tree in its bundle, and a later cell keeps a tree
-    fitted over that tree's features. Both are read by DEFT's interpreter alone."""
+    fitted over that tree's features. Only DEFT's interpreter can load either."""
 
     stage2, later = deft.PREDICT_WITH, deft_cart.PREDICT_WITH
 

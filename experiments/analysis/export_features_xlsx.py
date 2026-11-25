@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-"""A finished run's reported features as a spreadsheet, for people who want to sort and filter.
+"""Write a finished run's reported features to a spreadsheet, for people who want to sort and filter
+them.
 
     $LOCALUTILS experiments/analysis/export_features_xlsx.py --run-dir experiments/runs/<date>_<name>
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Ask a sequence dataset whether its strand convention and genome build are what they claim.
+"""Check whether a sequence dataset's strand convention and genome build are what it claims.
 
-Two checks, run together because each covers the other's blind spot. The composition check needs
-no network but cannot detect a *global* reverse complement. The reference check detects that, and
-identifies the build as well, but needs a handful of lookups.
+Two checks run together, because each covers the other's blind spot. The composition check needs
+no network but cannot detect a *global* reverse complement, whereas the reference check detects
+that and identifies the build as well, but needs a handful of lookups.
 
 For example, with the label column named so that each class is also checked alone:
 
@@ -57,7 +57,7 @@ def check_against_reference(
     args: argparse.Namespace,
     builds: tuple[str, ...],
 ) -> dict[str, dict[str, int]]:
-    """Compare a sample of windows against each candidate build.
+    """Compare a sample of windows with each candidate build.
 
     The reference window is placed by *assuming* the anchor base sits at `--anchor-index` of the
     sequence, so an exact match also confirms the centring. A different centring matches nothing.
@@ -129,9 +129,9 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, default=None)
     args = parser.parse_args()
 
-    # Only the columns the checks use. These files have hundreds of columns, about 100 of them
-    # single-character, which pandas holds as objects, so reading them all costs gigabytes to use
-    # five.
+    # Only the columns the checks use. A built dataset can have hundreds of columns, many of them
+    # single characters, which pandas holds as objects, so reading them all can take gigabytes of
+    # memory to use five.
     needed = [args.sequence_column, args.strand_column]
     if args.label_column:
         needed.append(args.label_column)

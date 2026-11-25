@@ -1,23 +1,28 @@
-"""A cell: the directory one fitted model leaves behind, and the one way it is written.
+"""The directory that one fitted model leaves behind (a cell), whose standard files only this module
+writes.
 
-    run.json             what was fitted, and what the reveal needs to score it
+    run.json             what was fitted and how: the arm, the seed, the label condition, the
+                         settings the fit used, the language model it called (if any), and
+                         predict_with, which says where the model is
     metrics.json         the validation block, and after the reveal the block of the held-out split
-    predictions.npz      the labels and the scores, so any metric can be computed again without a fit
+    predictions.npz      the labels and the scores, so that any metric can be recomputed without a fit
     features.json        the features the model used, with importances and directions
     feature_values.npz   those features evaluated on the validation rows
 
-A Stage 2 cell holds all five. A model fitted later from a Stage 2 cell (a reduced arm's three
-models, a refit of the reliability panel) holds the first three, since its features are described
-by the cell it came from. Beside them a cell keeps its saved model, in the form its `predict_with`
-names, and whatever its arm reports about the fit.
+A Stage 2 cell holds all five. The cell of a model fitted later from a Stage 2 cell (a reduced
+arm's three models, or a refit of the reliability panel) holds the first three, because its features
+are described by the cell it came from. Beside them a cell keeps its saved model, in the form its
+`predict_with` names: `fitted.pkl` (the featuriser and the model) for a Core model, or, for a
+vendored one, `inputs/` (the rows it was given) and `bundle/` (what its method returned, including
+its saved model). A cell on a written source also keeps `token_usage.json`: the tokens its requests
+used, what the language model returned and what the checks and the repair round made of it, and
+why each written feature was kept or dropped, by round for the iterative source.
 
-**`metrics.json` is written last, and a cell that has one is finished.** A resumed run skips such
-a cell, and the reveal scores it. Every file is written whole (`seqmaestro.files`), so a process
-killed in the middle of a cell leaves no marker, and the cell is fitted again.
+**`metrics.json` is written last, so a cell that has one is finished.** A resumed run skips such a
+cell, and the reveal scores it. Every file is written whole (`seqmaestro.files`), so a process
+killed partway through a cell leaves no marker and the cell is fitted again.
 
-The two conditions a cell's labels can be in are named here too. A `real` cell was fitted on the
-labels as they are. A `permuted` cell was fitted on the training labels shuffled, and is the
-control its arm is compared with.
+This module also names the two label conditions, `real` and `permuted`.
 """
 
 from __future__ import annotations
@@ -58,18 +63,18 @@ class Features:
     records: list[FeatureRecord]
     #: The records evaluated on the validation rows, one column per record, in their order.
     values: np.ndarray
-    #: What `features.json` says about the fit above its records.
+    #: The header of `features.json`, which describes the fit above the records.
     header: dict[str, Any] = field(default_factory=dict)
 
 
 def is_finished(cell: str | Path) -> bool:
-    """Whether the cell was written to its end."""
+    """Whether the cell was written in full."""
     return (Path(cell) / METRICS_FILE).exists()
 
 
 def unfinish(cell: str | Path) -> None:
-    """Take a cell's marker away, before it is fitted again. Without this, a second fit that died
-    part way would leave the files of two fits under a marker that says the cell is whole."""
+    """Remove a cell's marker before the cell is fitted again. Otherwise a second fit that died
+    partway would leave the files of two fits under a marker that says the cell is complete."""
     (Path(cell) / METRICS_FILE).unlink(missing_ok=True)
 
 
@@ -94,8 +99,8 @@ def validation_scores(cell: str | Path) -> np.ndarray:
 
 def write(cell: str | Path, *, run: Mapping[str, Any], metrics: Mapping[str, Any], y_val, scores,
           features: Features | None = None, reports: Mapping[str, Any] | None = None) -> Path:
-    """Write a cell: its record, its validation arrays, its features where it has any, and its
-    marker last.
+    """Write a cell: its record (`run.json`), its validation arrays, its features where it has any,
+    and its marker last.
 
     `reports` are further JSON files of the cell, by file name, such as what a language model's
     proposal cost. They are written before the marker, so a finished cell has them.

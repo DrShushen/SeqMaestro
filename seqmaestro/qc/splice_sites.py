@@ -1,10 +1,10 @@
-"""Whether windows cut from the introns either side of an exon are in transcript orientation.
+"""Whether windows cut from the introns on either side of an exon are in transcript orientation.
 
 A window made of the intron before an exon and the intron after it has a 3' splice site where the
 upstream intron ends and a 5' splice site where the downstream intron begins, and both have a
 consensus: `AG` ends an intron, and `GT`, or the minor `GC`, begins one. A delivery that left a
 minus-strand gene on the genomic plus strand, or cut its flanks one base off, loses that consensus.
-Nothing downstream could detect such a delivery, because every feature built on a mis-oriented
+A later stage could not detect such a delivery, because every feature built on a mis-oriented
 dataset still looks interpretable, so a build measures the consensus rates at the junction and
 refuses a delivery below `MIN_SPLICE_SITE_RATE` at either site.
 """
@@ -19,9 +19,9 @@ from collections.abc import Iterable
 ACCEPTOR = ("AG",)
 DONOR = ("GT", "GC")
 
-#: Below this the delivery is not what it claims to be, and the likeliest cause is an orientation
-#: error or an off-by-one in how the flanks were cut. Set well under the true consensus rate so that
-#: only a real structural failure trips it.
+#: Below this rate the delivery is not what it claims to be, and the likeliest cause is an
+#: orientation error or an off-by-one in how the flanks were cut. It is set well under the true
+#: consensus rate, so that only a real structural failure trips it.
 MIN_SPLICE_SITE_RATE = 0.90
 
 #: How many of the commonest dinucleotides at each site the record keeps.

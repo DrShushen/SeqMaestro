@@ -18,8 +18,8 @@ from seqmaestro.harness.effect import (
 def confounded(n: int = 2000, seed: int = 0):
     """A dataset where the label is a property of the stratum and of nothing else.
 
-    `is_the_stratum` describes the stratum and not the row, yet an unstratified test calls it the
-    strongest effect present. The stratified tools under test exist to catch this.
+    `is_the_stratum` describes the stratum instead of the row, yet an unstratified test calls it
+    the strongest effect present. The stratified tools under test exist to catch this.
     """
     rng = np.random.default_rng(seed)
     strata = rng.integers(0, 20, n)
@@ -79,7 +79,7 @@ def test_a_ratio_below_one_is_refused():
 
 
 def test_matching_returns_nothing_when_no_stratum_holds_both_classes():
-    """Both classes are present overall and the design still has no contrast anywhere in it."""
+    """Both classes are present overall, yet the design has no contrast anywhere in it."""
     kept = match_within_strata(np.array(["a", "a", "b", "b"]), np.array([1, 1, 0, 0]), seed=0)
     assert len(kept) == 0
 
@@ -112,7 +112,7 @@ def test_the_null_sees_a_confounder_when_it_is_not_told_about_the_strata():
 
 
 def test_the_null_absorbs_a_confounder_once_it_is_permuted_within_the_strata():
-    """Permuting within strata asks whether a column differs between classes inside a stratum, so
+    """Permuting within strata tests whether a column differs between classes inside a stratum, so
     the same column and estimate stop looking significant."""
     values, label, strata, _ = confounded()
     p = stratified_permutation_p(values, label, strata, draws=400, seed=0)
@@ -141,7 +141,8 @@ def test_no_p_value_is_ever_zero():
 
 
 def test_asking_for_no_draws_returns_nothing_rather_than_a_p_of_one():
-    """With no draws, `1 / (0 + 1)` would read as a measured null result backed by no evidence."""
+    """With no draws, `1 / (0 + 1)` would look like a measured null result backed by no
+    evidence."""
     values, label, strata, _ = confounded()
     assert np.isnan(stratified_permutation_p(values, label, strata, draws=0)).all()
 

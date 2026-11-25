@@ -1,9 +1,9 @@
-"""The splice-site check: whether windows cut from the introns beside an exon are oriented as the
-transcript is.
+"""The splice-site check: whether windows cut from the introns beside an exon are in the
+transcript's orientation.
 
-A delivery left on the wrong strand, or cut one base off, still gives every feature a plausible
-description, so a build that cuts such windows measures the consensus at the junction and refuses a
-delivery without it.
+A delivery left on the wrong strand, or with its flanks offset by one base, still gives every
+feature a plausible description, so later stages cannot detect it. A build that cuts such windows
+therefore measures the consensus at the junction and refuses a delivery that lacks it.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ def test_no_more_than_the_commonest_few_are_kept():
 
 
 def test_windows_on_the_other_strand_are_refused():
-    """Reverse-complemented, the donor's `GT` reads `AC` where the acceptor should be, and the
-    acceptor's `AG` reads `CT` where the donor should be."""
+    """Reverse complementing a window turns the donor's `GT` into `AC` where the acceptor should be,
+    and the acceptor's `AG` into `CT` where the donor should be."""
     with pytest.raises(ValueError, match="not exons flanked by introns in transcript orientation"):
         splice_site_check(["AC"] * 10, ["CT"] * 10)
 

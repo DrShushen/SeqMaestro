@@ -1,19 +1,19 @@
-"""The Core side of an IGSR arm after Stage 2: what the later stages ask of it.
+"""The Core side of an IGSR arm after Stage 2: what the later stages need from it.
 
 An IGSR arm's features are terms its language model wrote as functions of the rows, so they are
-evaluated by IGSR's copy, under the guard and the timeout its search used, and never here:
-`evaluate_terms` hands the rows to `igsr_bundle.py evaluate` under IGSR's interpreter, numbered and
-without their target, and reads the values back. What is fitted on those values is the fit IGSR's
-search made, which the Stage 2 bundle records (`igsr_fit`): least squares, plain or with IGSR's ridge
-or lasso penalty. It needs nothing of IGSR, so it is made here
+evaluated by the vendored copy of IGSR, under the guard and the timeout its search used, and never
+here: `evaluate_terms` hands the rows to `igsr_bundle.py evaluate` under IGSR's interpreter,
+numbered and without their target, and reads the values back. What is fitted on those values is the
+fit IGSR's search made, which the Stage 2 bundle records (`igsr_fit`): least squares, plain or with
+IGSR's ridge or lasso penalty. That fit needs nothing of IGSR, so it is made here
 (`seqmaestro.models.sparse.LeastSquares`), with the elimination, the selections and the refits every
 in-process arm uses.
 
 Each later stage has its entry point here: `reduce_arm` for Stage 3A, `IgsrFits` for the reliability
 panel (a `seqmaestro.reliability.fits.ColumnFits` whose pool IGSR evaluates), `predict_cell` for the
 reveal of a reduced or refitted cell, and `load_model` for the report.
-`seqmaestro.pipeline.sides` calls them for a cell IGSR's side wrote. Every term the arm's search
-accepted is its pool, in `terms.json` of its Stage 2 bundle.
+`seqmaestro.pipeline.sides` calls them for a cell IGSR's side wrote. The arm's pool is every term
+its search accepted, listed in `terms.json` of its Stage 2 bundle.
 """
 
 from __future__ import annotations
@@ -44,7 +44,8 @@ from seqmaestro.target import CONTINUOUS
 PREDICT_WITH = "igsr_terms"
 #: The least-squares model inside a reduced or refitted IGSR cell.
 MODEL_FILE = "model.pkl"
-#: The file an IGSR arm's pool over D is left in, beside its panel's other files.
+#: The file an IGSR arm's pool over D (the training and validation rows) is left in, beside its
+#: panel's other files.
 POOL_FILE = "pool.npz"
 
 
@@ -88,7 +89,8 @@ def evaluate_terms(source_cell: Path, names: list[str] | None, inputs: Inputs, s
 
 def igsr_fit(source_cell: Path) -> dict[str, Any]:
     """The fit a Stage 2 IGSR cell's search made, as its bundle records it: `LeastSquares`'s
-    penalty, alpha and intercept."""
+    penalty, alpha and intercept. A bundle that records no fit is refused, because the arm could
+    not then be refitted as IGSR fitted it."""
     arm = json.loads((Path(source_cell) / BUNDLE / "arm.json").read_text())
     if "fit" not in arm:
         raise ValueError(f"{source_cell}: its bundle does not record the fit IGSR's search made, so "

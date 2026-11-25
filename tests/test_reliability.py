@@ -1,11 +1,12 @@
-"""Stage 3B: the reliability panel's statistics, its sweep, and the panel end to end.
+"""Stage 3B: the statistics of the reliability panel, the sweep of Tier 1's selections, and the
+panel end to end.
 
-The statistics are checked against independent computations: the bound against its formula, the
-vectorised permutation null against `roc_auc_score` one column and one permutation at a time, and
-the corrections against `statsmodels`. Each is the kind of code that can be wrong by a constant or
-an off-by-one and still look plausible. The panel is checked on a planted signal, from a run's cells
-through the reveal to its tables, and across the environment boundary when DEFT's interpreter is
-installed.
+The statistics are checked against independent computations: Tier 1's bound against its formula,
+the vectorised permutation null against `roc_auc_score` one column and one permutation at a time,
+and the multiple-testing corrections against `statsmodels`. Each is the kind of code that can be
+wrong by a constant or an off-by-one and still look plausible. The panel is checked on a planted
+signal, from a run's cells through the reveal to its tables, and across the environment boundary
+when DEFT's interpreter is installed.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ from seqmaestro.reliability import checks, multitest, prefilter, selections, tie
 from seqmaestro.reliability import pool as pools
 from seqmaestro.reliability.fits import one_thread
 from seqmaestro.reliability.panel import NOT_REPRODUCIBLE, Panel, procedure
-from tests.planted import ANALYSES, SEQUENCE, TARGET, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, SEQUENCE, TARGET, planted_dataset
 
 REPO = Path(__file__).resolve().parents[1]
 ADAPTERS = REPO / "experiments" / "adapters"
@@ -123,9 +124,9 @@ def test_a_group_is_selected_when_any_member_is():
 
 
 def test_the_vectorised_null_is_the_direct_auc():
-    """The vectorised R'Y statistic is checked against `roc_auc_score`, one column and one
-    permutation at a time. The whole null matrix is rebuilt with sklearn, and the p-values must
-    agree exactly."""
+    """The vectorised rank-sum statistic (`R'Y`) is checked against `roc_auc_score`, one column and
+    one permutation at a time. The test rebuilds the whole null matrix with sklearn and requires the
+    p-values to agree exactly."""
     rng = np.random.default_rng(11)
     n, p, n_permutations, block = 60, 7, 40, 7
     X = np.column_stack([
@@ -187,8 +188,8 @@ def test_ties_in_the_null_are_counted_exactly():
 
 
 def test_the_statistic_is_an_integer_on_any_split():
-    """Doubled centred average ranks are integers, so every statistic is one and every comparison
-    is exact, whatever the split's size."""
+    """Doubled centred average ranks are integers on a split of any size, so every statistic is an
+    integer and every comparison is exact."""
     rng = np.random.default_rng(1)
     X = rng.integers(0, 3, size=(5001, 4)).astype(float)
     ranks = tier2.doubled_centred_ranks(X)
@@ -272,9 +273,10 @@ def test_clusters_honour_their_own_threshold():
 
 
 def test_an_undefined_value_is_ranked_at_its_columns_median():
-    """A DEFT feature written for one node can be NaN on most rows of D. The clusters and Tier 2
-    rank such a value as the median of the column's defined values, as the matching across repeats
-    does, where the NaN would otherwise reach the linkage and stop the panel."""
+    """A DEFT feature written for one node can be NaN on most rows of D (training plus validation).
+    The clusters and Tier 2 rank such a value as the median of the column's defined values, as the
+    matching across repeats does, because a NaN would otherwise reach the linkage and stop the
+    panel."""
     rng = np.random.default_rng(7)
     X = rng.normal(size=(300, 3))
     X[:, 1] = X[:, 0] + 0.1 * rng.normal(size=300)
@@ -342,7 +344,7 @@ def test_per_row_log_loss_is_sklearns():
 
 
 # --------------------------------------------------------------------------------------------
-# The selection, and the fits behind it
+# The selection and the fits behind it
 # --------------------------------------------------------------------------------------------
 
 
@@ -371,8 +373,9 @@ class UsesTheFirstOf:
 
 
 def test_a_selection_counts_only_the_features_its_model_uses():
-    """A model that uses two columns leaves eight survivors held by the tie-break, the same eight
-    on any rows. Counted, they would be stable under any labels."""
+    """A model that uses two columns leaves eight survivors held in place by the tie-break alone,
+    which picks the same eight on any rows. If they were counted, they would look stable under any
+    labels."""
     names = [f"f{j}" for j in range(40)]
     X, y = np.zeros((6, 40)), np.zeros(6)
     select = selections.selector(eliminate.run, names, 10)
@@ -409,8 +412,9 @@ def test_an_ebm_on_one_core_is_the_same_model():
 
 
 def test_a_tier1_fit_holds_the_numeric_libraries_to_one_thread_and_then_lets_go():
-    """Tier 1's workers already fill the cores, so a fit in one must not start a BLAS pool's worth
-    of threads beside it; the process's own limits come back afterwards."""
+    """Tier 1's workers already fill the cores, so a fit in one of them must not start a BLAS
+    pool's worth of threads beside it. Once the fit ends, the process's previous thread limits are
+    restored."""
     from threadpoolctl import threadpool_info
 
     def threads() -> int:
@@ -468,8 +472,9 @@ def test_the_sweep_resumes_where_it_stopped_and_fans_out_to_the_same_answer(tmp_
 
 
 def test_the_workers_are_as_many_as_fit_beside_the_panel():
-    """One worker was measured; each is expected to hold a quarter more, beside what the panel
-    holds, and the sweep never runs more than it was given, nor fewer than one."""
+    """Given the memory one worker was measured to hold, each worker is expected to hold a quarter
+    more, beside what the panel holds. The sweep never runs more workers than it was given, nor
+    fewer than one."""
     gb = 2**30
     assert selections.workers_for(memory=10 * gb, beside=2 * gb, held=gb, workers=32) == 6
     assert selections.workers_for(memory=10 * gb, beside=2 * gb, held=gb, workers=4) == 4
@@ -479,8 +484,9 @@ def test_the_workers_are_as_many_as_fit_beside_the_panel():
 
 
 def test_the_sweep_measures_one_selection_and_runs_the_workers_that_fit(tmp_path):
-    """Given the memory the panel may hold, the first selection runs alone in a worker it measures,
-    and the rest run in as many workers as fit. The selections are the same however many ran."""
+    """Given the memory the panel may hold, the sweep runs the first selection alone in a worker
+    whose memory it measures, then runs the rest in as many workers as fit. The selections are the
+    same however many workers ran."""
     import time
 
     X, y, names = planted_matrix()
@@ -515,9 +521,9 @@ def test_the_sweep_measures_one_selection_and_runs_the_workers_that_fit(tmp_path
 
 
 def test_the_sweep_follows_the_threads_it_may_use_as_they_rise(tmp_path):
-    """Given a threads file, the sweep runs as many selections at once as it holds as each starts.
-    Here the first selection raises it from one to three, as the driver would as threads free up.
-    The selections are the same however many ran."""
+    """Given a threads file, the sweep runs as many selections at once as the file allows when each
+    selection starts. Here the first selection raises the number from one to three, as the driver
+    would when threads free up. The selections are the same however many workers ran."""
     X, y, names = planted_matrix()
     halves = tier1.half_samples(len(y), 5, seed=1)
     elimination = selections.selector(eliminate.run, names, 3)
@@ -553,9 +559,9 @@ def test_the_sweep_follows_the_threads_it_may_use_as_they_rise(tmp_path):
 
 
 def test_the_sweep_starts_none_while_more_run_than_the_threads_it_may_use(tmp_path):
-    """When the driver takes threads back, the sweep lets the selections running end and starts the
-    next only once fewer run than the file holds. Here the first selection to end lowers it from
-    three to one, so every selection started after that runs alone."""
+    """When the driver takes threads back, the sweep lets the running selections finish and starts
+    the next only once fewer run than the file allows. Here the first selection to end lowers the
+    number from three to one, so every selection started after that runs alone."""
     X, y, names = planted_matrix()
     halves = tier1.half_samples(len(y), 5, seed=1)
     elimination = selections.selector(eliminate.run, names, 3)
@@ -687,7 +693,8 @@ def a_config(tmp_path, dataset, models=("l1_logistic",), entry=None, **reliabili
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": list(models), **(entry or {})}},
         "reduction": {"n_features": 3},
@@ -761,8 +768,9 @@ def a_profiled_run(tmp_path, runners, models=("l1_logistic",), **reliability):
 
 
 def test_a_pysr_panel_records_the_reproduction_check_it_did_not_run(runners, tmp_path):
-    """PySR's searches are not reproducible, so rerunning the reduction on its own rows proves
-    nothing; the panel says so and runs everything else, Tier 1 with one Julia thread per search."""
+    """PySR's searches are not reproducible, so rerunning the reduction on its fitting rows would
+    prove nothing. The panel records that it skipped this check and runs everything else, with one
+    Julia thread per search in Tier 1."""
     assert rebuild_model(make_model("pysr", target_kind="binary", seed=1).describe(), 1, "binary",
                          one_core("pysr")).threads == 1
     _, run_dir = a_profiled_run(tmp_path, runners, models=("pysr",), check_arm="pysr/positional",
@@ -861,7 +869,8 @@ def test_a_panel_resumes_and_refuses_a_revealed_run(runners, tmp_path, capsys):
 
 
 def test_a_weighted_design_is_profiled_without_tier_2(runners, tmp_path):
-    """Tier 1 and the refits fit with the weights. Tier 2 is refused, and the record says why."""
+    """Tier 1 and the refits use the per-row weights, whereas Tier 2 is refused and the record says
+    why."""
     _, run_dir = a_profiled_run(tmp_path, runners)
     config = runners.config.load(run_dir / "config.yaml")
     rows = Rows.of(config)
@@ -904,9 +913,9 @@ def deft_python() -> Path:
 @pytest.mark.skipif(not deft_python().exists(), reason="DEFT's interpreter is not installed here")
 def test_a_deft_arms_panel_is_fitted_on_defts_side_and_revealed(runners, tmp_path, monkeypatch):
     """A CART cell fitted by the Stage 2 adapter is reduced, profiled and revealed with DEFT's real
-    interpreter. Its pool is DEFT's naive population, its selections and refits are DEFT's trees,
-    and its refits and Tier 2 are revealed through DEFT's side. Its selections follow a threads
-    file, as under the driver."""
+    interpreter. Its candidates are the naive population DEFT's finder offers the root, its
+    selections and refits are DEFT's trees, and its refits and Tier 2 are revealed through DEFT's
+    side. Its selections follow a threads file, as they do under the driver."""
     import subprocess
 
     from seqmaestro.harness.runner import ingest_bundle, subsample_training_rows
@@ -921,7 +930,8 @@ def test_a_deft_arms_panel_is_fitted_on_defts_side_and_revealed(runners, tmp_pat
                  "n_bootstrap": 10, "permutation_scope": "seed",
                  "class_weight": "balanced", "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": ["deft_or_cart"]}},
         "reduction": {"n_features": 2},
@@ -980,8 +990,8 @@ def test_a_deft_arms_panel_is_fitted_on_defts_side_and_revealed(runners, tmp_pat
 
 
 def test_a_refit_left_with_no_feature_predicts_the_weighted_prevalence():
-    """Where one feature or one cluster is the whole of M*, its Tier 3 refit has no feature left,
-    and predicts what the fit saw: the positive rate, weighted as M* was."""
+    """Where one feature or one cluster is the whole of M* (the arm's reduced model), its Tier 3
+    refit has no feature left and predicts the positive rate the fit saw, weighted as M* was."""
     from seqmaestro.reduction.arm import NoFeatures, fit_step_for
 
     [only] = tier3.refits(["gc"], {"gc": 0})

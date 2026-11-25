@@ -1,17 +1,18 @@
-"""Explainable Boosting, the control the feature-source comparison depends on.
+"""Explainable Boosting Machines (EBMs), the model the comparison of feature sources holds fixed.
 
 An EBM learns one shape function per input feature. **It does not create features**, so its
-interpretability is inherited entirely from the pool it is fitted on. Positional indicators give
-one trivial shape function per indicator, and *k*-mer counts give a shape function per *k*-mer,
-which is a finding. That contrast is why the comparison fits it on more than one pool.
+interpretability comes entirely from the pool it is fitted on. Positional indicators give one
+trivial shape function per indicator, whereas *k*-mer counts give a shape function per *k*-mer,
+which can itself be a finding. That contrast is why the comparison fits it on more than one pool.
 
-In the comparison it is the same downstream model on both sides of the feature source. Without an
-EBM on a fixed vocabulary, a good result from an EBM on model-proposed features could not be
-attributed to the proposal over the additive model or the featurisation.
+The comparison fits the same model on the fixed and on the written sources. Without an EBM on a
+fixed vocabulary, a good result from an EBM on written features could not be attributed to the
+written features instead of to the additive model or to the featurisation.
 """
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, ClassVar
 
 import numpy as np
@@ -35,12 +36,30 @@ class _ShapeFunctions:
     reproducible = True
     #: An EBM fits its bags on as many threads as it is given.
     one_core: ClassVar[dict[str, Any]] = {"n_jobs": 1}
+    #: What a run's config may change (`seqmaestro.models.settings`). More bags give smoother shape
+    #: functions and take longer to fit. `learning_rate` and `max_rounds` go to interpret as given,
+    #: and a model given neither takes interpret's defaults.
+    settings: ClassVar[dict[str, type]] = {"outer_bags": int, "learning_rate": float, "max_rounds": int}
+    #: The settings this model passes to interpret only where they were given.
+    PASSED_THROUGH: ClassVar[tuple[str, ...]] = ("learning_rate", "max_rounds")
     target_kind: str
     _model: Any
 
+    @classmethod
+    def _library(cls) -> type:
+        """interpret's estimator for this kind of target."""
+        raise NotImplementedError
+
+    @classmethod
+    def library_defaults(cls) -> dict[str, Any]:
+        """interpret's own value of each setting passed to it only where given, which is what a
+        model given none of them fits with."""
+        parameters = inspect.signature(cls._library().__init__).parameters
+        return {key: parameters[key].default for key in cls.PASSED_THROUGH}
+
     @property
     def estimator(self) -> Any:
-        """The fitted `interpret` model, for code that reads its terms and their curves."""
+        """The fitted `interpret` model, for code that inspects its terms and their curves."""
         return self._model
 
     def importances(self) -> dict[str, float]:
@@ -62,8 +81,8 @@ class _ShapeFunctions:
 
         This is the most complete direction any arm reports, because with `interactions=0` the
         model *is* the sum of these curves, in log-odds for a binary target and in the target's
-        units for a continuous one. Each curve is everything the model does with its feature, and no
-        rows are needed to read one back.
+        units for a continuous one. Each curve is everything the model does with its feature, and
+        obtaining it needs no rows.
 
         A curve that turns is reported as `non_monotone` instead of by its net trend. A feature that
         raises the score at low values and lowers it at high ones makes a different claim from one
@@ -83,7 +102,7 @@ class _ShapeFunctions:
                 continue
             # `term_scores_` pads each univariate curve with a leading `missing` bin and a trailing
             # `unknown` bin. Both sit outside the observed range, so counting them as the ends of
-            # the curve would add a step into or out of a bin no row is in.
+            # the curve would add a step into or out of a bin that holds no row.
             curve = np.asarray(scores, dtype=float).ravel()[1:-1]
             if (word := direction.from_curve(curve, words)) is not None:
                 found[name] = word
@@ -114,14 +133,14 @@ class _ShapeFunctions:
 class ExplainableBoosting(_ShapeFunctions):
     """EBM with main effects only by default, for a binary target.
 
-    `interactions=0` keeps it a generalised additive model instead of a GA2M, which is the control
-    the comparison needs: one shape function per feature, with nothing entangled between pairs. It
-    is also the affordable setting. An EBM boosts round-robin over features, so its cost scales
-    with the column count in a way the other models' does not, and pairwise interactions on
-    thousands of columns are far more expensive.
+    `interactions=0` keeps it a generalised additive model instead of a GA2M (one that adds terms
+    for pairs of features), which is what the comparison needs: one shape function per feature,
+    with nothing entangled between pairs. It is also the setting that is affordable to fit. An EBM
+    boosts round-robin over features, so its fitting time grows with the column count in a way the
+    other models' does not, and pairwise interactions on thousands of columns take far longer.
 
-    Uses `interpret-core` and not `interpret`, because the meta-package pulls in a dashboard stack
-    that fitting a model and reading its shape functions do not need.
+    It uses the `interpret-core` package instead of `interpret`, because that meta-package pulls in
+    a dashboard stack that fitting a model and inspecting its shape functions do not need.
     """
 
     target_kind = BINARY
@@ -145,12 +164,16 @@ class ExplainableBoosting(_ShapeFunctions):
         self._resolved_max_bins: int | None = None
         self._row_weights = False
 
-    def fit(self, X: pd.DataFrame, y, sample_weight=None) -> ExplainableBoosting:
+    @classmethod
+    def _library(cls) -> type:
         from interpret.glassbox import ExplainableBoostingClassifier
 
+        return ExplainableBoostingClassifier
+
+    def fit(self, X: pd.DataFrame, y, sample_weight=None) -> ExplainableBoosting:
         self._row_weights = sample_weight is not None
         self._resolved_max_bins = self.max_bins or _bins_for(X)
-        self._model = ExplainableBoostingClassifier(
+        self._model = self._library()(
             interactions=self.interactions,
             outer_bags=self.outer_bags,
             max_bins=self._resolved_max_bins,
@@ -179,11 +202,12 @@ class ExplainableBoosting(_ShapeFunctions):
 
 
 class ExplainableBoostingRegression(_ShapeFunctions):
-    """EBM with main effects only by default, for a continuous target: the same additive model as
-    `ExplainableBoosting`, fitted by least squares, with shape functions in the target's units.
+    """EBM with main effects only by default, for a continuous target. It is the additive model of
+    `ExplainableBoosting` fitted by least squares, so its shape functions are in the target's
+    units.
 
-    It takes no class weighting, since a continuous target has no classes. Per-row weights from the
-    design are used as for every model.
+    It takes no class weighting, because a continuous target has no classes. Per-row weights from
+    the design are used as for every model.
     """
 
     target_kind = CONTINUOUS
@@ -202,13 +226,17 @@ class ExplainableBoostingRegression(_ShapeFunctions):
         self._resolved_max_bins: int | None = None
         self._row_weights = False
 
-    def fit(self, X: pd.DataFrame, y, sample_weight=None) -> ExplainableBoostingRegression:
+    @classmethod
+    def _library(cls) -> type:
         from interpret.glassbox import ExplainableBoostingRegressor
 
+        return ExplainableBoostingRegressor
+
+    def fit(self, X: pd.DataFrame, y, sample_weight=None) -> ExplainableBoostingRegression:
         self._row_weights = sample_weight is not None
         self._resolved_max_bins = self.max_bins or _bins_for(X)
         y = np.asarray(y, dtype=float).ravel()
-        self._model = ExplainableBoostingRegressor(
+        self._model = self._library()(
             interactions=self.interactions,
             outer_bags=self.outer_bags,
             max_bins=self._resolved_max_bins,
@@ -240,9 +268,9 @@ def _bins_for(X: pd.DataFrame, ceiling: int = 1024) -> int:
 
     Positional indicators and k-mer counts are small non-negative integers (an indicator takes two
     values, and a count is bounded by the sequence length), so binning a 0/1 column into 1024
-    buckets is pure cost. The count is taken from the data: the span of the whole matrix plus two,
-    clipped to between 8 and `ceiling`. It follows the range of the values and not their
-    resolution, so a matrix whose values all lie in [0, 1] gets the minimum of 8 bins.
+    buckets only wastes time. The number of bins is taken from the data: the span of the whole
+    matrix plus two, clipped to the range 8 to `ceiling`. It follows the range of the values and
+    not their resolution, so a matrix whose values all lie in [0, 1] gets the minimum of 8 bins.
     """
     values = X.to_numpy()
     span = int(np.nanmax(values) - np.nanmin(values)) + 2

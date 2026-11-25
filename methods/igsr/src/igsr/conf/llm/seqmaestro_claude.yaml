@@ -4,3 +4,12 @@
 kind: anthropic
 deployment: ${oc.env:SEQMAESTRO_CLAUDE_MODEL}
 api_key: ${oc.env:SEQMAESTRO_CLAUDE_KEY}
+
+# How a call is made, which SeqMaestro's arm states from the run's config (`language_model`): the
+# reasoning effort, the retries after a call that failed, and the seconds a reply is waited for.
+# The arm states the effort only for a current Claude model, which thinks adaptively whatever a call
+# says, and the effort sets how much. Null states none, which keeps an older model's extended
+# thinking off, and leaves the retries to the agent's own and the wait to LiteLLM's.
+reasoning_effort: null
+num_retries: null
+request_timeout: null

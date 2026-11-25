@@ -1,30 +1,30 @@
 """Tier 3: whether the reported model needs a feature, judged by leaving it out.
 
-Tiers 1 and 2 ask about the feature. Tier 3 asks about M*, the arm's reduced model: refit M* on its
-features minus one, with the same rows, weights and settings that produced it, and test whether its
-predictions on the test split get worse. Nothing is re-selected and no setting changes, so the
-refit is M* with one column removed, and a difference can only be put down to that column. M* itself
-is not refitted: it is the reduction's saved model.
+Whereas Tiers 1 and 2 assess the feature, Tier 3 assesses M*, the arm's reduced model: M* is
+refitted on its features minus one, with the same rows, weights and settings that produced it, and
+the test is whether its predictions on the test split get worse. The refit does not re-select
+features or change any setting, so it is M* with one column removed, and any difference can only be
+due to that column. M* itself is not refitted, because it is the reduction's saved model.
 
 **The comparison is paired and per-row.** The loss of the target's kind is computed row by row for
 M* and for the refit (`p_reduced` below) and differenced, so the test is on
 `d_i = loss_i(refit) - loss_i(M*)` instead of on two summary numbers, whose difference has no
-standard error. The loss is log-loss for a binary target and squared error for a continuous one,
-the loss each kind's models are fitted by. `H0: E[d] <= 0` (the refit is no worse) is tested
+standard error. The loss is the one each kind's models are fitted by: log-loss for a binary target
+and squared error for a continuous one. `H0: E[d] <= 0` (the refit is no worse) is tested
 one-sided, because a feature whose removal improves the model is not evidence that the feature is
 needed. A sign-flip permutation test is reported beside the t-test, because per-row loss differences
-are heavy-tailed and skewed, a squared error on a heavy-tailed target most of all, and a t-test on a
-hundred of them may be poorly calibrated.
+are heavy-tailed and skewed (a squared error on a heavy-tailed target most of all), and a t-test on
+a hundred of them may be poorly calibrated.
 
 **Clusters are also dropped whole.** Two reported features that are near-duplicates can each look
-unnecessary alone and be necessary together, which single-feature LOCO cannot show. Every cluster
-holding two or more reported features gets its own refit with all of them removed. Features that
-are individually substitutable and jointly necessary are a finding about their cluster, and the two
-results do not contradict each other.
+unnecessary alone and be necessary together, which leaving out one feature at a time (LOCO,
+leave-one-covariate-out) cannot show. Every cluster holding two or more reported features gets a
+separate refit with all of them removed. Features that are individually substitutable and jointly
+necessary are a finding about their cluster, and the two results do not contradict each other.
 
 **"Necessary" means Holm-adjusted p < 0.05 across the whole family of refits.** It is a statement
-about this model on this test split. It says nothing about the biology or about any other model that
-might use the feature.
+about this model on this test split, and says nothing about the biology or about any other model
+that might use the feature.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from seqmaestro.target import BINARY, CONTINUOUS, target_for
 #: otherwise contribute an infinite loss and take the mean and its interval with it.
 EPSILON = 1e-12
 
-#: Sign flips behind the permutation check.
+#: The number of sign flips in the permutation test.
 N_SIGN_FLIPS = 10_000
 
 #: Family-wise level at which a feature is called necessary.
@@ -121,9 +121,9 @@ def compare(y: np.ndarray, p_model: np.ndarray, p_reduced: np.ndarray, *, target
     }
     if target.probabilities:
         # Rows at the clip, in either model. A tree whose leaf is pure predicts 0 or 1, and its
-        # log-loss on a row it gets wrong is bounded only by EPSILON, so a handful of rows can carry
-        # the whole mean. They are counted and not smoothed away: when the count is not zero, go by
-        # the sign-flip test.
+        # log-loss on a row it gets wrong is bounded only by EPSILON, so a handful of rows can
+        # account for the whole mean. They are counted rather than smoothed away, and when the count
+        # is not zero, rely on the sign-flip test.
         at_clip = ((p_model <= EPSILON) | (p_model >= 1 - EPSILON)
                    | (p_reduced <= EPSILON) | (p_reduced >= 1 - EPSILON))
         compared["n_at_clip"] = int(at_clip.sum())

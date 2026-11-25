@@ -4,9 +4,9 @@
 This is the far side of the environment boundary. It depends on `deft`, through DEFT's console
 script and the trees DEFT saves, and never imports `seqmaestro`. The two sides exchange files, so
 their dependency sets can disagree about every package. This file and `deft_cart.py` are the only
-places that know both DEFT's object model and SeqMaestro's handover format. They live here and not
-in `methods/deft/` because the handover format belongs to SeqMaestro, and the vendored library must
-stand alone without knowing about SeqMaestro.
+places that know both DEFT's object model and SeqMaestro's handover format. They live here instead
+of in `methods/deft/` because the handover format belongs to SeqMaestro, whereas the vendored
+library must stand alone, knowing nothing of SeqMaestro.
 
     $DEFT experiments/adapters/deft_bundle.py fit \\
         --train fit.csv --val val.csv --effect effect.csv --out-bundle <dir> \\
@@ -16,10 +16,10 @@ stand alone without knowing about SeqMaestro.
         --bundle <dir> --rows rows.csv --id-column <column> --out scores.npz
 
 `fit` trains and converts in one call, because splitting the two would cross the boundary a
-second time and leave the caller to find hydra's output directory. It is never given the test
+second time and leave the caller to find hydra's output directory. It is never given the held-out
 split. The bundle names the tree it saved in `fitted_model`.
 
-`predict` serves the reveal. It loads that tree and predicts the rows it is handed, which carry an
+`predict` serves the reveal: it loads that tree and predicts the rows it is handed, which have an
 identifier column and no labels. The scores go back with the identifiers, so the other side can
 check the row order before it scores anything, and those rows' labels never cross the boundary.
 
@@ -28,7 +28,7 @@ a hand-written config in `deft_conf/params_generation/` when one exists, and oth
 generated from the dataset's description in `experiments/datasets/`. DEFT's prompts are templated
 on the task, and a wrong description fails silently: the model is told in detail that it is looking
 at something it is not, and the run completes. Which dataset is being run is SeqMaestro's decision,
-so SeqMaestro holds the description, and DEFT ships only a task-neutral default. See
+so SeqMaestro holds the description, and DEFT ships only task-neutral defaults. See
 `deft_conf/README.md`.
 
 **Row order is the contract.** Predictions are returned in the order the rows were given, and the
@@ -80,23 +80,35 @@ DATASET_DIR = Path(__file__).resolve().parents[1] / "datasets"
 #: the prompt config each kind's generated task config inherits from DEFT.
 BINARY, CONTINUOUS = "binary", "continuous"
 PROMPTS_FOR = {BINARY: "default", CONTINUOUS: "regression"}
-#: The splitting criterion a continuous target is grown with. A binary target keeps DEFT's
-#: configured criterion, Gini unless the cell's overrides name another.
+#: The splitting criterion a tree for a continuous target is grown with. A binary target keeps
+#: DEFT's configured criterion, Gini unless the cell's overrides name another.
 CONTINUOUS_CRITERION = "squared_error"
 
 
-def generate_task_config(description: dict, name: str, into: Path, target_kind: str) -> Path:
+#: How the prompts introduce the guidance the person running the analysis gave, in the words the
+#: proposer's requests use (`seqmaestro.proposer.prompt.GUIDANCE_INTRODUCTION`), which this side
+#: cannot import.
+GUIDANCE_INTRODUCTION = ("The person running this analysis gives this guidance on the form of the "
+                         "features:")
+
+
+def generate_task_config(description: dict, name: str, into: Path, target_kind: str,
+                         guidance: str | None) -> Path:
     """Write DEFT's prompt config from the dataset description, and return the config directory.
 
     DEFT's templates interpolate only `{target_name}` and `{dataset_info}`, so both can be filled
     from the description every other consumer reads, and a new dataset needs no DEFT-specific file.
-    The config inherits the prompts DEFT writes for the target's kind (`PROMPTS_FOR`).
+    The config inherits the prompts DEFT writes for the target's kind (`PROMPTS_FOR`). `guidance`,
+    what the person running the analysis asks of the form of the features, ends `dataset_info`
+    where there is any, so every prompt that states the task states it too.
 
-    The config is written into the run directory and never committed. There is then nothing to keep
+    The config is written into the run directory and never committed, so there is nothing to keep
     in step with the description, and the frozen run records which prompts produced it.
     """
     layout = description.get("sequence_layout")
     dataset_info = description["task"] + (f" {layout}" if layout else "")
+    if guidance is not None:
+        dataset_info += f" {GUIDANCE_INTRODUCTION} {guidance}"
 
     group = into / TASK_GROUP
     group.mkdir(parents=True, exist_ok=True)
@@ -110,7 +122,7 @@ def generate_task_config(description: dict, name: str, into: Path, target_kind: 
 
 
 def resolve_task(task: str | None, config_dir: Path, dataset_dir: Path, generate_into: Path,
-                 target_kind: str):
+                 target_kind: str, guidance: str | None):
     """Turn `--task <name>` into hydra overrides, and return them with a note of their source.
 
     A hand-written config takes precedence when one exists. It is used where the prompt wording is
@@ -118,14 +130,26 @@ def resolve_task(task: str | None, config_dir: Path, dataset_dir: Path, generate
     with no flag, because a forgotten flag would silently swap the paper's prompts for generated
     ones and the run would still complete normally. Which config was used is printed and recorded.
 
+    `guidance` reaches the prompts through the generated config alone, so it is refused with a
+    hand-written config, whose wording is fixed, and with no task, which has no config to hold it.
+
     The name is resolved here because hydra would report a bad name as a composition error from
-    inside the subprocess, after the run has started, and for an LLM arm after it has begun spending.
+    inside the subprocess, after the run has started, and for the generative finder after it has
+    begun calling the language model.
     """
     if task is None:
+        if guidance is not None:
+            raise SystemExit("--guidance needs --task: the guidance reaches DEFT's prompts through "
+                             "the config generated from the task's description.")
         return [], "deft default (task-neutral)"
 
     handwritten = config_dir / TASK_GROUP / f"{task}.yaml"
     if handwritten.exists():
+        if guidance is not None:
+            raise SystemExit(
+                f"--guidance cannot reach the hand-written prompt config {handwritten}, whose "
+                f"wording is fixed so that published prompts are reproduced. Run without guidance, "
+                f"or remove the hand-written config so that one is generated from the description.")
         return [f"--config-dir={config_dir}", f"{TASK_GROUP}={task}"], f"hand-written {handwritten}"
 
     description_path = dataset_dir / f"{task}.json"
@@ -141,14 +165,14 @@ def resolve_task(task: str | None, config_dir: Path, dataset_dir: Path, generate
         )
 
     description = json.loads(description_path.read_text())
-    generated = generate_task_config(description, task, generate_into, target_kind)
+    generated = generate_task_config(description, task, generate_into, target_kind, guidance)
     return [f"--config-dir={generated}", f"{TASK_GROUP}={task}"], f"generated from {description_path}"
 
 
 def train(args, work_dir: Path) -> Path:
     """Run DEFT through its console script and return the path to the fitted tree.
 
-    DEFT runs as a subprocess because its `run_experiment` cannot simply be imported and called. It
+    DEFT runs as a subprocess because its `run_experiment` cannot simply be imported and called: it
     reads `HydraConfig.get()`, which exists only inside hydra's runtime, and composing a config by
     hand would mean reproducing that setup and repairing it on every hydra upgrade. An in-process
     call would only have made the output easy to find, and `hydra.run.dir` pins it anyway.
@@ -166,7 +190,7 @@ def train(args, work_dir: Path) -> Path:
     generated = work_dir.parent / "deft_conf"
     task_overrides, task_source = resolve_task(
         args.task, Path(args.task_config_dir), Path(args.dataset_dir), generate_into=generated,
-        target_kind=args.target_kind,
+        target_kind=args.target_kind, guidance=args.guidance,
     )
     print(f"prompts: {task_source}", flush=True)
     told = dataset_config(Path(args.train).parent)
@@ -250,9 +274,9 @@ KIND_BY_DEFT_ORIGIN = {
 PROVENANCE_BY_DEFT_ORIGIN = {"llm": "generated", "naive": "selected", "unknown": None}
 
 #: DEFT's name for one naive positional candidate, e.g. `pos_50_is_A`. SeqMaestro names the same
-#: feature `pos_50_A`. The names need not agree, because `definition_digest` does not read them, but
+#: feature `pos_50_A`. The names need not agree, because `definition_digest` does not use them, but
 #: the recipes must. `definition_digest` hashes the normalised `source` when a record has one and
-#: `{kind, params}` when it does not, so a record carrying DEFT's code and one carrying SeqMaestro's
+#: `{kind, params}` when it does not, so a record holding DEFT's code and one holding SeqMaestro's
 #: params would take different branches and never match, even for the same function. `naive_recipe`
 #: therefore emits `{kind, params}` and no source, which puts both records on the same branch.
 DEFT_POSITIONAL_NAME = re.compile(r"^pos_(\d+)_is_(.+)$")
@@ -264,10 +288,11 @@ DEFT_COVARIATE_PREFIX = "value_of_"
 
 #: Written beside the inputs by the Core side (`COLUMNS_MANIFEST` in
 #: `seqmaestro/pipeline/vendored/handover.py`): the sequence column with its positional window, and
-#: each other column DEFT is given, with its recipe and description,
-#: `{"sequence": {"column", "window"}, "columns": {name: {kind, params, description}}}`. The name
-#: and shape are stated on both sides, since the two sides exchange files and import nothing of
-#: each other.
+#: each other column DEFT is given, with its recipe and description, and its record's `extra` where
+#: it has one (a discovered motif's matrix and closest known motif),
+#: `{"sequence": {"column", "window"}, "columns": {name: {kind, params, description, extra}}}`. The
+#: name and shape are stated on both sides, since the two sides exchange files and import nothing
+#: of each other. Only the descriptions reach DEFT's prompts (`dataset_config`).
 COLUMNS_MANIFEST = "columns.json"
 
 
@@ -278,7 +303,8 @@ def read_pool(inputs_dir: Path) -> dict:
 
 
 def read_window(inputs_dir: Path) -> dict | None:
-    """The positional window DEFT read the sequence in, or None where it read one length."""
+    """The positional window DEFT took its positions in, or None where its sequences have one
+    length."""
     return json.loads((Path(inputs_dir) / COLUMNS_MANIFEST).read_text())["sequence"].get("window")
 
 
@@ -328,12 +354,13 @@ def on_one_search_path(task_overrides: list[str], generated: Path) -> list[str]:
 def naive_recipe(name: str, pool: dict | None = None) -> dict | None:
     """`{kind, params, source}` for a naive candidate, or None when it cannot be recognised.
 
-    There are two sources. **Positional** candidates DEFT derives from the sequence itself, and
-    their recipe is read from DEFT's naming convention. In a positional window the position is the
-    window's, as it is in SeqMaestro's positional features. **Handed** columns, a covariate or a
-    column we computed, come back as `value_of_<column>`, and their recipe and description are the
-    ones the manifest recorded when the column was written. The manifest records what was built, so
-    nothing here parses a *k*-mer's or a generated feature's name.
+    A naive candidate is one of two sorts. DEFT derives **positional** candidates from the sequence
+    itself, and their recipe is parsed from DEFT's naming convention. In a positional window the
+    position is the window's, as it is in SeqMaestro's positional features. **Handed** columns (a
+    covariate, or a column computed on the SeqMaestro side) come back as `value_of_<column>`, and
+    their recipe and description are the ones the manifest recorded when the column was written.
+    The manifest records what was built, so nothing here parses a *k*-mer's or a generated
+    feature's name.
     """
     matched = DEFT_POSITIONAL_NAME.match(name)
     if matched:
@@ -343,7 +370,8 @@ def naive_recipe(name: str, pool: dict | None = None) -> dict | None:
         recorded = pool.get(name[len(DEFT_COVARIATE_PREFIX):])
         if recorded:
             return {"kind": recorded["kind"], "params": recorded["params"], "source": None,
-                    "description": recorded.get("description")}
+                    "description": recorded.get("description"),
+                    **({"extra": recorded["extra"]} if recorded.get("extra") else {})}
     return None
 
 
@@ -365,9 +393,9 @@ def node_statistics(tree, X: pd.DataFrame, y: pd.Series) -> dict[str, dict]:
     the feature finder's logging, with no node counts. Both are recomputed here by routing the rows
     the tree was fitted on back down it.
 
-    **The criterion and the weighting are read from the tree.** `tree.splitting_criterion` is the
+    **The criterion and the weighting are taken from the tree.** `tree.splitting_criterion` is the
     configured criterion, and `tree.class_weight_` is the weighting it was actually given: a per-row
-    `Series` when the split carried weights (these take precedence over `balanced`), and a
+    `Series` when the split had weights (these take precedence over `balanced`), and a
     class-to-weight mapping otherwise. Rebuilding either from the config would be a second source
     of truth, and on a weighted split it would make every node's statistics wrong.
 
@@ -452,7 +480,8 @@ MONOTONICITY_FLOOR = 0.5
 WORDS = {BINARY: (HIGHER_IN_POSITIVE, HIGHER_IN_NEGATIVE),
          CONTINUOUS: (INCREASES_TARGET, DECREASES_TARGET)}
 
-#: What `direction` on these records was read off, for the file header. In `DIRECTION_KINDS`.
+#: What `direction` on these records is derived from, for the file header. One of
+#: `DIRECTION_KINDS`.
 DIRECTION_KIND = {BINARY: "tree_split_rates", CONTINUOUS: "tree_split_means"}
 
 
@@ -488,7 +517,7 @@ def assign_directions(records: list, target_kind: str) -> None:
     """Set each record's direction from the splits the tree makes on it.
 
     A tree has no coefficient or shape function, so the direction comes from what each split does:
-    the rows above the threshold carry either a higher or a lower share of the positive class, or
+    the rows above the threshold have either a higher or a lower share of the positive class, or
     a higher or lower mean of a continuous target (`SIDE_STATISTIC`). Each node contributes one
     signed step, weighted by the rows reaching it, so a split near the root counts for more than a
     conditional one deep in a branch.
@@ -539,10 +568,10 @@ def collect_features(tree, pool: dict | None = None, stats: dict[str, dict] | No
 
     A tree names a feature at each internal node, so the features it splits on are its selection.
     One feature can split at several nodes, and every occurrence is kept because importance sums
-    over them. Keeping only the best-scoring occurrence would lose the others and bias toward the
+    over them. Keeping only the best-scoring occurrence would lose the others and bias towards the
     smallest, deepest node.
 
-    `stats` comes from `node_statistics` and carries the node counts the tree does not store.
+    `stats` comes from `node_statistics` and holds the node counts the tree does not store.
     Without it the records still describe the selection, and `importance` is left `None`, because
     any number put there would not mean what the field says.
     """
@@ -551,7 +580,7 @@ def collect_features(tree, pool: dict | None = None, stats: dict[str, dict] | No
     def walk(node, depth: int, path: str):
         if node is None or getattr(node, "feature", None) is None:
             return
-        # Only a node with children is a split. A leaf can still carry a stale `feature` from the
+        # Only a node with children is a split. A leaf can still hold a stale `feature` from the
         # search that decided not to split there, and collecting it would invent a selected
         # feature the tree never uses, unnamed and of unknown origin.
         if node.left is None and node.right is None:
@@ -577,8 +606,8 @@ def collect_features(tree, pool: dict | None = None, stats: dict[str, dict] | No
             # Where the recipe can be recovered it replaces DEFT's rendering, so a feature that
             # SeqMaestro could also have supplied hashes the same on both sides. Everything that
             # describes the node, as opposed to the feature, goes in `extra["nodes"]`, one entry per
-            # occurrence. The threshold is such a property: every naive split carries the same 0.5,
-            # so putting it in `params` would make them all hash alike.
+            # occurrence. The threshold is such a property: every naive split has the same 0.5, so
+            # putting it in `params` would make them all hash alike.
             recipe = naive_recipe(name, pool) if feature.origin == "naive" else None
             # A handed column is described as the dataset describes it, not by DEFT's template.
             described = (recipe or {}).get("description") or feature.description or ""
@@ -601,8 +630,10 @@ def collect_features(tree, pool: dict | None = None, stats: dict[str, dict] | No
                 "direction": None,
                 "provenance": PROVENANCE_BY_DEFT_ORIGIN.get(feature.origin),
                 # `deft_origin` is kept verbatim as well as mapped, because `extra` holds what one
-                # method knows and others do not, and DEFT's label is such a fact.
-                "extra": {"deft_origin": feature.origin, **repair, "nodes": []},
+                # method knows and others do not, and DEFT's label is such a fact. A handed column
+                # keeps what its record held there on the Core side.
+                "extra": {**(recipe or {}).get("extra", {}), "deft_origin": feature.origin, **repair,
+                          "nodes": []},
             }
         found[name]["extra"]["nodes"].append(occurrence)
         walk(node.left, depth + 1, path + "L")
@@ -623,10 +654,10 @@ def assign_importances(records: list) -> None:
     splits at, and normalised so the tree's features sum to 1.
 
     **Summed**, because a feature splitting at three nodes did three pieces of work. The maximum
-    would rate it level with a feature used once, and the mean would rank it below one, penalising
-    reuse. The `n_samples` weight stops many small deep nodes from adding up to a large total, and
-    it also ranks a conditional split (one reached by few rows, beneath another feature's cut) below
-    a marginal one.
+    would rate it level with a feature used once, and the mean could rank it below such a feature,
+    penalising reuse. The `n_samples` weight stops many small deep nodes from adding up to a large
+    total, and it also ranks a conditional split (one reached by few rows, beneath another
+    feature's split) below a marginal one.
 
     **Normalised**, because the tree's size and total impurity reduction vary from seed to seed, so
     raw sums are not comparable between runs of the same arm. Every record's importance stays `None`
@@ -641,7 +672,7 @@ def assign_importances(records: list) -> None:
     for record in records:
         nodes = [node for node in record["extra"]["nodes"] if "n_samples" in node]
         if len(nodes) != len(record["extra"]["nodes"]):
-            return  # partial statistics describe no tree, so no record gets an importance
+            return  # partial statistics do not describe a tree, so no record gets an importance
         raw[record["name"]] = sum(
             (node["n_samples"] / total_rows) * node["impurity_decrease"] for node in nodes
         )
@@ -656,10 +687,10 @@ def assign_importances(records: list) -> None:
 def tree_predictions(tree, X: pd.DataFrame, overrides: dict | None = None) -> np.ndarray:
     """The tree's prediction for every row, by routing rather than by calling `predict`.
 
-    Routing is what lets a feature be permuted. An arm fitted in Core holds a feature matrix, so
-    permuting a feature means shuffling a column of the input. A DEFT tree is handed the raw frame
-    and computes its features from it, so there is no column to shuffle. Substituting shuffled
-    values wherever a node tests the feature is the equivalent intervention for this model.
+    Routing is what lets a feature be permuted. An arm fitted in Core has a feature matrix, so
+    permuting a feature means shuffling a column of the input, whereas a DEFT tree is handed the raw
+    frame and computes its features from it, so there is no column to shuffle. Substituting
+    shuffled values wherever a node tests the feature is the equivalent intervention for this model.
 
     `overrides` maps a feature name to values that replace the computed ones. With no overrides this
     reproduces `tree.predict(..., return_proba=True)`, which `check_tree_predictions` asserts.
@@ -717,7 +748,7 @@ def check_tree_predictions(tree, X: pd.DataFrame, tolerance: float = 1e-9) -> No
 
 def permutation_importances(tree, X: pd.DataFrame, y, names: list[str], *,
                             repeats: int, rng: np.random.Generator) -> dict[str, float]:
-    """How far the headline falls when each feature's values are shuffled, as the harness
+    """How far the headline score falls when each feature's values are shuffled, as the harness
     measures it: AUROC for a binary target, R-squared for a continuous one.
 
     The metric and the form of the output match the harness's, so a DEFT feature's number is
@@ -768,7 +799,8 @@ def evaluate_features(records: list, tree, X: pd.DataFrame) -> np.ndarray:
     hands `deft_cart.py`.
 
     A feature that raises or returns the wrong length yields a column of NaN and the run continues,
-    because generated code is expected to be imperfect and one bad feature should not cost the rest.
+    because generated code is expected to be imperfect, and one bad feature should not stop the
+    others from being evaluated.
     """
     by_name = {}
 
@@ -811,15 +843,15 @@ LEGAL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 def legal_names(tree) -> None:
     """Give every feature the tree holds a name SeqMaestro accepts, in place.
 
-    DEFT keeps the name a language model proposed for a feature, which can hold a character no
-    Python identifier may (`Half-window_CpG_imbalance`), even where the function it wrote has a
-    legal name. SeqMaestro refuses such a name, because a model shown it copies it into code that
+    DEFT keeps the name a language model proposed for a feature, which can contain a character that
+    a Python identifier may not (`Half-window_CpG_imbalance`), even where the function it wrote has
+    a legal name. SeqMaestro refuses such a name, because a model shown it copies it into code that
     will not compile. Each run of other characters becomes an underscore, a name that would start
     with a digit gets a leading underscore, and a name another feature already holds gets a
     numbered suffix. One proposed name maps to one new name, so two functions DEFT put under one
     name keep sharing it, as `evaluate_features` expects. The proposed name is kept on the feature
     as `name_as_proposed`. Every use of a saved tree goes through `load_tree`, which calls this, so
-    a feature carries the same name in every record made from the tree.
+    a feature has the same name in every record made from the tree.
     """
     features = []
 
@@ -937,15 +969,20 @@ def main() -> int:
         help="Empty means the inputs are already a numeric feature matrix.",
     )
     # The dataset, whose description SeqMaestro holds (see `deft_conf/README.md`). Omitting it gives
-    # DEFT's task-neutral prompts. That suits CART, which never prompts, but for an LLM arm it is
-    # almost certainly a mistake, so the Core side (`seqmaestro/pipeline/vendored/deft.py`) passes
-    # it for every cell.
+    # DEFT's task-neutral prompts. That suits CART, which never prompts, but for the generative
+    # finder it is almost certainly a mistake, so the Core side
+    # (`seqmaestro/pipeline/vendored/deft.py`) passes it for every cell.
     parser.add_argument("--task", default=None,
                         help="dataset name; read from --dataset-dir, or a hand-written config if one exists")
     parser.add_argument("--dataset-dir", type=Path, default=DATASET_DIR,
                         help=f"dataset descriptions, shared with every other consumer; default {DATASET_DIR}")
     parser.add_argument("--task-config-dir", type=Path, default=TASK_CONFIG_DIR,
                         help=f"hand-written prompt configs, which win when present; default {TASK_CONFIG_DIR}")
+    # Absent where the run gives no guidance, which is the default, and for the CART finder, which
+    # writes nothing. The Core side passes the run's guidance to an arm whose language model writes.
+    parser.add_argument("--guidance", default=None,
+                        help="what the person running the analysis asks of the form of the "
+                             "features, added to the prompts generated from the task's description")
     parser.add_argument("--config-override", action="append", default=[],
                         help="Raw hydra override, repeatable, e.g. tree.max_depth=3")
     parser.add_argument("--effect", type=Path, default=None,
@@ -989,8 +1026,8 @@ def fit(args) -> int:
     stats = node_statistics(tree, fitted_on[fit_features], fitted_on[args.target_column])
     check_node_statistics(stats)
     records = collect_features(tree, read_pool(Path(args.train).parent), stats)
-    # The permutation importance every arm reports, on the validation rows the behavioural matcher
-    # also uses, so a DEFT feature's figure is comparable with a Core arm's.
+    # The permutation importance every arm reports, on the validation rows, where the analyses also
+    # match features by their values, so a DEFT feature's figure is comparable with a Core arm's.
     permuted = permutation_importances(
         tree, val[feature_columns], val[args.target_column].to_numpy(),
         [record["name"] for record in records],
@@ -1056,6 +1093,8 @@ def fit(args) -> int:
                 "n_features_used": len(records),
                 "wall_clock_seconds": round(time.time() - started, 1),
                 "config_overrides": list(args.config_override),
+                # The guidance on the form of the features that the prompts were given, or None.
+                "guidance": args.guidance,
             },
             indent=2, default=str,
         ) + "\n"

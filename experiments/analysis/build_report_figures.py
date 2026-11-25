@@ -6,7 +6,7 @@
 It needs matplotlib, which no result depends on, so matplotlib stays out of the environment that
 produces results (ENVIRONMENTS.md). This script therefore reads one file, the `figure_inputs.json`
 that `build_report_inputs.py` wrote under Core, and never reads the run. Every number, label and
-caption a figure carries was decided there.
+caption of a figure is decided there.
 
 Writes `figures/<name>.png` and `figures.json`. `figures.json` records each figure's path, caption,
 width, measured aspect and whether it needs a rotated page, and `assemble_report.py` and
@@ -23,9 +23,8 @@ from pathlib import Path
 from seqmaestro.provenance import record_call
 from seqmaestro.report.files import FIGURE_INPUTS_FILE, FIGURES_CALL, FIGURES_DIR, FIGURES_FILE
 
-#: Above this width-to-height ratio a figure cannot be read at a portrait column width. A rotated
-#: A4 page with the render's margins holds about 1.4, so the cut sits a little below where a figure
-#: would start to overflow it.
+#: Above this width-to-height ratio a figure is given a rotated page, because it cannot be read at
+#: the width of a portrait column.
 ROTATE_ABOVE = 1.6
 
 
@@ -39,7 +38,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    # Here rather than at the top, so the parser can be read where the plotting stack is absent.
+    # Imported here rather than at the top, so that the parser can be built where the plotting stack
+    # is absent.
     from PIL import Image
 
     from seqmaestro.report.figures import draw

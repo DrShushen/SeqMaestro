@@ -10,15 +10,15 @@ The spreadsheet adds nothing a run does not already contain. `features.json` in 
 record, and this presents it in a format a collaborator can open. A written report quotes a handful
 of features, and past a few dozen rows a spreadsheet is easier to work with.
 
-Four sheets: what the columns mean, one row for each of the `--top-n` most important features every
-cell reported, one row per arm with its performance, and the concepts several arms agreed on. Only
-real-label cells appear among the features, because a shuffled-label feature list is a control and
-no finding.
+It has four sheets: what the columns mean, one row for each of the `--top-n` most important
+features every cell reported, one row per arm with its performance, and the concepts several arms
+agreed on. Only real-label cells appear among the features, because the feature list of a
+shuffled-label cell is a control.
 
 **Performance is on the test split only once the run has been revealed**, and on validation before
 that, with the split named in the column headers. A spreadsheet made before the reveal is a
-working view, and no test number can leave a run through it early. The number is the headline of
-the run's kind of target, AUROC or R-squared, named in the headers.
+working view, and no test number can leave a run through it early. The number is the headline
+metric of the run's kind of target (AUROC or R-squared), named in the headers.
 """
 
 from __future__ import annotations
@@ -106,9 +106,9 @@ READ_ME_BY_KIND = {
 
 
 def read_me(target_kind: str, top_n: int) -> list[tuple[str, str]]:
-    """The read-me sheet for a run of `target_kind`: the rows every run shares, with the two the
-    kind words differently placed before the description. `top_n` is how many features the export
-    takes from each cell."""
+    """The read-me sheet for a run of `target_kind`: the rows every run shares, with the two rows
+    whose wording depends on the kind placed before the description. `top_n` is how many features
+    the export takes from each cell."""
     rows = [*READ_ME[:-1], *READ_ME_BY_KIND[target_kind], READ_ME[-1]]
     return [(column, meaning.format(top_n=top_n) if column == "What this is" else meaning)
             for column, meaning in rows]
@@ -136,15 +136,15 @@ def named(cell: Path) -> tuple[str, str]:
     """(model, feature source) for a cell, named as a reader sees them.
 
     Named by `seqmaestro.report.naming`, as the report is, so the spreadsheet and the report a
-    collaborator is handed use one vocabulary. An arm it does not know raises, so none reaches a
-    sheet under its directory name.
+    collaborator is handed use one vocabulary. An arm `naming` does not know raises, so an arm never
+    reaches a sheet under its directory name.
     """
     configuration = naming.parse(arm_name(*arm_of(cell)))
     return configuration.model_short, configuration.source_short
 
 
 def judge_means(run_dir: Path) -> dict[tuple[str, str], float]:
-    """Mean rating per (arm, feature), for the real-label items the rater was shown."""
+    """Mean rating per (arm, feature), for the real-label items the judge was shown."""
     path = run_dir / JUDGE_DIR / JUDGE_SCORES
     if not path.exists():
         return {}
@@ -160,7 +160,8 @@ def features(results: Path, ratings: dict, top_n: int) -> pd.DataFrame:
     rows = []
     for cell in cells_of(results, cells.REAL):
         model, source = named(cell)
-        # The rater's records name an arm as its directories do, which is what it was handed.
+        # The judge's records name an arm as its directories spell it, since that is the name the
+        # judge was handed.
         arm = arm_name(*arm_of(cell))
         records, _ = load_features(cell / cells.FEATURES_FILE)
         for rank, record in enumerate(top_features(records, top_n), start=1):
@@ -181,8 +182,9 @@ def features(results: Path, ratings: dict, top_n: int) -> pd.DataFrame:
 
 def performance(results: Path, split: str, target_kind: str) -> pd.DataFrame:
     """Mean and spread of the kind's headline per arm on `split`, with the split in the header of
-    each and the metric in the mean's. A cell with no block for `split` counts towards neither,
-    as a cell the run's config no longer names is after the reveal, which does not score it."""
+    each and the metric in the mean's. A cell with no block for `split` counts towards neither, as
+    happens after the reveal to a cell the run's config does not name, which the reveal does not
+    score."""
     headline = target_for(target_kind).headline
     name = naming.METRICS[headline]
     rows = []
@@ -218,7 +220,8 @@ def concepts(results: Path, min_witnesses: int) -> pd.DataFrame:
 
 
 def write(path: Path, sheets: dict[str, pd.DataFrame]) -> None:
-    """One sheet per frame, each frozen, filterable and opened to a readable width."""
+    """One sheet per frame, each with its header row frozen, a filter, and columns opened to a
+    readable width."""
     from openpyxl.styles import Alignment, Font  # in SeqMaestro_LocalUtils alone
     from openpyxl.utils import get_column_letter
 

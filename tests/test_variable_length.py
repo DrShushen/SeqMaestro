@@ -1,6 +1,9 @@
-"""Sequences of different lengths through the stages: the positional window, the k-mer rate, the
-config's refusals, one run on the planted dataset's variable-length variant, fitted, reduced,
-profiled and revealed, and the group-dependence analysis, which featurises as the arms do."""
+"""Sequences of different lengths through the stages.
+
+The tests cover the positional window, the k-mer rate (a count per k-mer position), the config's
+refusals, one run on the planted dataset's variable-length variant (fitted, reduced, profiled and
+revealed), and the group-dependence analysis, which featurises as the arms do.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from seqmaestro.harness.features import load_features
 from seqmaestro.harness.fitted import load_fitted
 from seqmaestro.harness.heldout import TEST_SPLIT, reveal_record
 from seqmaestro.qc import group_dependence
-from tests.planted import ANALYSES, LENGTH, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, LENGTH, planted_dataset
 
 RUNNERS = Path(__file__).resolve().parents[1] / "experiments" / "runners"
 
@@ -44,8 +47,9 @@ def a_config(tmp_path: Path, dataset, arms: dict, sources: dict | None = None, *
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "sources": sources,
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms,
         **sections,
@@ -142,8 +146,8 @@ def test_a_variable_length_run_is_fitted_reduced_profiled_and_revealed(runners, 
 
 
 def test_the_group_dependence_analysis_keeps_each_feature_file_apart(tmp_path):
-    """The feature files of two arms at one seed sit in directories of one name, `seed_<n>`, so a
-    file is listed under its path."""
+    """The feature files of two arms at one seed are in directories with the same name
+    (`seed_<n>`), so each file is listed under its full path."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import save_features
 
@@ -170,9 +174,9 @@ def test_the_group_dependence_analysis_keeps_each_feature_file_apart(tmp_path):
 
 
 def test_the_group_dependence_analysis_featurises_as_the_arms_do(tmp_path, monkeypatch, capsys):
-    """On a table of different lengths it reads positions in the window it is given, counts k-mers
-    per length where asked, and refuses a positional pool without a window and a k-mer pool
-    without how its k-mers are counted."""
+    """On a table of sequences of different lengths, the analysis takes positions within the window
+    it is given and counts k-mers per length where asked. It refuses a positional pool without a
+    window, and a k-mer pool without a statement of how its k-mers are counted."""
     rng = np.random.default_rng(0)
     table = tmp_path / "table.csv"
     pd.DataFrame({
@@ -212,7 +216,7 @@ def test_the_group_dependence_analysis_featurises_as_the_arms_do(tmp_path, monke
 
 
 # --------------------------------------------------------------------------------------------
-# DEFT reads a window by the same rule
+# DEFT takes a positional window by the same rule
 # --------------------------------------------------------------------------------------------
 
 

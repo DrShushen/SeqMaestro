@@ -1,27 +1,33 @@
-"""Reading and writing the shared feature record, and the values behind it.
+"""Reading and writing the feature record and the values behind it.
 
-`docs/feature_record.md` is the maintained account of what a record holds and why. Keep the two
-in step.
-
-Every arm emits the same files, so the stability estimator and the judge read one format and never
-need to know which arm produced a row:
+Every arm writes the same files, so the stability estimator and the judge use one format and never
+need to know which arm produced a record:
 
     features.json        the records, under a header that describes the fit
     feature_values.npz   each feature evaluated on the reference split
     effect_values.npz    each feature over the training rows, with the labels (bundles only)
 
-**Values are evaluated once, at run time, and stored.** Re-executing a generated feature function
-later would need the code guard, the exact environment and reproducible generation, and is
-impossible for arms whose features are not executable code. Storing the values reduces stability
-matching to loading arrays and correlating them, works identically for every arm, and lets the
-matching run without executing any model-written code. The reference split is **validation**.
-Matching uses no labels, and validation is already the split used for model selection, so
-evaluating features on it exposes nothing new.
+Each value file has one column per record, in the order of the records, so the two are paired by
+position. **The header** of `features.json` holds what every record of the file shares.
+`save_features` writes `schema_version`, and the writer of the cell
+(`seqmaestro.harness.runner.score_arm`) passes the rest:
 
-**The writer may not be able to import this module.** DEFT's and IGSR's arms run in their methods'
-conda environments, which have no `seqmaestro`, and their adapters write conforming JSON by hand.
-That is why the record is flat and plain-typed, and why `load_features` validates what it reads: a
-writer that has drifted from the schema is caught on the first read instead of in a results table.
+- `schema_version`: the layout of the records (`SCHEMA_VERSION`). `load_features` refuses a file
+  of another version instead of coercing it.
+- `importance_kind` and `direction_kind`: what the records' `importance` numbers are, and what
+  their `direction` words are based on, from the vocabularies `IMPORTANCE_KINDS` and
+  `seqmaestro.harness.direction.DIRECTION_KINDS`. A new model needs a new name there and no change
+  to the record.
+- `target_kind`: the kind of target the cell was fitted to, `binary` or `continuous`, which decides
+  the words `direction` may take and what `marginal_effect` measures.
+- `seed` and `labels`: which cell the file belongs to.
+- `model_settings` and `featuriser`: a Core cell's model and featuriser, each as its `describe()`
+  gives it, so that the file says how it was produced. Both are null in a DEFT or an IGSR cell.
+
+DEFT's and IGSR's adapters write these files by hand, since their environments cannot import this
+module, so `load_features` validates what it reads, and a writer that has drifted from the schema
+is caught on the first read. `seqmaestro.features.base.FeatureRecord` describes each field of a
+record, and `docs/developer/feature_record.md` says which producer fills it and why.
 """
 
 from __future__ import annotations
@@ -40,17 +46,18 @@ from seqmaestro.target import target_for
 
 SCHEMA_VERSION = 1
 
-# Free text, because the unit is whatever the fitted model reports. Never compare across arms: use
-# `rank_by_importance`. Recorded once per file, since every record in the file shares it.
+# Free text, because the unit is whatever the fitted model reports. Never compare importances
+# across arms, and use `rank_by_importance` instead. A kind is recorded once per file, because every
+# record in the file shares it.
 IMPORTANCE_KINDS = (
     # l1_logistic and l1_linear, on standardised columns: signed, per standard deviation.
     "l1_coefficient_per_sd",
     "xgb_gain",             # xgboost
     "mean_abs_shape",       # ebm: shape function magnitude
     "impurity_decrease",    # deft_or_cart
-    "deft_split_score",     # deft_or_cart, under a finder other than DEFT's two
+    "deft_split_score",     # deft_or_cart, under a finder other than CART and the generative one
     "mean_abs_shapley",     # pysr: mean absolute Shapley value of the equation's output
-    "igsr_influence",       # igsr: what removing the term from its search's fit costs
+    "igsr_influence",       # igsr: how much the search's fit worsens when the term is removed
     # A least-squares model on an IGSR arm's terms, fitted when the arm is reduced or refitted.
     "least_squares_coefficient_per_sd",
 )
@@ -62,7 +69,7 @@ def save_features(
     importance_kind: str | None = None,
     **header,
 ) -> Path:
-    """Write `features.json`. Extra keyword arguments join the header verbatim."""
+    """Write `features.json`. Extra keyword arguments are added to the header unchanged."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -89,27 +96,29 @@ def load_features(path: str | Path) -> tuple[list[FeatureRecord], dict]:
         )
 
     header = {key: value for key, value in payload.items() if key != "features"}
-    # A file that states its kind of target holds that kind's direction words. One that states
-    # none, as a file written by hand may, is held to the whole vocabulary.
+    # A file that states its kind of target may use only that kind's direction words, whereas one
+    # that states none (a hand-written file may omit it) is checked against the whole vocabulary.
     stated = header.get("target_kind")
     words = (*target_for(stated).directions, NON_MONOTONE) if stated else DIRECTIONS
     return [_from_dict(entry, path, words) for entry in payload["features"]], header
 
 
 #: What a record can be ranked by. `importance` is the one each model reports, which the `Model`
-#: protocol warns is never comparable across models. `permutation_importance` is computed
-#: identically for every arm, so use it when comparing arms with each other. The default is the
-#: model's.
+#: protocol warns is never comparable across models, whereas `permutation_importance` is computed
+#: in the same way for every arm, so use it to compare arms with each other. The default is the
+#: model's `importance`.
 RANK_BY = ("importance", "permutation_importance")
 
 
 def rank_by_importance(records: list[FeatureRecord], by: str = "importance") -> list[int]:
-    """Within-run ranks, 1 = most important. The only form comparable between arms.
+    """Ranks within the given records, with 1 the most important: the only form of a model's
+    importance that is comparable between arms.
 
-    Ranks by absolute importance: an L1 coefficient is signed, and a large negative one is as
-    influential as a large positive one. Records with no importance rank last, in the order given.
+    The ranking is by absolute importance, because an L1 coefficient is signed, and a large negative
+    one is as influential as a large positive one. Records with no importance rank last, in the
+    order given.
 
-    `by` selects which importance; see `RANK_BY`.
+    `by` selects which importance (see `RANK_BY`).
     """
     if by not in RANK_BY:
         raise ValueError(f"Cannot rank by {by!r}; expected one of {', '.join(RANK_BY)}.")
@@ -128,12 +137,12 @@ def rank_by_importance(records: list[FeatureRecord], by: str = "importance") -> 
     return ranks
 
 
-#: How many features make up the comparable view of a discovery. This is a stated convention.
-#: Models disagree by orders of magnitude about how many features they "use": an EBM fits a shape
-#: function to every input and so selects all of them, while a shallow tree names a handful. With
+#: How many features make up the comparable view of a discovery, which is a stated convention.
+#: Models differ by orders of magnitude in how many features they "use": an EBM fits a shape
+#: function to every input and so selects all of them, whereas a shallow tree names a handful. With
 #: set sizes that different, the interpretability and stability axes would measure set size instead
 #: of agreement, and a reviewer cannot assess a thousand features in any case. For the arms that do
-#: select, report the full set alongside, since it is a result in its own right.
+#: select, report the full set beside this view, because the full set is itself a result.
 DEFAULT_TOP_N = 20
 
 
@@ -141,11 +150,11 @@ def top_features(records: list[FeatureRecord], n: int = DEFAULT_TOP_N,
                  by: str = "importance") -> list[FeatureRecord]:
     """The `n` most important features, most important first.
 
-    By *absolute* importance, since a signed coefficient's sign gives its direction and only its
-    magnitude gives its strength. A model that used fewer than `n` features contributes all of
-    them, and a short list is never padded.
+    Features are ranked by *absolute* importance, because a signed coefficient's sign gives its
+    direction and only its magnitude gives its strength. A model that used fewer than `n` features
+    contributes all of them, and a short list is never padded.
 
-    `by` selects which importance; see `RANK_BY`.
+    `by` selects which importance (see `RANK_BY`).
     """
     if n < 1:
         raise ValueError(f"n must be at least 1; got {n}.")
@@ -155,11 +164,13 @@ def top_features(records: list[FeatureRecord], n: int = DEFAULT_TOP_N,
 
 
 def definition_digest(record: FeatureRecord) -> str:
-    """A stable key for "computes the same thing", for exact matching before behavioural matching.
+    """A stable key for features that compute the same thing, used for exact matching before
+    behavioural matching.
 
-    For generated code this is the function body with names, formatting, comments and docstring
-    normalised away, so two candidates that differ only in what the model chose to call them hash
-    alike. For a fixed-vocabulary feature there is no code, so the recipe is the definition.
+    For generated code this is the function body with the function's name, formatting, comments
+    and docstring normalised away, so two candidates that differ only in what the model chose to
+    call them hash alike. A fixed-vocabulary feature has no code, so its recipe (kind and
+    parameters) is the definition.
     """
     normalised = _normalise_source(record.source) if record.source else None
     if normalised is None:
@@ -168,7 +179,7 @@ def definition_digest(record: FeatureRecord) -> str:
 
 
 def save_feature_values(path: str | Path, names: list[str], values: np.ndarray) -> Path:
-    """Write `feature_values.npz`, the reference-split evaluation behind the records."""
+    """Write `feature_values.npz`, the records' values on the reference split."""
     path = Path(path)
     values = np.asarray(values)
     if values.ndim != 2 or values.shape[1] != len(names):
@@ -191,9 +202,9 @@ def load_effect_values(path: str | Path) -> tuple[list[str], np.ndarray, np.ndar
 
 # ------------------------------------------------------------------------------------ internals
 
-#: Every field of a record. `_from_dict` requires only name, description and kind, and the rest are
-#: optional. A writer (an adapter in another environment, a hand-written file) therefore states
-#: only what it knows, and a field added here does not have to be added to every writer.
+#: Every field of a record. `_from_dict` requires only `name`, `description` and `kind`, so a writer
+#: (an adapter in another environment, or a hand-written file) states only what it knows, and a
+#: field added here does not have to be added to every writer.
 _FIELDS = (
     "name", "description", "kind", "params", "source", "rationale", "origin", "importance",
     "permutation_importance", "direction", "marginal_effect", "provenance", "extra"
@@ -205,7 +216,7 @@ def _as_dict(record: FeatureRecord) -> dict:
 
 
 def _from_dict(entry: dict, path, directions: tuple[str, ...]) -> FeatureRecord:
-    """One record of a feature file, checked. `directions` are the words its direction may be."""
+    """One record of a feature file, checked. `directions` are the words its direction may take."""
     if not isinstance(entry, dict):
         raise ValueError(f"{path}: a feature entry is {type(entry).__name__}, expected an object.")
 
@@ -220,9 +231,9 @@ def _from_dict(entry: dict, path, directions: tuple[str, ...]) -> FeatureRecord:
     if missing:
         raise ValueError(f"{path}: feature {entry.get('name')!r} is missing {sorted(missing)}.")
 
-    # Checked on read, because a foreign adapter writes this field by hand. An unknown word, or
-    # the word of the other kind of target, would otherwise travel all the way to a judge prompt
-    # and a report table before anything noticed.
+    # Checked on reading, because an adapter in another environment writes this field by hand.
+    # Otherwise an unknown word, or a word of the other kind of target, would reach a judge prompt
+    # and a report table before anything noticed it.
     if entry.get("direction") is not None and entry["direction"] not in directions:
         raise ValueError(
             f"{path}: feature {entry.get('name')!r} has direction {entry['direction']!r}, which is "
@@ -252,10 +263,11 @@ def _from_dict(entry: dict, path, directions: tuple[str, ...]) -> FeatureRecord:
 
 
 def _normalise_source(source: str) -> str | None:
-    """The function body with everything that does not change what it computes stripped out.
+    """The function body, stripped of what does not change what it computes (the function's name,
+    formatting, comments and docstring).
 
-    This is the normalisation DEFT uses for candidate identity. Keep the two identical, so that a
-    feature hashes the same on both sides of the file boundary.
+    This is the normalisation DEFT uses to identify candidates. Keep the two identical, so that a
+    feature hashes alike on DEFT's side and on this one.
     """
     try:
         module = ast.parse(source)

@@ -1,9 +1,10 @@
 # The example dataset in a few minutes, with no language model: every stage of a run, from the
-# baseline to the report's figures, on fewer arms, two seeds and a small panel. It is the way to
-# see what a run leaves behind, or to check an installation, before the full run of example.yaml.
+# baseline to the report's figures, on fewer arms, two seeds and a small panel. It shows what a run
+# leaves behind, or checks an installation, before the full run of example.yaml.
 #
-# It extends that config and states only what it cuts, which is also how a dataset's config drops
-# an arm or changes a setting of the shared grid (README.md, "Sharing, via `extends`").
+# It extends that config and states only what it changes, which is also how a dataset's config
+# drops an arm or changes a setting of the shared grid (README.md, "Sharing settings through
+# `extends`").
 extends: example.yaml
 name: example_quick
 
@@ -11,7 +12,7 @@ grid:
   # Two seeds are the fewest a run can have, since stability is measured across seeds.
   seeds: [42, 43]
 
-# No pool below holds a written source, so no source's settings are stated for one.
+# No pool below holds a written source, so the written sources' settings are removed.
 sources:
   llm_generated: null
   llm_generated_iterative: null

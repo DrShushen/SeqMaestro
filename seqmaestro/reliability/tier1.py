@@ -1,9 +1,9 @@
 """Tier 1: how stable the selection is, by complementary pairs subsampling.
 
-The question is whether the same procedure, run on a different half of the same data, would have
+Tier 1 measures whether the same procedure, run on a different half of the same data, would have
 chosen the feature at all. Every half-sample runs the whole selection (fit on the candidates, keep
 what the model used, eliminate to N), because re-ranking one fixed fit would measure the ranking
-and not the selection.
+instead of the selection.
 
     D = train + val, n = |D|
     for b = 1..B:  A_b, A'_b are disjoint random subsets of size floor(n/2)
@@ -15,27 +15,29 @@ and not the selection.
     E[V_tau] <= q^2 / ((2 tau - 1) p)
 
 where V_tau counts the features in S_tau whose *true* half-sample selection probability is no
-better than chance, q/p. This is the Meinshausen-Buhlmann bound evaluated on the complementary-pairs
+better than chance, q/p. This is the Meinshausen-Bühlmann bound evaluated on the complementary-pairs
 design of Shah and Samworth (2013). Their r-concavity refinements are tighter but are not used,
 because a number from a different derivation would not be comparable with this one. The bound
-assumes the half-samples are exchangeable and the procedure is no worse than random at ranking.
+assumes that the half-samples are exchangeable and that the procedure is no worse than random at
+ranking.
 
 The bound is an expected count, not a probability. At q = 10 and p = 800, tau = 0.8 gives
 10^2 / (0.6 * 800) = 0.21, so a set of features each chosen in four half-samples out of five is
 expected to hold about a fifth of one chance-level feature. At p = 30 the same arithmetic gives 5.6,
 so the bound is printed for every arm but is informative for only some.
 
-**Clusters and positions are treated the same way**: a group counts as selected when any member is,
-p is the number of groups and q the mean number of groups selected. This is the level to use when
-the candidates hold near-duplicates. A position whose indicators split the selection between them is
-stable as a position and unstable as a feature, and only the group-level number shows it.
+**Clusters and positions are treated in the same way**: a group counts as selected when any of its
+members is, p is the number of groups, and q the mean number of groups selected. This is the level
+to use when the candidates include near-duplicates. A position whose indicators share the selection
+between them is stable as a position but unstable as a feature, and only the group-level number
+shows it.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-#: The thresholds every table carries. The lower end is just above 1/2, because the bound is
+#: The thresholds every table reports. The lower end is just above 1/2, because the bound is
 #: undefined at 1/2 and says nothing below it.
 TAU_GRID = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00)
 
@@ -43,8 +45,8 @@ TAU_GRID = (0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00)
 def half_samples(n: int, n_pairs: int, seed: int) -> np.ndarray:
     """`2 * n_pairs` row-index sets: each pair is two disjoint subsets of size floor(n/2).
 
-    One (2B, floor(n/2)) array with pair `b` in rows `2b` and `2b + 1`, so the pairing is kept in
-    the record and can be checked.
+    They are returned as one (2B, floor(n/2)) array, with pair `b` in rows `2b` and `2b + 1`, so
+    that the pairing is kept in the record and can be checked.
     """
     half = n // 2
     if half < 2:
@@ -59,7 +61,8 @@ def half_samples(n: int, n_pairs: int, seed: int) -> np.ndarray:
 
 
 def check_half_samples(halves: np.ndarray, n: int) -> dict:
-    """The bookkeeping the bound depends on: disjoint, equal-sized, within range."""
+    """Check the bookkeeping the bound depends on: the halves of each pair are disjoint, equal in
+    size and within range."""
     half = n // 2
     if halves.shape[1] != half:
         raise AssertionError(f"Half-samples are {halves.shape[1]} rows, expected {half}.")
@@ -76,19 +79,20 @@ def check_half_samples(halves: np.ndarray, n: int) -> dict:
 
 
 def expected_false_positives(q_hat: float, p: int, tau: float) -> float:
-    """E[V_tau] <= q^2 / ((2 tau - 1) p). Infinite at or below tau = 1/2, where it says nothing."""
+    """The bound E[V_tau] <= q^2 / ((2 tau - 1) p), which is infinite at or below tau = 1/2, where
+    it says nothing."""
     if tau <= 0.5:
         return float("inf")
     return float(q_hat ** 2 / ((2.0 * tau - 1.0) * p))
 
 
 def selection_frequency(selected: np.ndarray) -> np.ndarray:
-    """pi per column, from a (2B, p) boolean selection matrix."""
+    """The selection frequency pi per column, from a (2B, p) boolean selection matrix."""
     return selected.mean(axis=0)
 
 
 def curve(selected: np.ndarray, p: int, tau_grid=TAU_GRID) -> list[dict]:
-    """|S_tau| and the bound at every threshold."""
+    """The size of S_tau and the bound at every threshold."""
     pi_hat = selection_frequency(selected)
     q_hat = float(selected.sum(axis=1).mean())
     return [
@@ -103,7 +107,7 @@ def curve(selected: np.ndarray, p: int, tau_grid=TAU_GRID) -> list[dict]:
 
 def smallest_tau_with_bound(q_hat: float, p: int, ceiling: float,
                             grid=np.arange(0.505, 1.0001, 0.005)) -> float | None:
-    """The lowest threshold whose bound is at or below `ceiling`, or None when there is none."""
+    """The lowest threshold whose bound is at or below `ceiling`, or `None` when there is none."""
     for tau in grid:
         if expected_false_positives(q_hat, p, float(tau)) <= ceiling:
             return round(float(tau), 3)
@@ -111,7 +115,8 @@ def smallest_tau_with_bound(q_hat: float, p: int, ceiling: float,
 
 
 def collapse(selected: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """A group is selected in a half-sample when any of its members is.
+    """The selection matrix collapsed to groups: a group is selected in a half-sample when any of
+    its members is.
 
     Returns the (2B, n_groups) matrix and the group labels in the order of its columns.
     """

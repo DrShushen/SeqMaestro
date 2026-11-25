@@ -1,0 +1,39 @@
+/* A table whose columns are given widths (a list-table with `:widths:`) keeps them. furo lays tables
+   out automatically, which ignores the widths given when a cell holds something wide, such as a long
+   command, and squeezes the other columns until they cannot be read. A fixed layout keeps the widths,
+   and a long word with no break, such as a dotted path, wraps inside its column. */
+.colwidths-given table {
+    table-layout: fixed;
+    width: 100%;
+}
+.colwidths-given td,
+.colwidths-given th,
+.colwidths-given code {
+    overflow-wrap: break-word;
+}
+
+/* The logo of an agent harness, written `<img src="logos/codex.svg" alt="" height="24"
+   class="harness-logo">`: the height of the text it stands beside, centred on its line. */
+img.harness-logo {
+    height: 1.5em;
+    width: auto;
+    vertical-align: middle;
+    margin: 0 0.3em 0.1em 0;
+}
+
+/* Code in the first column of a table, such as an option (`--group-by`) or a file, stays on one
+   line. A browser may break a line after a hyphen, and furo's automatic table layout narrows the
+   first column whenever the others hold sentences, so an option would otherwise be split across
+   two lines. */
+td:first-child code {
+    white-space: nowrap;
+}
+
+/* Each term of the terminology page is a heading of its own, so that a page can link to it by an
+   anchor that works on GitHub too. At the size of a section's heading, thirty-odd of them would
+   outweigh their one-paragraph definitions. */
+#terminology > section > h2 {
+    font-size: 1.35em;
+    margin-top: 1.6rem;
+    margin-bottom: 0.4rem;
+}

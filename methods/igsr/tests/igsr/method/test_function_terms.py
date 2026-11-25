@@ -137,6 +137,27 @@ def test_a_table_alone_is_fitted_through_function_terms(monkeypatch):
     np.testing.assert_allclose(result["best_model"].predict(rows).ravel(), bundle.dataset_test["y"], atol=1e-9)
 
 
+def test_how_the_config_calls_the_model_reaches_every_call(monkeypatch):
+    """The effort, the wait and the retries in the config's `llm`, as SeqMaestro's arm states
+    them, reach the call and the agent that retries it."""
+    seen = []
+
+    def complete(self, messages, completion_kwargs):
+        seen.append((dict(completion_kwargs), self.retry_handler.config.max_retries))
+        reply = _reply(_term("x1_itself", 'def x1_itself(X):\n    return X["x1"]'))
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply))],
+                               usage=SimpleNamespace(to_dict=lambda: {"prompt_tokens": 3, "completion_tokens": 2}))
+
+    monkeypatch.setattr(LiteLLMAgent, "_create_chat_completion", complete)
+    igsr(_cfg("llm.reasoning_effort=minimal", "llm.num_retries=2", "llm.request_timeout=90"), seed=0,
+         data_bundle=_table_bundle())
+
+    assert seen
+    for kwargs, attempts in seen:
+        assert kwargs["reasoning_effort"] == "minimal" and kwargs["timeout"] == 90
+        assert "num_retries" not in kwargs and attempts == 3
+
+
 def test_sequences_of_different_lengths_beside_a_table_are_read_whole(monkeypatch):
     sent = _script(monkeypatch, [_reply(_term("gc_count", GC_COUNT), _term("covariate", COVARIATE))])
     bundle = _sequence_bundle()

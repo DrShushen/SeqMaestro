@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """How much of each feature is the thing a split groups on, checked before a run.
 
-    experiments/analysis/feature_group_dependence.py --dataset data/<dataset>/<file>.csv \
+    experiments/analysis/feature_group_dependence.py --dataset data/<dataset>/<file>.csv \\
         --sequence-column <sequence> --group-column <group> --pools positional
 
 `--help` describes the check, and `seqmaestro/qc/group_dependence.py` holds it.

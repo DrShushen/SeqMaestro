@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=62.0"]
+# 77 is the first setuptools to read the SPDX `license` and `license-files` keys (PEP 639).
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "deft"
 version = "0.1.0"
 description = "DEFT: interpretable DNA sequence classification via dynamic feature generation in decision trees. Vendored into SeqMaestro and reduced to the DEFT method itself."
+license = "MIT"
+license-files = ["LICENSE"]
 # Upstream pinned <3.11 for torch/transformers, which are gone. The ceiling that replaced it
 # was caution, not evidence, and it is now removed: the full suite passes identically on 3.10
 # and 3.12 -- 307 passed on both, including the live-API tests, and the 3.12 run was against

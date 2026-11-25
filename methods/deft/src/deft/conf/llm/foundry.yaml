@@ -1,0 +1,23 @@
+# Engine settings for a model deployed on Azure AI Foundry, such as the open models Kimi and
+# DeepSeek, through the resource's model inference API.
+#
+# One thing differs from `gpt5.yaml`: the reasoning is turned off. These models may reason before
+# they answer unless a call says otherwise, and the reasoning counts against `max_tokens`, so a
+# model that reasons can spend the whole reply on it and return no candidates. `none` turns it off
+# for Kimi K2.6 and DeepSeek V3.2 alike, the counterpart of the minimal effort the GPT-5 models are
+# called with, and Kimi refuses `minimal` itself. A deployment's name appears in no model map, so
+# LiteLLM is told to pass the setting on rather than drop it.
+_target_: deft.llm.engines.litellm_engine.LiteLLMEngine
+content: ${content}
+config: ${llm_models}
+temperature: 1
+top_p: 0.95
+max_tokens: 4000
+reasoning_effort: none
+num_retries: 5
+request_timeout: 60
+# Kimi K2.6 and DeepSeek V3.2 return as many completions as a request asks for, up to ten at
+# least. The cap is the OpenAI APIs', so a larger ask is split as it is for them.
+max_n_per_request: 8
+extra_params:
+  allowed_openai_params: [reasoning_effort]

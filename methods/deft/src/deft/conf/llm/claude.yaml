@@ -9,9 +9,11 @@ temperature: 1
 # The API takes a temperature or a nucleus threshold, and refuses a request that states both.
 top_p: null
 max_tokens: 4000
-# No reasoning effort. LiteLLM would turn one into extended thinking, with a budget that has to
-# fit under `max_tokens`. Left out, thinking is off, which is the counterpart of the minimal
-# effort the GPT-5 models are called with.
+# No reasoning effort here. For an older Claude model, LiteLLM would turn one into extended
+# thinking, with a budget that has to fit under `max_tokens`, and left out, thinking is off, the
+# counterpart of the minimal effort the GPT-5 models are called with. A current Claude model thinks
+# adaptively whatever a call says, so SeqMaestro's arm states the run's effort for it at run time,
+# which sets how much the model thinks (`seqmaestro.llm.client`, `ADAPTIVE_EFFORT`).
 reasoning_effort: null
 num_retries: 5
 request_timeout: 60

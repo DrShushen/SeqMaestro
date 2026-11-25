@@ -1,0 +1,71 @@
+# The motif sources, which a run holds only when its config extends this file beside the shared
+# config of its kind of target:
+#
+#     extends: [_shared.yaml, _motifs.yaml]
+#
+# Two sources: `motif_known`, every motif of a published collection, and `motif_discovered`, the
+# motifs STREME finds in the rows each cell fits on, which needs SeqMaestro_Method_meme
+# (./install.sh --with-motifs). A config that wants one of them only sets the other's settings and
+# arms to null.
+#
+# This file states what does not depend on the dataset. What does is left to the dataset's config,
+# and a run that does not state it is refused: which collection's motifs apply (`collection`, the
+# name of a folder of data/motif_collections/, fetched at Stage 1 with
+# experiments/prepare/fetch_motif_collection.py), and which strands are scanned (`strands`: `both`
+# for DNA, which a factor binds on either strand, `given` for RNA), for each source. A discovered
+# motif may be compared with a collection (`annotate_with`), which names the closest known motif
+# for a reader. The comments below say what each setting does and why it has its value, and
+# docs/developer/motifs.md explains how a motif is matched and what a motif feature measures.
+
+sources:
+  motif_known:
+    # Two columns per motif: the strength of its best match, and its number of matches.
+    summaries: [best_match, count]
+    # A position counts as a match where its p-value is at most this, FIMO's default threshold. The
+    # motifs of RNA-binding proteins are short (a median of 7 positions in CisBP-RNA, against 9 in
+    # JASPAR), and at 1e-4 a short motif matches a short sequence rarely or never, so a dataset
+    # scanned with such a collection states 1e-3.
+    p_threshold: 1.0e-4
+    # Counts as they are. `per_length` divides each by the positions scanned, so that a count does
+    # not grow with the sequence's length (docs/developer/dataset.md).
+    normalise: counts
+    # A count is kept where at least this share of the fitting rows hold a match: the rule the
+    # reliability panel applies to its candidates (`max_modal_share` 0.99), so that no model is
+    # offered a count the panel would discard. Every best match is kept.
+    min_match_share: 0.01
+
+  motif_discovered:
+    # The scans of the motifs found, as for the known motifs.
+    summaries: [best_match, count]
+    p_threshold: 1.0e-4
+    normalise: counts
+    min_match_share: 0.01
+    # STREME is run in both directions: the motifs enriched in class 1, or at the top of a
+    # continuous target, and those enriched in class 0, or at its bottom. `up` runs the first only.
+    directions: both
+    # For a continuous target, the top third of the fitting rows is compared with the bottom
+    # third, and the middle third takes no part.
+    continuous_fraction: 0.333
+    # The widths of a motif. STREME's default lower bound is 8, and 6 lets the shorter motifs of
+    # RNA-binding proteins through (a median of 7 positions in CisBP-RNA). At a `p_threshold` of
+    # 1e-4, a motif of six positions never counts a match, since even its best window has a p-value
+    # of at least 4^-6 (about 2.4e-4), so it gives its best match only.
+    min_width: 6
+    max_width: 15
+    # The motifs kept per direction, in the order STREME reports them. It stops once three in a
+    # row fail its test on the sequences it holds out for testing, and reports those three too.
+    max_motifs: 10
+
+arms:
+  motif_known:
+    # A collection holds hundreds to thousands of motifs, two columns each. EBM boosts over the
+    # columns in rotation and PySR searches among them, so both are left out, as for the k-mers.
+    # Either may be added, and the time estimate says how long it would take.
+    models: [l1, xgboost]
+  motif_discovered:
+    # A discovery gives tens of columns, so every Core model can take it. PySR's search takes
+    # minutes per fit and its panel hours, which the time estimate states before a run.
+    models: [l1, ebm, xgboost, pysr]
+  positional+motif_discovered:
+    # CART, on the positions it derives and the discovered motifs handed to it as columns.
+    models: [deft_or_cart]

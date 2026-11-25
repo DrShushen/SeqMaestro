@@ -1,14 +1,16 @@
-"""An analysis that asks a language model asks once.
+"""An analysis that calls a language model makes its calls once.
 
-The recurrence analysis and the judge keep what is on file while the features, the settings and
-the description they were computed from are unchanged, so that continuing a run does not replace
-tables that were already checked. A cell fitted again, or `--force`, makes them ask again, and a
-call that failed leaves nothing to keep.
+The recurrence analysis and the judge keep what is on file while the features, the settings, the
+task description and the language model they were computed from are unchanged, so that continuing a
+run does not replace tables that were already checked. A cell fitted again, another reasoning
+effort or `--force` makes them call the model again. A call that failed leaves nothing to keep, so
+the next attempt makes it again.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 
 import pytest
 import yaml
@@ -19,10 +21,10 @@ from seqmaestro.judge import ScriptedEngine
 from seqmaestro.llm import ScriptedClient
 from seqmaestro.pipeline import config as configs
 from seqmaestro.pipeline.analyses import inputs, judge, recurrence
-from tests.planted import ANALYSES, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, planted_dataset
 
 ARM = ("l1_logistic", "llm_generated")
-#: The run's settings for the analyses, with the counts as small as they go.
+#: The run's settings for the analyses, with the counts reduced so that the analyses run quickly.
 SMALL = {**ANALYSES, "judge": {**ANALYSES["judge"], "repeats": 1},
          "recurrence": {**ANALYSES["recurrence"], "draws": 50, "across_arms": False}}
 IDEAS = ("gc_fraction", "cpg_count", "at_run", "purine_share")
@@ -50,8 +52,9 @@ def run_dir(tmp_path, monkeypatch):
                  "n_bootstrap": 0, "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": True, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "sources": {"llm_generated": {"proposal_rounds": 1, "n_per_round": 4, "n_examples": 20}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": SMALL,
         "arms": {"llm_generated": {"models": ["l1_logistic"]}}}))
     run = tmp_path / "run"
@@ -77,49 +80,68 @@ def restate(run_dir, section: str, part: str | None, key: str, value) -> None:
 
 
 def one_group(system: str, listing: str) -> str:
-    """Every listed feature in one concept."""
+    """A grouping reply that puts every listed feature in one idea."""
     items = list(range(1, len(listing.splitlines()) + 1))
     return json.dumps({"groups": [{"name": "everything", "items": items}]})
+
+
+def described(settings) -> dict:
+    """What a stand-in reports about the model it replaces: one model, called with the run's
+    `language_model` settings."""
+    return {"model": "scripted", **asdict(settings)}
 
 
 def test_the_recurrence_analysis_groups_once_and_again_only_when_something_changed(
         run_dir, monkeypatch, capsys):
     clients = []
-    monkeypatch.setattr(recurrence, "LiteLLMClient",
-                        lambda **settings: clients.append(ScriptedClient(one_group)) or clients[-1])
+    monkeypatch.setattr(recurrence, "LiteLLMClient", lambda settings: clients.append(
+        ScriptedClient(one_group, described=described(settings))) or clients[-1])
     given = ["--run-dir", str(run_dir)]
     record = run_dir / "results" / recurrence.RECORD
 
-    assert recurrence.main(given) == 0
-    assert len(clients) == 1 and len(clients[0].seen) == 1
-    first = record.read_text()
-    assert inputs.on_file(record) is not None
+    def asked() -> int:
+        return sum(len(client.seen) for client in clients)
 
     assert recurrence.main(given) == 0
-    assert len(clients) == 1, "nothing changed, so no client was built and nothing was asked"
+    assert asked() == 1
+    first = record.read_text()
+    assert inputs.on_file(record) is not None
+    assert json.loads(first)["language_model"] == described(configs.load_recorded(run_dir).language_model)
+
+    assert recurrence.main(given) == 0
+    assert asked() == 1, "nothing changed, so nothing was asked"
     assert record.read_text() == first
     assert "the tables on file are kept" in capsys.readouterr().out
 
     assert recurrence.main([*given, "--force"]) == 0
-    assert len(clients) == 2 and len(clients[1].seen) == 1
+    assert asked() == 2
 
     write_cell(run_dir, "real", 2, (*IDEAS[:3], "a_new_idea"))
     assert recurrence.main(given) == 0
-    assert len(clients) == 3, "a cell fitted again reported other features"
+    assert asked() == 3, "a cell fitted again reported other features"
 
     restate(run_dir, "analyses", "recurrence", "items_per_group", 3)
     assert recurrence.main(given) == 0
-    assert len(clients) == 4, "a changed setting is another analysis"
+    assert asked() == 4, "a changed setting is another analysis"
+
+    restate(run_dir, "language_model", None, "retries", 0)
+    assert recurrence.main(given) == 0
+    assert asked() == 4, "how failures are retried changes no answer"
+
+    restate(run_dir, "language_model", None, "reasoning_effort", "high")
+    assert recurrence.main(given) == 0
+    assert asked() == 5, "a model asked to reason at another effort answers differently"
 
 
 def test_the_arms_grouped_are_those_on_a_written_source(run_dir, monkeypatch):
-    """Named nothing, the analysis groups the arm on the one-round source, whose features are
-    `selected`, and leaves the arm on an enumerated pool, whose names recur by construction."""
+    """Given no arms to group, the analysis groups the arm on the one-round source (whose features
+    are `selected`) and leaves out the arm on an enumerated pool, whose feature names recur by
+    construction."""
     for labels in ("real", "permuted"):
         for seed in (1, 2):
             write_cell(run_dir, labels, seed, ("pos_3_A", "pos_7_C"), arm=("l1_logistic", "positional"),
                        kind="positional")
-    monkeypatch.setattr(recurrence, "LiteLLMClient", lambda **settings: ScriptedClient(one_group))
+    monkeypatch.setattr(recurrence, "LiteLLMClient", lambda settings: ScriptedClient(one_group))
 
     assert recurrence.main(["--run-dir", str(run_dir)]) == 0
 
@@ -132,7 +154,7 @@ def test_a_grouping_call_that_fails_fails_the_stage_and_is_made_again(run_dir, m
     replies = iter([ConnectionError("the endpoint is down"), None])
     monkeypatch.setattr(
         recurrence, "LiteLLMClient",
-        lambda **settings: ScriptedClient(lambda system, listing: next(replies) or one_group(system, listing)))
+        lambda settings: ScriptedClient(lambda system, listing: next(replies) or one_group(system, listing)))
     given = ["--run-dir", str(run_dir)]
     record = run_dir / "results" / recurrence.RECORD
 
@@ -146,35 +168,48 @@ def test_a_grouping_call_that_fails_fails_the_stage_and_is_made_again(run_dir, m
 
 def test_the_judge_rates_once_and_again_only_when_something_changed(run_dir, monkeypatch, capsys):
     engines = []
-    monkeypatch.setattr(judge, "LiteLLMEngine",
-                        lambda: engines.append(ScriptedEngine('{"score": 3}')) or engines[-1])
+    monkeypatch.setattr(judge, "LiteLLMEngine", lambda settings: engines.append(
+        ScriptedEngine('{"score": 3}', described=described(settings))) or engines[-1])
     given = ["--run-dir", str(run_dir)]
     summary = run_dir / "judge" / judge.SUMMARY
 
-    assert judge.main(given) == 0
-    assert len(engines) == 1
-    first = summary.read_text()
-    assert inputs.on_file(summary) is not None
+    def rated() -> int:
+        """How many of the calls to the judge rated anything."""
+        return sum(bool(engine.seen) for engine in engines)
 
     assert judge.main(given) == 0
-    assert len(engines) == 1 and summary.read_text() == first
+    assert rated() == 1
+    first = summary.read_text()
+    assert inputs.on_file(summary) is not None
+    assert json.loads(first)["language_model"] == described(configs.load_recorded(run_dir).language_model)
+
+    assert judge.main(given) == 0
+    assert rated() == 1 and summary.read_text() == first
     assert "the scores on file are kept" in capsys.readouterr().out
 
     assert judge.main([*given, "--force"]) == 0
-    assert len(engines) == 2
+    assert rated() == 2
 
     restate(run_dir, "analyses", "judge", "min_answered", 0.5)
     assert judge.main(given) == 0
-    assert len(engines) == 2, "the share of answers a usable run needs changes no score"
+    assert rated() == 2, "the share of answers a usable run needs changes no score"
 
     write_cell(run_dir, "real", 1, (*IDEAS[:3], "a_new_idea"))
     assert judge.main(given) == 0
-    assert len(engines) == 3
+    assert rated() == 3
+
+    restate(run_dir, "language_model", None, "timeout_seconds", 600)
+    assert judge.main(given) == 0
+    assert rated() == 3, "how long a reply is waited for changes no score"
+
+    restate(run_dir, "language_model", None, "reasoning_effort", "low")
+    assert judge.main(given) == 0
+    assert rated() == 4, "a judge asked to reason at another effort is another instrument"
 
 
 def test_a_judge_that_answered_too_little_is_asked_again(run_dir, monkeypatch):
     replies = [ScriptedEngine("I cannot answer."), ScriptedEngine('{"score": 4}')]
-    monkeypatch.setattr(judge, "LiteLLMEngine", lambda: replies.pop(0))
+    monkeypatch.setattr(judge, "LiteLLMEngine", lambda settings: replies.pop(0))
     given = ["--run-dir", str(run_dir)]
     summary = run_dir / "judge" / judge.SUMMARY
 
@@ -185,9 +220,10 @@ def test_a_judge_that_answered_too_little_is_asked_again(run_dir, monkeypatch):
 
 
 def test_the_judge_takes_the_direction_setting_from_the_runs_config(run_dir, monkeypatch):
-    """Whether the judge is told which way a feature runs changes what a score means, so it is the
-    run's setting and no flag: a judge started by hand rates as the driver's does."""
-    monkeypatch.setattr(judge, "LiteLLMEngine", lambda: ScriptedEngine('{"score": 3}'))
+    """Whether the judge is told which way a feature runs changes what a score means, so it is a
+    setting of the run and has no command-line flag. A judge started by hand therefore rates as the
+    driver's does."""
+    monkeypatch.setattr(judge, "LiteLLMEngine", lambda settings: ScriptedEngine('{"score": 3}'))
     given = ["--run-dir", str(run_dir)]
     summary = run_dir / "judge" / judge.SUMMARY
 

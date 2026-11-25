@@ -1,11 +1,11 @@
-"""Stage 3A: the elimination loop, the arm it is run on, and what it leaves behind.
+"""Stage 3A: the elimination loop, the arm it runs on, and what it leaves behind.
 
-The loop is checked on stand-in fits whose importances are set by hand, because for the loop the
-rule is what matters: the schedule, the unused block, the tie-break, and never overshooting the
-target. The arm is checked on real fits of a planted signal: the seed chosen, the model rebuilt,
-the columns, the weights, and the saved models predicting what the reduction measured. The vendored
-tree's side is checked with stand-ins here, and against DEFT's own interpreter when that is
-installed.
+The loop is checked on stand-in fits whose importances are set by hand, because what matters for
+the loop is its rules: the schedule, dropping the unused features as one block, the tie-break, and
+never overshooting the target. The arm is checked on real fits of a planted signal: the seed
+chosen, the model rebuilt, the columns, the weights, and whether the saved models predict what the
+reduction measured. The vendored tree's side is checked with stand-ins here, and with DEFT's
+interpreter when that is installed.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from seqmaestro.reduction.arm import (
     fit_step_for,
     rebuild_model,
 )
-from tests.planted import ANALYSES, SEQUENCE, TARGET, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, SEQUENCE, TARGET, planted_dataset
 
 REPO = Path(__file__).resolve().parents[1]
 ADAPTERS = REPO / "experiments" / "adapters"
@@ -86,8 +86,8 @@ def test_the_schedule_never_overshoots_the_target():
 
 
 def test_features_the_model_does_not_use_go_together():
-    """Six of forty features carry importance. The thirty-four unused ones leave in a single step,
-    instead of a quarter at a time, and that step stops at the target."""
+    """Six of forty features have importance. The thirty-four unused ones are dropped in one step,
+    which stops at the target, instead of a quarter at a time."""
     importance = {f"f{i}": float(i + 1) for i in range(6)}
     result = a_run(importance, n=40, n_target=10)
 
@@ -116,9 +116,9 @@ def test_a_pool_already_within_the_target_is_fitted_once_and_kept():
 
 
 def test_ties_at_zero_go_to_what_a_feature_last_carried_then_to_record_order():
-    """Three features stop being used at the same step and two of them must go. Record order
-    alone would keep f0, the earliest. The tie-break instead keeps f2, which carried the most
-    importance when it was last used."""
+    """Three features stop being used at the same step and two of them must go. Record order alone
+    would keep f0, which comes first, whereas the tie-break keeps f2, which had the most importance
+    when it was last used."""
     names = [f"f{i}" for i in range(13)]
     everything = dict.fromkeys(names, 9.0)
     fits = [{**everything, "f0": 1.0, "f1": 2.0, "f2": 3.0, "f12": 0.1},
@@ -150,7 +150,7 @@ def test_the_top_n_control_is_the_first_fits_favourites_in_record_order():
 
 
 # --------------------------------------------------------------------------------------------
-# The shared modules stay numpy-only, because the other environment loads them by path
+# The shared modules stay numpy-only, because DEFT's environment loads them by path
 # --------------------------------------------------------------------------------------------
 
 
@@ -211,21 +211,38 @@ def test_a_model_is_rebuilt_from_its_description_and_refused_when_it_would_diffe
     description = L1Logistic(seed=3).describe()
     assert rebuild_model(description, seed=3, target_kind="binary").describe() == description
 
+    # A setting a run's config may change is rebuilt as the cell recorded it.
+    changed = {**description, "C": 0.5}
+    assert rebuild_model(changed, seed=3, target_kind="binary").describe() == changed
     with pytest.raises(ValueError, match="standardise=False"):
         # A rebuild always standardises.
         rebuild_model({**description, "standardise": False}, seed=3, target_kind="binary")
-    with pytest.raises(ValueError, match=r"C=0\.5"):
-        rebuild_model({**description, "C": 0.5}, seed=3, target_kind="binary")
+    with pytest.raises(ValueError, match="solver='lbfgs'"):
+        # The solver is fixed, so a cell that records another was fitted by another model.
+        rebuild_model({**description, "solver": "lbfgs"}, seed=3, target_kind="binary")
     with pytest.raises(ValueError, match=r"C=absent \(rebuilt 0\.1\)"):
         # A setting the model has and the cell did not record is refused too.
         rebuild_model({key: value for key, value in description.items() if key != "C"}, seed=3,
                       target_kind="binary")
 
 
+def test_an_ebm_is_rebuilt_with_the_options_it_passed_to_interpret_and_only_those():
+    """An EBM passes `learning_rate` and `max_rounds` to interpret only where a config gave them,
+    and records them only then, so a rebuild passes them back only then."""
+    from seqmaestro.models import make_model
+
+    given = make_model("ebm", target_kind="binary", seed=3, outer_bags=2,
+                       learning_rate=0.02).describe()
+    assert rebuild_model(given, seed=3, target_kind="binary").describe() == given
+    plain = make_model("ebm", target_kind="binary", seed=3).describe()
+    assert "learning_rate" not in plain
+    assert rebuild_model(plain, seed=3, target_kind="binary").describe() == plain
+
+
 @pytest.mark.parametrize("model_name", ["l1_logistic", "xgboost"])
 def test_the_elimination_keeps_the_features_that_carry_the_signal(model_name):
-    """Three of forty columns drive the label. Eliminating to three with a real model keeps those
-    three."""
+    """Three of forty columns drive the label. Reducing to three columns with a real model keeps
+    those three."""
     from seqmaestro.models import make_model
 
     rng = np.random.default_rng(1)
@@ -297,7 +314,8 @@ def a_reduced_run(tmp_path, runners, n_features: int = 3, model: str = "l1_logis
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": [model]}},
         "reduction": {"n_features": n_features},
@@ -368,8 +386,8 @@ def test_a_reduced_run_is_not_ready_to_reveal_until_the_reduction_has_run(runner
 
 
 def test_a_cell_fitted_against_another_kind_of_target_is_not_ready(runners, tmp_path, capsys):
-    """Scoring refuses such a cell, which it would do after the seal was written, so the check
-    before the seal asks first."""
+    """Scoring would refuse such a cell only once the reveal had sealed the run, so the check made
+    before the reveal reports it first."""
     _, run_dir = a_reduced_run(tmp_path, runners)
     assert runners.reduction.main(["--run-dir", str(run_dir)]) == 0
     record = sorted((run_dir / "results").glob("*/*/real/seed_*"))[0] / "run.json"
@@ -427,8 +445,8 @@ def deft_python() -> Path:
     return environment_python("SeqMaestro_Method_deft")
 
 
-#: Run under DEFT's interpreter: compose a configuration as a fit would, record it as hydra records
-#: a fit's, then build the tree a later stage builds from that record, and print what it holds.
+#: Run under DEFT's interpreter: compose a configuration as a fit would, record it as Hydra records
+#: a fit's, build the tree a later stage builds from that record, and print its settings.
 TREE_FROM_A_RECORD = """
 import importlib.util, json, sys
 from pathlib import Path
@@ -467,9 +485,9 @@ def tree_from_a_record(tmp_path, kind: str, *overrides: str) -> dict:
 @pytest.mark.crossenv
 @pytest.mark.skipif(not deft_python().exists(), reason="DEFT's interpreter is not installed here")
 def test_a_later_tree_has_every_setting_the_cells_fit_recorded(tmp_path):
-    """The reduction and the panel grow their trees from the configuration hydra recorded for the
-    cell's fit, so a setting a run changed is in force whichever setting it is, and the settings
-    that configure the language model change nothing about the tree."""
+    """The reduction and the reliability panel grow their trees from the configuration Hydra
+    recorded for the cell's fit, so any setting a run changed is in force, whereas the settings that
+    configure the language model leave the tree unchanged."""
     conf = yaml.safe_load((REPO / "methods" / "deft" / "src" / "deft" / "conf" / "config.yaml")
                           .read_text())
     plain = tree_from_a_record(tmp_path, "binary")
@@ -525,17 +543,13 @@ def test_both_sides_agree_where_the_reduced_tree_is_kept():
 # --------------------------------------------------------------------------------------------
 
 
-def deft_python() -> Path:
-    from seqmaestro.pipeline.vendored import deft as run_deft
-    return run_deft.DEFT_PYTHON
-
 
 @pytest.mark.skipif(not deft_python().exists(), reason="DEFT's interpreter is not installed here")
 def test_a_deft_arm_is_reduced_and_predicted_on_defts_side(tmp_path, monkeypatch):
-    """Crosses the environment boundary with DEFT's real interpreter. A CART cell is fitted by the
-    Stage 2 adapter and reduced by `deft_cart.py`, and the reduced tree must predict the validation
-    rows exactly as the reduction scored them. The tree is then read back for a report, with every
-    fitting row routed to a leaf."""
+    """Runs DEFT's real interpreter across the environment boundary. The Stage 2 adapter fits a CART
+    cell, `deft_cart.py` reduces it, and the reduced tree must reproduce the validation scores the
+    reduction recorded. The tree is then exported for a report, with every fitting row routed to a
+    leaf."""
     import subprocess
 
     from seqmaestro.harness.runner import ingest_bundle, subsample_training_rows
@@ -587,7 +601,7 @@ def test_a_deft_arm_is_reduced_and_predicted_on_defts_side(tmp_path, monkeypatch
     with np.load(arm_dir / "reduced" / "predictions.npz") as predictions:
         assert np.array_equal(scores, predictions["val_score"])
 
-    # The report reads the same saved tree, and checks it reproduces the cell's validation scores.
+    # The report reads the same saved tree and checks that it reproduces the cell's validation scores.
     structure = deft_cart_calls.export_tree(run_dir, arm_dir.relative_to(run_dir) / "reduced", train,
                                             val, columns=dataset.columns)
     nodes = structure["nodes"]

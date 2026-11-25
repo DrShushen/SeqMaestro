@@ -1,58 +1,29 @@
 """Score a run's discovered features on biological significance.
 
-Reads the `features.json` of every cell under the run's `results/`, puts the top N features of each
-real-label cell on one blinded panel, asks the judge `How biologically significant or
-interesting would this feature be, if it were true?`, and writes the scores and a summary under the
-run's `judge/`.
+The command reads the `features.json` of every cell under the run's `results/`, puts the top N
+features of each real-label cell on one panel that hides which arm each came from, asks the judge
+`How biologically significant or interesting would this feature be, if it were true?`, and writes
+the scores and a summary under the run's `judge/`.
 
     python experiments/analysis/run_judge.py --run-dir experiments/runs/<date>_<name>
     python experiments/analysis/run_judge.py --run-dir ... --dry-run      # prompts only, no calls
 
 **Credentials required** for a real run: `set -a && source .env && set +a`.
 
-The dataset description is `experiments/datasets/<task>.json`, the one the run's recorded config
-names, which the proposer, the vendored methods' adapters and the recurrence analysis also read.
-The library ships none, because a description is about one dataset and `seqmaestro` must not know
-about any. All consumers read the one file, because a dataset described in several places will
-eventually be described differently in each.
+The judge is told the task description the run's recorded config names
+(`experiments/datasets/<task>.json`), the file every other consumer of the dataset reads.
 
-**Whether the judge is told which way a feature runs** is the run's setting `grid.judge_direction`,
-taken from the run's recorded config. No flag changes it, because it changes what a score means, so
-a judge started by hand rates as the driver's does.
+**How the judge rates is the run's setting**, taken from its recorded config: the number of
+features taken from each cell (`analyses.top_n`), the ratings per feature, the label conditions
+rated and whether the code is shown (`analyses.judge`), and whether the judge is told which way a
+feature runs (`grid.judge_direction`). This command has no flag for any of them, so a judge started
+by hand rates as the driver's does. Only real-label features are rated in the shared config.
 
 **The scores on file are kept** when the judge is started again while the features, the settings
-and the description they were computed from are unchanged (`inputs.py`). `--force` rates again.
+and the description they were computed from are unchanged (`inputs.py`), and `--force` rates again.
 
-**How the judge rates is the run's setting**, in its recorded config: the cut (`analyses.top_n`),
-the ratings per feature, the label conditions rated and whether the code is shown
-(`analyses.judge`), and whether the direction is told (`grid.judge_direction`). This command has no
-flag for any of them, so a judge started by hand rates as the driver's does.
-
-**Only real-label features are judged in the shared config.** A config whose
-`analyses.judge.labels` holds `permuted` too has the permuted-label features judged as well.
-
-Judging permuted-label features gives a noise floor for an arm that selects from a fixed vocabulary,
-because its permuted features are different features. If they score as highly as the real ones, the
-judge is scoring how a feature is *written* and not what produced it.
-
-**That reasoning fails for a language-model proposer.** The proposer takes its features from the task
-description and the model's knowledge, and the labelled example rows are a small part of its
-input. With permuted labels it proposes nearly the same features, so the judge would score the same
-panel twice. The features stop predicting but are still proposed, and the resulting number looks
-like a control without being one. `concept_recurrence.csv` shows this from the other side, by
-counting how many ideas an arm repeats under each label condition, for the arms the recurrence
-analysis groups.
-
-**Permuted features are therefore not judged by default.** Judging them would cost up to as many
-calls again, for a column that invites a wrong conclusion. Reports should compare arms with each
-other, and take a single arm's mean as a description of its features and not as evidence about the
-labels.
-
-**The control this axis needs is a permuted *task description***, because the description is what
-drives the proposals. That would test the mechanism directly, and it would work for every arm that
-reads the description. It is not built. A cheaper partial version is to judge a sample of permuted
-features instead of all of them, which keeps the written-versus-produced check at a fraction of the
-cost.
+`docs/developer/analyses/judge.md` describes the protocol, and why the permuted cells' features are
+not rated by default.
 """
 
 from __future__ import annotations
@@ -77,7 +48,7 @@ from seqmaestro.judge import (
     summarise,
 )
 from seqmaestro.judge.files import PANEL_KEY, SCORES, SUMMARY
-from seqmaestro.llm import load_task
+from seqmaestro.llm import load_task, reply_conditions
 from seqmaestro.pipeline.analyses import inputs
 from seqmaestro.pipeline.config import ConfigError, load_recorded
 from seqmaestro.pipeline.layout import JUDGE_DIR, RESULTS_DIR
@@ -90,8 +61,8 @@ from seqmaestro.target import recorded_kind
 #: which panel entry is which feature.
 CALL = "judge"
 
-#: The arguments that say where and whether to run, and the share of answers a usable run needs.
-#: The others are the settings a score depends on.
+#: The arguments that say where and whether to run, and the share of answers needed for the scores
+#: to be usable. The others are the settings a score depends on.
 NOT_SETTINGS = ("run_dir", "dry_run", "force", "out", "min_answered")
 
 
@@ -116,14 +87,14 @@ def collect_sources(results: Path) -> list[PanelSource]:
 
 
 def why_unusable(items, report: dict, min_answered: float, expect_control: bool = True) -> str | None:
-    """Why this judge run cannot be reported, or None if it can.
+    """Why the judge's scores cannot be reported, or None if they can.
 
     A judge that answered nothing must not report success. When every call fails (in an outage,
     for example), `judge_summary.json` is still written, with `control.mean = None` and zero
-    tokens. Exiting 0 would then make the driver record the stage as passing, and a missing
-    significance axis would look the same as a judge nobody asked to run.
+    tokens. Exiting 0 would then make the driver record the stage as passing, and missing scores
+    would look the same as a judge that was not asked to run.
 
-    Separate from `main` so it can be tested without a run directory or a network.
+    It is separate from `main`, so that it can be tested without a run directory or a network.
     """
     if not items:
         return "the panel was empty, so nothing was judged."
@@ -140,11 +111,11 @@ def why_unusable(items, report: dict, min_answered: float, expect_control: bool 
             f"Check connectivity and credentials first."
         )
 
-    # Only a failure when a control was asked for. Judging permuted features is off by default (see
-    # the module docstring), and then an absent control is expected.
+    # An empty control is a failure only when a control was asked for. Judging permuted features is
+    # off by default (see the module docstring), and then an absent control is expected.
     if expect_control and not (report.get("control") or {}).get("n_features"):
         return ("the control pool is empty, so no arm's mean is interpretable. Features from "
-                "permuted-label runs are the noise floor this whole axis is measured against.")
+                "permuted-label cells are the noise floor every judge score is compared with.")
     return None
 
 
@@ -169,9 +140,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # The description is the one the run's config names, so the judge is told about the dataset
-    # the features were proposed for. A judge told about another dataset does not fail. It scores
-    # with confidence against data it was never shown. Whether the judge is told which way each
-    # feature runs is the run's setting too (`grid.judge_direction`), since it changes what a
+    # the features were proposed for. A judge told about another dataset would not fail, but would
+    # score with confidence against data it was never shown. Whether the judge is told which way
+    # each feature runs is the run's setting too (`grid.judge_direction`), since it changes what a
     # score means, so a judge started by hand rates as the driver's does.
     try:
         config = load_recorded(args.run_dir)
@@ -212,10 +183,10 @@ def main(argv: list[str] | None = None) -> int:
         print("  WARNING: permuted-label features were asked for and none were found. Without them "
               "there is no noise floor, and no arm's mean is interpretable.", file=sys.stderr)
 
-    # Counted whatever the setting, because it is a property of the panel. The setting alone
-    # cannot say what the judge saw, since a feature with no marginal effect goes out without a
-    # direction. The count is recorded beside the setting so that together they describe the run
-    # accurately.
+    # The features with a direction are counted whatever the setting, because the count is a
+    # property of the panel. The setting alone cannot say what the judge saw, since a feature with
+    # no marginal effect goes out without a direction, so the count is recorded beside the setting,
+    # and together they describe what the judge was shown.
     with_direction = sum(direction_shown(entry.record, entry.target_kind) is not None
                          for entry in panel)
     if args.include_direction:
@@ -233,16 +204,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # A rating is a language model's answer, so it is asked for once: a call that would be
-    # computed from what the scores on file were computed from keeps them (`inputs`).
+    # computed from what the scores on file were computed from keeps them (`inputs`). The model
+    # and the effort it reasons at are part of what is compared.
+    engine = LiteLLMEngine(config.language_model)
     out = args.out or (args.run_dir / JUDGE_DIR)
     settings = {key: value for key, value in vars(args).items() if key not in NOT_SETTINGS}
+    settings["language_model"] = reply_conditions(engine.describe())
     computed_from = inputs.digest(results_root, settings, context)
     if not args.force and inputs.on_file(out / SUMMARY) == computed_from:
-        print(f"{SUMMARY} was computed from these features, these settings and this description, "
-              f"so the scores on file are kept. --force rates again.")
+        print(f"{SUMMARY} was computed from these features, these settings, this description and "
+              f"this model, so the scores on file are kept. --force rates again.")
         return 0
-
-    engine = LiteLLMEngine()
 
     def progress(index, total, item):
         mean = f"{item.mean:.1f}" if item.mean is not None else "--"
@@ -257,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         "include_code": args.include_code, "include_direction": args.include_direction,
         "features_with_direction": with_direction, "seed": args.seed,
     }
+    # Which model was asked, and how.
+    report["language_model"] = engine.describe()
     report["usage"] = engine.usage()
 
     # A judge that answered nothing must not report success (see `why_unusable`). Its outputs are

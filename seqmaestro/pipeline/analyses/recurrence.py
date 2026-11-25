@@ -1,91 +1,21 @@
-"""Recurrence across seeds, in the two senses an arm can have it: the same feature, and the same idea.
+"""Recurrence across seeds, in the two senses an arm can have it: the same feature and the same idea.
 
     python experiments/analysis/analyse_recurrence.py --run-dir experiments/runs/<date>_<name>
 
-`docs/analyses/recurrence.md` is the maintained account of what this measures and why the other
-two analyses cannot answer it. Change one, change the other.
-
 **Credentials required** for a real run: `set -a && source .env && set +a`.
 
-Three tables:
+A language model groups the written features of every arm on a written source (`written_arms`, or
+the arms `--arms` names) by what they compute, in one pass per arm and one over every arm at once.
+The command writes `results/concept_recurrence.{csv,json}`, `results/feature_recurrence.csv` and
+`results/cross_arm_recurrence.csv`. `docs/developer/analyses/recurrence.md` explains what each table
+counts, why the other analyses cannot answer this question, and the safeguards that make the counts
+meaningful.
 
-- `feature_recurrence.csv` counts features that recur character for character.
-- `concept_recurrence.csv` counts the ideas behind them, with one grouping pass per arm.
-- `cross_arm_recurrence.csv` counts the ideas in **one pass over every arm at once**. It is the only
-  output here that can say two arms reached the same idea.
-
-**Concepts from the per-arm pass are not comparable between arms.** Each arm is grouped on its own,
-so when a concept label from one arm reads like one from another, that is the grouping model
-choosing the same words twice, and it does not mean the members match. The cross-arm pass exists
-because that comparison is worth making and cannot be made by matching labels afterwards.
-
-`analyse_stability.py` measures whether an arm's reported top-N is the same set again. That is the
-right question for an arm choosing from a fixed vocabulary and the wrong one for an arm that writes
-its features, because a generative arm renames the same idea every time and instantiates it over a
-different window. Neither pass of the matcher sees that. Pairing on identical definitions finds
-different strings, and behavioural matching finds weakly correlated columns, because partially
-overlapping windows on opposite flanks do not track each other. So a generative arm can score near
-zero on both while proposing the same idea every time.
-
-**What this measures instead.** A language model groups the features by what they compute, and a
-concept is scored by how many seeds contain it. This measures the arm's *proposal* repertoire,
-whereas `top_n_kappa` measures its *selection*. An arm can be stable in one and not the other. For
-example, a tree-building arm can propose a small consistent repertoire and then select naive
-positional splits at most nodes.
-
-**This clustering differs from `analyse_co_discovery.py`'s**, and the two are not interchangeable.
-Co-discovery clusters *across arms within one seed*, by how feature values correlate on a shared
-reference split. That needs every arm evaluated on the same rows, and answers "did anything else
-find this?". This script clusters by what a feature's name and description say it computes, which
-needs no shared rows. It does so across seeds within one arm, answering "did this arm think of it
-again?", and across every arm at once, answering "did more than one arm think of it?". Behaviour
-cannot answer either question, because the same idea over a shifted window does not correlate with
-itself. So the cross-arm pass here and co-discovery are two different ways for arms to agree, and an
-idea can show up in one and not the other.
-
-**Three safeguards make the counts meaningful.**
-
-- **The permuted arm is in the same clustering pass**, blinded in the same way. Concepts are defined
-  once over both conditions and then counted separately, so a concept cannot be defined to fit the
-  real features, and both conditions are measured against the same concepts. Clustering the two
-  conditions separately would produce two different concept sets and no comparison at all.
-- **The model never sees the seed or the label condition.** Features arrive shuffled under opaque
-  ids. The key is written separately, so the clustering can be inspected on the terms the model saw.
-- **The permuted count is reported beside every real count.** Without it the real column says
-  nothing, because an arm that reads a task description instead of the labels will propose the same
-  repertoire under either condition. The language-model proposer does this, which is also why the
-  judge rates no permuted features by default. An arm that keeps many more features on real labels
-  than on shuffled ones has already said something before any concept is counted, so that line
-  prints first.
-
-**Why both counts are always reported.** An arm choosing from a fixed vocabulary passes the by-name
-count by construction, and an arm that writes its features fails it however consistent its ideas
-are. The by-idea count is the reverse. Quoting either count alone misdescribes one kind of arm, so
-the script reports both, and is named for recurrence in general.
-
-It groups every arm of the run whose pool holds a source a language model writes: the one-round
-source, the iterative source and the joint source of DEFT and IGSR (`written_arms`). On each of
-them a cell's features are written for that cell alone, so one idea can come back under another
-name at the next seed. `--arms` groups the arms it names in their place. Of each arm it takes the
-`llm_generated` features only, because the question is about proposals: naive positional splits are
-drawn from an enumeration, so their recurrence is arithmetic and not evidence. Each cell is
-restricted to its top features of the kinds the run's config states, by importance
-(`analyses.top_n`, `analyses.recurrence.kinds`). `analyse_stability.py` and
-`analyse_co_discovery.py` take that many from all of a cell's features, so on a pool that also
-holds other sources a written feature outside the cell's overall top is grouped here and left out
-there.
-
-Writes `results/concept_recurrence.{csv,json}`, `results/feature_recurrence.csv` and
-`results/cross_arm_recurrence.csv`. The last comes from one more grouping call, over every arm's
-features, which a config leaves out with `analyses.recurrence.across_arms: false`. A reply names
-every listed feature by its number, so each call is given room and time for a reply of its
-listing's length (`reply_tokens`, `reply_seconds`).
-
-A grouping is one answer of a language model, so the tables on file are kept while the features,
-the settings and the description they were computed from are unchanged (`inputs.py`), and `--force`
-groups again. A grouping call that fails fails the command, which exits 1. The tables are then
-written from the groupings that succeeded, and their record states no digest, so the next call
-groups again.
+Each call is given the tokens and the time that a reply to its list needs (`reply_tokens`,
+`reply_seconds`), since a reply names every listed feature by its number. The tables on file are
+kept while what they were computed from is unchanged (`inputs.py`), and `--force` groups again. If
+a grouping call fails, the command still writes the tables from the groupings that succeeded, with
+no digest in their record so that the next call groups again, and it exits with status 1.
 """
 
 from __future__ import annotations
@@ -106,7 +36,7 @@ from seqmaestro import files
 from seqmaestro.arms import arm_name, calls_language_model
 from seqmaestro.harness import cell as cells
 from seqmaestro.harness.features import load_features, top_features
-from seqmaestro.llm import LiteLLMClient, load_task
+from seqmaestro.llm import LiteLLMClient, load_task, reply_conditions
 from seqmaestro.pipeline.analyses import inputs
 from seqmaestro.pipeline.config import ConfigError, load_recorded
 from seqmaestro.pipeline.layout import RESULTS_DIR
@@ -129,7 +59,7 @@ NOT_SETTINGS = ("run_dir", "dry_run", "force")
 #: What a grouping reply takes, in tokens. It names every listed item by its number, at up to
 #: `TOKENS_PER_ITEM` for a number and its separator, and every group at up to `TOKENS_PER_GROUP`
 #: for its name and the JSON around it. `TOKENS_TO_SPARE` covers what a model spends before it
-#: answers. `reply_tokens` adds them up for a listing.
+#: answers, and `reply_tokens` adds them up for a listing.
 TOKENS_PER_ITEM = 4
 TOKENS_PER_GROUP = 24
 TOKENS_TO_SPARE = 4096
@@ -145,9 +75,9 @@ def written_arms(results: Path) -> list[str]:
 
     These are the arms that can give one idea another name at each seed, whichever written source
     the pool holds. On the iterative and the joint source a cell's features are written during its
-    fit. On the one-round source they are written before it, and each cell still has a proposal of
-    its own. The arms are found from the directories of the run and the pool's name, so an arm a
-    config adds is taken without a list kept here.
+    fit, whereas on the one-round source they are written before it, and each cell still has a
+    proposal of its own. The arms are found from the run's directories and the pools' names, so an
+    arm a config adds is included without a list kept here.
     """
     return sorted(arm_name(pool.parent.name, pool.name) for pool in results.glob("*/*")
                   if pool.is_dir() and calls_language_model(pool.name))
@@ -155,7 +85,7 @@ def written_arms(results: Path) -> list[str]:
 
 #: Grouping is at the level of the *mechanism being measured*, and the rules below are domain-free.
 #: What counts as "the same idea" in a given dataset comes from that dataset's description, which
-#: the proposer and the judge already read. Naming one dataset's motifs here would make the
+#: the proposer and the judge are also told. Naming one dataset's motifs here would make the
 #: analysis correct for that dataset and quietly wrong on the next one.
 #:
 #: The granularity is set in the prompt because it has to be identical for both label conditions,
@@ -185,10 +115,10 @@ def reply_tokens(n_items: int, items_per_group: int) -> int:
     """The tokens a grouping reply over `n_items` may take.
 
     The pass across arms lists every arm's features in one request, so its reply is several times
-    as long as any arm's. A limit that suited one arm would cut that reply short, and a reply cut
-    short cannot be parsed, which fails the analysis. The limit therefore follows the listing: room
-    for every item's number, and for the groups the request asks for, one for each
-    `items_per_group` items.
+    as long as any arm's. A limit that suited one arm would truncate that reply, and a truncated
+    reply cannot be parsed, which fails the analysis. The limit therefore follows the listing, with
+    room for every item's number and for the groups the request asks for (one for each
+    `items_per_group` items).
     """
     groups = math.ceil(n_items / items_per_group)
     return TOKENS_TO_SPARE + TOKENS_PER_ITEM * n_items + TOKENS_PER_GROUP * groups
@@ -201,16 +131,17 @@ def reply_seconds(tokens: int) -> int:
 
 
 def build_system(context, items_per_group: int) -> str:
-    """The grouping rules, plus whatever the dataset says about itself."""
+    """The grouping rules, followed by the task description as the models are told it."""
     return SYSTEM.format(items_per_group=items_per_group) + f"\n\nThe dataset:\n{context.render()}"
 
 
 def collect(results: Path, arm: str, kinds: set[str], top_n: int | None) -> list[dict]:
     """Each cell's reported features, tagged with the seed and condition they came from.
 
-    Restricted to the `top_n` features of the kinds asked for that the model leaned on most, by the
-    size of its importance whatever its sign (`top_features`). Without the cut, an arm that keeps
-    everything it generated would be compared against one that selects a handful.
+    The features are restricted to the `top_n` of the kinds asked for that the model relied on
+    most, by the size of their importance whatever its sign (`top_features`). Without this
+    restriction, an arm that keeps everything it generated would be compared with one that selects
+    a handful.
     """
     out = []
     for cell in sorted(results.glob(f"{arm}/*/seed_*")):
@@ -234,11 +165,11 @@ def collect(results: Path, arm: str, kinds: set[str], top_n: int | None) -> list
 
 
 def exact_recurrence(features: list[dict]) -> pd.DataFrame:
-    """The same feature, character for character, across seeds. Real labels only.
+    """The features that recur character for character across seeds, on real labels only.
 
-    Read this beside the concept view, because an arm drawing from a fixed vocabulary scores well
-    here by construction, and one that writes its features scores near zero however consistent its
-    ideas are.
+    This view must be judged together with the concept view, because an arm drawing from a fixed
+    vocabulary scores well here by construction, whereas one that writes its features scores near
+    zero however consistent its ideas are.
     """
     real = [f for f in features if f["labels"] == "real"]
     seeds = len({f["seed"] for f in real})
@@ -246,9 +177,9 @@ def exact_recurrence(features: list[dict]) -> pd.DataFrame:
     for f in real:
         # Provenance is kept per row. A written feature recurs by name only if it was named the
         # same way again, whether its proposal was fixed before the fit (`selected`) or it was
-        # written during the fit (`generated`). A feature of an enumerated kind, where a config's
-        # `kinds` take one in, is `selected` too and recurs by name by construction, so its rows
-        # are not to be averaged with the written ones.
+        # written during the fit (`generated`). A feature of an enumerated kind, which a config's
+        # `kinds` can include, is `selected` too and recurs by name by construction, so its rows
+        # must not be averaged with the written ones.
         row = rows.setdefault(f["name"], {"feature": f["name"], "arm": f["arm"],
                                           "provenance": f.get("provenance"), "seeds": set(),
                                           "importance": 0.0, "description": f["description"]})
@@ -293,9 +224,9 @@ def recurrence_null(features: list[dict], groups: dict[str, list[int]], draws: i
 
     **Without this the real column cannot be interpreted.** An arm that keeps several times as many
     features on real labels as on shuffled ones will show more real seeds per concept for that
-    reason alone, whatever the concepts are. The null shuffles which features carry which
-    (condition, seed) tag, preserving how many of each tag exist and how large each group is, and
-    asks how often chance alone reaches the observed count.
+    reason alone, whatever the concepts are. The null shuffles which features have which
+    (condition, seed) tag, preserving how many of each tag there are and how large each group is,
+    and counts how often chance alone reaches the observed count.
     """
     tags = [(f["labels"], f["seed"]) for f in features]
     observed = {}
@@ -313,17 +244,31 @@ def recurrence_null(features: list[dict], groups: dict[str, list[int]], draws: i
 
 
 def summarise(features: list[dict], groups: dict[str, list[int]]) -> pd.DataFrame:
-    """One row per concept: which seeds contain it, under each label condition."""
+    """One row per concept: which seeds contain it, under each label condition.
+
+    - `real_seeds`, `permuted_seeds`: how many seeds of each label condition hold a member of it.
+    - `real_features`, `permuted_features`: how many features of each label condition fell into it.
+    - `p_enriched`: a hypergeometric test of whether it holds more real features than drawing its
+      members blind would give, given how many features each label condition contributed overall.
+    - `example`: one member's name, so that the row can be understood at a glance.
+
+    Each pass adds `p_chance`, how often chance alone reaches the concept's number of real seeds at
+    its size (`recurrence_null`). A row of one arm's pass also names its `arm`, whereas a row of the
+    pass across arms gives how many arms reached the concept under each label condition
+    (`real_arms`, `permuted_arms`) and the arms that reached it on real labels (`arms`), from
+    `arm_coverage`.
+    """
     seeds = defaultdict(set)
     for condition in ("real", "permuted"):
         for feature in features:
             if feature["labels"] == condition:
                 seeds[condition].add(feature["seed"])
-    # Two different questions, and the second is more informative. Seed coverage asks whether a
-    # concept turns up again across reseeding. **Enrichment asks whether the labels produced it**:
-    # given how many features each condition contributed overall, is this concept more real-heavy
-    # than drawing its members blind would give? An arm keeping several times as many features on
-    # real labels reaches every real seed in any large concept, so coverage alone says little.
+    # Two different questions, of which the second is more informative. Seed coverage measures
+    # whether a concept turns up again across reseeding, whereas **enrichment tests whether the
+    # labels produced it**: given how many features each condition contributed overall, is this
+    # concept more real-heavy than drawing its members blind would give? An arm keeping several
+    # times as many features on real labels reaches every real seed in any large concept, so
+    # coverage alone says little.
     population = len(features)
     successes = sum(1 for f in features if f["labels"] == "real")
     rows = []
@@ -354,11 +299,11 @@ def group_features(features: list[dict], args, context, client, label: str):
     or None under `--dry-run`, which makes no call. A call that gives no groups raises
     `GroupingFailed`.
 
-    Shared by both passes so that a concept means the same thing however it was scoped: the model
+    Both passes share it, so that a concept means the same thing however it was scoped: the model
     sees a numbered list of names and descriptions and nothing else.
     """
-    # Shuffled and numbered, so the model cannot infer the seed, the condition or the arm from the
-    # order it reads them in.
+    # The features are shuffled and numbered, so the model cannot infer the seed, the condition or
+    # the arm from the order they are listed in.
     order = list(range(len(features)))
     random.Random(args.seed).shuffle(order)
     shuffled = [features[i] for i in order]
@@ -395,9 +340,9 @@ def group_features(features: list[dict], args, context, client, label: str):
 def arm_coverage(features: list[dict], groups: dict[str, list[int]]) -> pd.DataFrame:
     """Which arms reached each concept, under each condition.
 
-    Only meaningful when one grouping pass covered several arms. A concept defined inside one arm's
-    pass cannot be set beside one defined inside another's, however alike the two labels read: they
-    are separate clusterings and nothing compared their members.
+    This is meaningful only when one grouping pass covered several arms. A concept defined in one
+    arm's pass cannot be compared with one defined in another's, however alike the two labels look,
+    because they come from separate clusterings whose members were never compared.
     """
     rows = []
     for name, items in groups.items():
@@ -436,7 +381,7 @@ def analyse_arm(results: Path, arm: str, args, context, client) -> tuple[dict, p
         "n_features_recurring_by_name": int((exact.seeds > 1).sum()) if not exact.empty else 0,
         "n_concepts_recurring": int((concepts.real_seeds > 1).sum()),
         "concepts": concepts.to_dict(orient="records"),
-        # Written so the grouping can be checked on the terms the model saw it.
+        # Written so that the grouping can be checked on the terms the model saw.
         "key": [{"item": i, "name": f["name"], "labels": f["labels"], "seed": f["seed"]}
                 for i, f in enumerate(shuffled, start=1)],
     }
@@ -449,15 +394,15 @@ def analyse_across_arms(results: Path, arms: list[str], args, context,
                         client) -> tuple[dict, pd.DataFrame] | None:
     """Every arm's features in **one** grouping pass, so concepts are comparable between arms.
 
-    The per-arm pass answers "did this arm think of it again". This answers "did more than one arm
-    think of it", which the per-arm pass cannot, because it groups each arm separately. Two of its
-    labels reading alike is the grouping model choosing the same words twice, and it does not mean
-    the members match.
+    Whereas the per-arm pass answers "did this arm think of it again?", this pass answers "did more
+    than one arm think of it?", which the per-arm pass cannot, because it groups each arm
+    separately: two of its labels that look alike are the grouping model choosing the same words
+    twice, which does not mean the members match.
 
-    It is also a different question from `analyse_co_discovery.py`, which pairs arms by how their
+    The question also differs from that of `analyse_co_discovery.py`, which pairs arms by how their
     feature *values* correlate on a shared reference split. That needs every arm scored on the same
-    rows, and it cannot see two arms computing one idea over different windows. This pass sees the
-    idea and never looks at a value.
+    rows, and it cannot see two arms computing one idea over different windows, whereas this pass
+    sees the idea and never looks at a value.
     """
     features = [f for arm in arms for f in collect(results, arm, set(args.kinds), args.top_n)]
     if len({f["arm"] for f in features}) < 2:
@@ -518,7 +463,8 @@ def main(argv: list[str] | None = None) -> int:
               "nothing to group")
         return 0
     # The description is the one the run's config names, so the grouper is told about the dataset
-    # the features were proposed for. How the features are cut and grouped is the run's too.
+    # the features were proposed for. How many features are taken, and how they are grouped, are
+    # the run's settings too.
     try:
         config = load_recorded(args.run_dir)
         context = load_task(DESCRIPTIONS, config.dataset.task)
@@ -528,17 +474,21 @@ def main(argv: list[str] | None = None) -> int:
     stated = config.analyses.recurrence
     args.top_n, args.kinds = config.analyses.top_n, list(stated.kinds)
     args.items_per_group, args.draws, args.seed = stated.items_per_group, stated.draws, stated.seed
-    # A grouping is a language model's answer, so it is asked for once: a call that would be
-    # computed from what the tables on file were computed from keeps them (`inputs`).
-    settings = {key: value for key, value in vars(args).items() if key not in NOT_SETTINGS}
-    computed_from = inputs.digest(results, settings, context)
-    if not (args.dry_run or args.force) and inputs.on_file(results / RECORD) == computed_from:
-        print(f"{RECORD} was computed from these features, these settings and this description, "
-              f"so the tables on file are kept. --force groups again.")
-        return 0
     # Not built under --dry-run: the client demands credentials at construction, and the flag exists
     # to read the prompt on a machine that has none.
-    client = None if args.dry_run else LiteLLMClient()
+    client = None if args.dry_run else LiteLLMClient(config.language_model)
+    # A grouping is a language model's answer, so it is asked for once: a call that would be
+    # computed from what the tables on file were computed from keeps them (`inputs`). The model
+    # and the effort it reasons at are part of what is compared. A dry run does not compare
+    # anything with the file.
+    settings = {key: value for key, value in vars(args).items() if key not in NOT_SETTINGS}
+    if client is not None:
+        settings["language_model"] = reply_conditions(client.describe())
+    computed_from = inputs.digest(results, settings, context)
+    if not (args.dry_run or args.force) and inputs.on_file(results / RECORD) == computed_from:
+        print(f"{RECORD} was computed from these features, these settings, this description and "
+              f"this model, so the tables on file are kept. --force groups again.")
+        return 0
 
     print(f"grouping {len(args.arms)} arm(s), top {args.top_n or 'all'} features per cell:")
     records, concept_frames, exact_frames, failed = [], [], [], []
@@ -573,7 +523,8 @@ def main(argv: list[str] | None = None) -> int:
     exact = pd.concat([f for f in exact_frames if not f.empty], ignore_index=True)
     concepts.to_csv(results / BY_CONCEPT_TABLE, index=False)
     exact.to_csv(results / BY_NAME_TABLE, index=False)
-    payload = {"arms": records, "usage": client.usage()}
+    # Which model grouped the features, and how.
+    payload = {"arms": records, "language_model": client.describe(), "usage": client.usage()}
     if across is not None:
         across_record, across_concepts = across
         across_concepts.to_csv(results / ACROSS_ARMS_TABLE, index=False)

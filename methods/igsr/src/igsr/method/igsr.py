@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from igsr.agent.agent import LiteLLMAgent, completion_settings
+from igsr.agent.agent import LiteLLMAgent, completion_settings, retry_settings
 from igsr.compute_profiler import ComputeProfiler
 from igsr.config_typing import MainConfig
 from igsr.dataset import DataBundle
@@ -776,6 +776,7 @@ def propose_and_prune_once(
             max_steps=cfg.experiment.max_agent_steps,
             model=f"{cfg.llm.kind}/{cfg.llm.deployment}",
             completion_kwargs=completion_kwargs,
+            retry_config=retry_settings(cfg.llm),
             task_complete_sentinels=agent_generate_terms_sentinels,
             postprocessor=postprocessor,
             postprocessor_kwargs=postprocessor_kwargs,
@@ -954,6 +955,7 @@ def propose_and_prune_once(
             max_steps=cfg.experiment.max_agent_steps,
             model=f"{cfg.llm.kind}/{cfg.llm.deployment}",
             completion_kwargs=completion_kwargs,
+            retry_config=retry_settings(cfg.llm),
             task_complete_sentinels=agent_pruning_sentinels,
             postprocessor=postprocessor_pruning,
             postprocessor_kwargs={

@@ -10,7 +10,7 @@
     $IGSR experiments/adapters/igsr_bundle.py evaluate --bundle <dir> --columns columns.json \\
         [--names names.json] --rows rows.csv --id-column <column> --out values.npz
 
-This is the far side of the environment boundary. It imports `igsr`, inside its three modes so that
+This is the far side of the environment boundary. It imports `igsr` inside its three modes, so that
 what it builds from IGSR's result can be tested from SeqMaestro's environment, and it never imports
 `seqmaestro`. The bundle format belongs to SeqMaestro, so the adapter lives here and the vendored
 copy stays standalone.
@@ -18,13 +18,13 @@ copy stays standalone.
 **`fit` runs IGSR's search in process, in its function form**: each term is a Python function the
 language model writes over the rows, which hold the whole sequence (at whatever length it comes)
 and the covariates the cell was handed (`columns.json`). The search fits on the fitting rows and
-chooses on the validation rows: the iteration with the lowest error, and the terms it prunes. Its
-prompts show the language model the error and each term's influence there. On those rows it is
+chooses on the validation rows (the iteration with the lowest error, and the terms it prunes), and
+its prompts show the language model the error and each term's influence there. On those rows it is
 given the labels `--choose-on` holds, and `--val` keeps the real labels the model is scored
 against. The two differ on a control arm, whose labels to choose on are shuffled as its fitting
 rows' are, so its search never sees the real target. IGSR then refits the chosen terms by least
 squares on the fitting rows, and that model is saved as `model.json` and predicts the validation
-rows. The test split is never handed over. IGSR is told about the data from the dataset's
+rows. The held-out split is never handed over. IGSR is told about the data from the dataset's
 description in `experiments/datasets/<task>.json`, which the proposer and the judge also read: the
 task and the target in its data dictionary, and the sequence layout and each covariate's
 description beside the column they describe.
@@ -35,22 +35,23 @@ A term that only reads a handed column unchanged (`return X["column"]`) is that 
 back with the recipe and description `columns.json` recorded for it, provenance `selected`, as the
 DEFT adapter returns a covariate its tree splits on. Its `importance` is IGSR's own number, the
 term's influence: the rise in validation mean squared error when its weight is set to zero, against
-the labels the search chose on. Its `direction` is the sign of its weight. `permutation_importance`
-is the fall in validation R-squared when the term's values are shuffled, against the real labels,
-the measure every arm reports.
+the labels the search chose on. Its `direction` is the sign of its weight. Its
+`permutation_importance`, the measure every arm reports, is the fall in validation R-squared when
+the term's values are shuffled, against the real labels.
 
 **Every term the search accepted** is written to `terms.json`, with the round it first appeared in.
 The reliability panel takes them as the arm's candidate pool. **The fit the search made** is
 recorded in `arm.json` (`fit`: ordinary least squares, or ridge or lasso at IGSR's alpha, with or
 without an intercept), so the later stages refit the arm as IGSR fitted it.
 
-`predict` serves the reveal: it loads `model.json` and predicts the rows it is handed, which carry
+`predict` serves the reveal: it loads `model.json` and predicts the rows it is handed, which have
 an identifier column and no target, and writes the identifiers back beside the scores.
 
-`evaluate` serves every later stage: the named terms of a cell's search (all of them when none are
-named) on the rows it is handed, each with the recipe its record would carry, and the identifiers
-back beside the values. The model-written code runs only here, under the guard and timeout the
-search used, and the least-squares fits on the values are made on the other side.
+`evaluate` serves every later stage: it runs the named terms of a cell's search (all of them when
+none are named) on the rows it is handed, and writes their values, each term's recipe as its record
+would state it, and the identifiers beside the values. The model-written code runs only here, under
+the guard and timeout the search used, and the least-squares fits on the values are made on the
+other side.
 
 IGSR fits unweighted least squares, so a dataset with per-row weights is refused, and it fits a
 continuous target only (a binary one would need a logistic fit and influence through its link).
@@ -83,7 +84,8 @@ LOG_FILE = "igsr.jsonl"
 #: How the arm writes its terms: the function form, over the rows as a frame.
 TERM_LANGUAGE = "function"
 
-#: What a record says about itself, restated from SeqMaestro's vocabulary, which a test holds equal.
+#: What a record says about itself, restated from SeqMaestro's vocabulary and checked against it by
+#: a test.
 ORIGIN = "igsr"
 KIND_GENERATED = "llm_generated"
 PROVENANCE_GENERATED, PROVENANCE_SELECTED = "generated", "selected"
@@ -114,11 +116,21 @@ def read_description(task: str, dataset_dir: Path) -> dict:
     return json.loads(path.read_text())
 
 
-def data_dictionary(description: dict, target_column: str) -> str:
-    """IGSR's data dictionary: the task, and what the target column holds."""
+#: How IGSR's prompts introduce the guidance the person running the analysis gave, in the words the
+#: proposer's requests use (`seqmaestro.proposer.prompt.GUIDANCE_INTRODUCTION`), which this side
+#: cannot import.
+GUIDANCE_INTRODUCTION = ("The person running this analysis gives this guidance on the form of the "
+                         "features:")
+
+
+def data_dictionary(description: dict, target_column: str, guidance: str | None) -> str:
+    """IGSR's data dictionary: the task, what the target column holds, and the guidance on the form
+    of the terms where the person running the analysis gave any. IGSR states the dictionary in
+    every prompt that asks for terms, so the guidance reaches each of them."""
     target = description.get("target_name")
     stated = f"\n\nThe target column `{target_column}` is {target}." if target else ""
-    return description["task"] + stated
+    guided = f"\n\n{GUIDANCE_INTRODUCTION} {guidance}" if guidance is not None else ""
+    return description["task"] + stated + guided
 
 
 def column_descriptions(manifest: dict, description: dict) -> dict[str, str]:
@@ -183,7 +195,7 @@ def bare_column(code: str) -> str | None:
 def fit_record(estimator: type, settings: dict) -> dict:
     """The fit IGSR's search makes, as the later stages refit it: its penalty, its alpha and whether
     it has an intercept, from the estimator IGSR's configuration chose and the settings it passes.
-    A fit that is not least squares, IGSR's `no_optimization`, which fixes every weight at 1, is
+    A fit that is not least squares (IGSR's `no_optimization`, which fixes every weight at 1) is
     refused."""
     name = estimator.__name__
     if name not in PENALTIES:
@@ -198,7 +210,7 @@ def fit_record(estimator: type, settings: dict) -> dict:
 
 def direction_of(weight: float) -> str | None:
     """The sign of a least-squares weight, which says everything the linear model does with its
-    term. None for a weight of zero, which moves the model nowhere."""
+    term. None for a weight of zero, which does not move the prediction."""
     if weight > 0:
         return INCREASES_TARGET
     if weight < 0:
@@ -387,7 +399,7 @@ def fit(args) -> int:
         dataset_train=frames["train"][[*inputs, args.target_column]],
         dataset_validation=searched,
         dataset_test=None, target_columns=[args.target_column],
-        data_dictionary=data_dictionary(description, args.target_column),
+        data_dictionary=data_dictionary(description, args.target_column, args.guidance),
         column_descriptions=column_descriptions(manifest, description),
     )
     print(f"IGSR ({TERM_LANGUAGE} terms, seed {args.seed}) on {len(frames['train'])} fitting rows, "
@@ -446,6 +458,8 @@ def fit(args) -> int:
         "fit": fit_used,
         "wall_clock_seconds": round(time.time() - started, 1),
         "config_overrides": list(args.config_override),
+        # The guidance on the form of the terms that the prompts were given, or None.
+        "guidance": args.guidance,
         "search": {
             "best_iter_id": result["best_iter_id"],
             # Against the labels the search chose on, which differ from the real ones on a control.
@@ -510,6 +524,10 @@ def main() -> int:
     parser.add_argument("--target-kind", required=True, help="must be continuous")
     parser.add_argument("--task", required=True, help="the dataset's description, in --dataset-dir")
     parser.add_argument("--dataset-dir", type=Path, default=DATASET_DIR)
+    # Absent where the run gives no guidance, which is the default.
+    parser.add_argument("--guidance", default=None,
+                        help="what the person running the analysis asks of the form of the terms, "
+                             "added to IGSR's data dictionary")
     parser.add_argument("--seed", type=int, required=True,
                         help="seeds IGSR's tree search and its examples")
     parser.add_argument("--weight-column", default=None,

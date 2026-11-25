@@ -1,11 +1,11 @@
-"""The proposer, the cache, and the featuriser that executes what the model wrote.
+"""The proposer, the proposal cache, and the featuriser that runs the code a language model wrote.
 
-Everything here runs offline against `ScriptedClient`, which works because the model call sits
-behind an interface. Proposal parsing, rejection accounting, caching, the fit/transform discipline
-and the failure-filling policy are all tested without a credential or a bill. Only the wording of
-the prompt needs a real call to evaluate.
+Everything here runs offline against `ScriptedClient`, which works because the call to the language
+model sits behind an interface. Proposal parsing, rejection accounting, caching, the fit/transform
+discipline and the failure-filling policy are all tested without a credential or a bill. Only the
+wording of the prompt needs a real call to evaluate.
 
-The code guard is tested in its own file, `test_code_guard.py`, a port of DEFT's guard tests.
+The code guard is tested in `test_code_guard.py`, a port of DEFT's guard tests.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import re
 import signal
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,7 @@ from seqmaestro.proposer.checks import (
     to_significant_digits,
 )
 from seqmaestro.proposer.guard import compile_feature_function
-from seqmaestro.proposer.prompt import render_repair_request
+from seqmaestro.proposer.prompt import GUIDANCE_INTRODUCTION, render_repair_request
 from seqmaestro.target import BINARY
 from tests.planted import run_cell
 
@@ -57,17 +58,17 @@ CONTEXT = TaskContext(
     sequence_layout="12 nucleotides, 0-based, position 6 is the site.",
 )
 
-# These match no real dataset's column names. The proposer requires both and defaults neither,
-# and a plausible name here would let a default creep back in unnoticed.
+# Neither is a real dataset's column name. The proposer requires both and defaults neither, and a
+# plausible name here would let a default slip in unnoticed.
 SEQUENCE, TARGET = "window", "outcome"
 COLUMNS = {"sequence_column": SEQUENCE, "target_column": TARGET, "target_kind": "binary"}
 SPLIT_COLUMNS = Columns(SEQUENCE, TARGET, weight=None, covariates=(), target_kind=BINARY)
 #: What the covariate the tests use measures, as a dataset would declare it.
 DESCRIBED = {"signal": "a signal measured over the window"}
 
-# Named so it does not contain, or appear inside, the name of the worked example in
-# `CODE_CONTRACT` (`gc_fraction_first_<n>nt`). Otherwise a test asserting that a name is absent
-# from a prompt would pass or fail on the example instead of on the proposal.
+# The name neither contains nor appears inside the name of the worked example in `CODE_CONTRACT`
+# (`gc_fraction_first_<n>nt`). Otherwise a test asserting that a name is absent from a prompt
+# would pass or fail on the example instead of on the proposal.
 GC_CODE = (
     "def whole_window_gc(X):\n"
     "    seqs = X['window'].astype(str)\n"
@@ -105,7 +106,7 @@ def proposer(reply_text, **kwargs):
 
 
 # --------------------------------------------------------------------------------------------
-# What the model returns becomes a record or is counted as a rejection
+# What the language model returns becomes a record or is counted as a rejection
 # --------------------------------------------------------------------------------------------
 
 
@@ -122,8 +123,8 @@ def test_a_well_formed_proposal_becomes_a_feature_record():
 
 
 def test_kind_says_a_model_wrote_it_and_origin_says_whose_method():
-    """`kind` records that a model wrote the feature and `origin` records whose method produced
-    it. They answer different questions, and every adapter must keep them apart."""
+    """`kind` records that a language model wrote the feature, whereas `origin` records whose method
+    produced it. They answer different questions, and every adapter must keep them apart."""
     record = proposer(reply(("whole_window_gc", GC_CODE))).propose(sequences(), labels())[0]
 
     assert record.kind == KIND_LLM_GENERATED, "same kind whoever's model wrote it"
@@ -131,8 +132,8 @@ def test_kind_says_a_model_wrote_it_and_origin_says_whose_method():
 
 
 def test_an_illegal_identifier_is_rejected_and_counted():
-    """Models often write names such as `upstream_-15nt_GC` that are not legal identifiers. DEFT
-    discards them silently (its defect C5), so here each rejection is counted."""
+    """Language models often write names such as `upstream_-15nt_GC` that are not legal
+    identifiers. DEFT discards them silently, so here each rejection is counted."""
     p = proposer(reply(("upstream_-15nt_GC", GC_CODE), ("whole_window_gc", GC_CODE)))
     records = p.propose(sequences(), labels())
 
@@ -201,7 +202,7 @@ def test_later_rounds_are_told_what_earlier_rounds_proposed():
 
 
 # --------------------------------------------------------------------------------------------
-# Label-awareness: without it the permuted arms have no noise-derived features at all
+# Label-awareness: without it the permuted cells would have no features derived from noise
 # --------------------------------------------------------------------------------------------
 
 
@@ -214,9 +215,23 @@ def test_the_model_is_shown_the_labels():
     assert f"{TARGET}=1" in user and f"{TARGET}=0" in user
 
 
+def test_the_model_is_shown_the_guidance_word_for_word_and_nothing_where_there_is_none():
+    asked = "Write each feature as a ratio of two counts, measured within 20 nt of the centre."
+    guided, plain = (ScriptedClient(reply(("whole_window_gc", GC_CODE))) for _ in range(2))
+    settings = ProposalSettings(n_rounds=1, n_per_round=1, n_examples=4)
+    Proposer(guided, CONTEXT, settings=replace(settings, guidance=asked), **COLUMNS).propose(
+        sequences(), labels())
+    Proposer(plain, CONTEXT, settings=settings, **COLUMNS).propose(sequences(), labels())
+
+    _, user = guided.seen[0]
+    assert f"{GUIDANCE_INTRODUCTION}\n{asked}" in user
+    _, user = plain.seen[0]
+    assert GUIDANCE_INTRODUCTION not in user
+
+
 def test_the_examples_shown_are_class_balanced():
-    """An unbalanced draw at this size can show one class three times, and a model shown almost no
-    positives proposes features about the negatives."""
+    """An unbalanced draw of so few examples can show one class three times out of four, and a
+    language model shown almost no positives proposes features about the negatives."""
     client = ScriptedClient(reply(("whole_window_gc", GC_CODE)))
     skewed = pd.Series(["GGCCGGCCGGCC"] * 38 + ["AATTAATTAATT"] * 2)
     y = np.array([1] * 38 + [0] * 2)
@@ -229,8 +244,8 @@ def test_the_examples_shown_are_class_balanced():
 
 
 def test_permuted_labels_change_the_cache_key():
-    """If shuffling the labels did not change the key, the control arm would be handed the real
-    arm's features, and the judge would have no null to score against."""
+    """If shuffling the labels did not change the key, a permuted cell would be handed the real
+    cell's features, and the judge would have no null to score against."""
     p = proposer(reply(("whole_window_gc", GC_CODE)))
     real = labels()
     permuted = np.random.default_rng(0).permutation(real)
@@ -239,14 +254,15 @@ def test_permuted_labels_change_the_cache_key():
 
 
 # --------------------------------------------------------------------------------------------
-# The cache, so a proposal is asked for once
+# The cache, so that a proposal is requested once
 # --------------------------------------------------------------------------------------------
 
 
 def test_the_second_asker_gets_the_first_asker_s_features_without_a_call(tmp_path):
     """A proposal is a language model's answer, paid for once: a second request under the same key
     is answered from the cache, as when a cell is fitted again or a process beside this one asks
-    for the same proposal. A proposer given its arm keys on it, so no two arms share one."""
+    for the same proposal. A proposer that is given its arm includes it in the key, so two arms
+    never share a proposal."""
     cache = ProposalCache(tmp_path)
     first = proposer(reply(("whole_window_gc", GC_CODE)), cache=cache)
     records_g2 = first.propose(sequences(), labels())
@@ -260,7 +276,8 @@ def test_the_second_asker_gets_the_first_asker_s_features_without_a_call(tmp_pat
 
 
 def _propose_beside_another(cache: Path, name: str, code: str, calls: Path, out: Path) -> None:
-    """One process's proposal, by a model that takes a second to answer and notes each call."""
+    """Make one process's proposal, with a language model that takes a second to answer and notes
+    each call."""
     def answer(system, user):
         with calls.open("a") as handle:
             handle.write(f"{name}\n")
@@ -276,7 +293,7 @@ def _propose_beside_another(cache: Path, name: str, code: str, calls: Path, out:
 def test_processes_asking_for_one_proposal_at_once_share_one_answer(tmp_path):
     """Two processes ask for one entry at the same moment, as a process started by hand beside the
     driver's may. The second waits for the first's answer and takes it, so both fit the same
-    features and the model is asked once."""
+    features and the language model is called once."""
     calls = tmp_path / "calls.txt"
     askers = [multiprocessing.get_context("fork").Process(
                   target=_propose_beside_another,
@@ -324,11 +341,34 @@ def test_a_cache_entry_is_a_readable_features_file(tmp_path):
         ("covariates beside the rows",
          lambda p: Proposer(p.client, CONTEXT, p.settings, covariates=DESCRIBED, **COLUMNS)
                    .key_for(with_covariates(sequences()), labels())),
+        ("guidance on the form of the features",
+         lambda p: Proposer(p.client, CONTEXT, replace(p.settings, guidance="Use ratios."), **COLUMNS)
+                   .key_for(sequences(), labels())),
+        ("another model",
+         lambda p: Proposer(ScriptedClient(p.client.reply, described={"model": "another"}), CONTEXT,
+                            p.settings, **COLUMNS).key_for(sequences(), labels())),
+        ("another reasoning effort",
+         lambda p: Proposer(ScriptedClient(p.client.reply, described={
+             **p.client.describe(), "reasoning_effort": "high"}), CONTEXT, p.settings, **COLUMNS)
+                   .key_for(sequences(), labels())),
     ],
 )
 def test_anything_that_would_change_the_answer_changes_the_key(label, change):
     p = proposer(reply(("whole_window_gc", GC_CODE)))
     assert change(p) != p.key_for(sequences(), labels())
+
+
+def test_how_failed_calls_are_retried_and_waited_for_leaves_the_key_as_it_is():
+    """Retries and the wait do not change a reply, so a run whose config changes them is answered
+    from the proposals it made. The cell's record still states them."""
+    def made(retries, timeout_seconds):
+        client = ScriptedClient(reply(("whole_window_gc", GC_CODE)), described={
+            "model": "scripted", "reasoning_effort": "minimal", "retries": retries,
+            "timeout_seconds": timeout_seconds})
+        return Proposer(client, CONTEXT, ProposalSettings(), **COLUMNS)
+
+    assert made(5, 120).key_for(sequences(), labels()) == made(0, 600).key_for(sequences(), labels())
+    assert made(0, 600).describe()["language_model"]["timeout_seconds"] == 600
 
 
 def test_editing_the_shared_prompt_changes_the_key(monkeypatch):
@@ -346,11 +386,43 @@ def test_editing_the_shared_prompt_changes_the_key(monkeypatch):
     assert p.key_for(sequences(), labels()) != before
 
 
+@pytest.mark.parametrize("edit", ["request", "guidance", "template", "example window", "rounding"])
+def test_editing_any_part_of_a_request_changes_the_key(monkeypatch, edit):
+    """The wording enters the key wherever it is written: in a constant, such as what the features
+    are asked to do, how guidance is introduced or how wide the worked example's window is, or in
+    the text a request's template assembles, such as the format of the answer. So does how values
+    are rounded before they are checked, which decides which functions go back for repair."""
+    from seqmaestro.proposer import prompt as prompt_module
+    from seqmaestro.proposer import proposer as proposer_module
+
+    p = proposer(reply(("whole_window_gc", GC_CODE)))
+    before = p.key_for(sequences(), labels())
+    if edit == "request":
+        monkeypatch.setitem(prompt_module.REQUEST, BINARY, "tell the classes apart")
+    elif edit == "guidance":
+        monkeypatch.setattr(prompt_module, "GUIDANCE_INTRODUCTION", "Guidance:")
+    elif edit == "template":
+        monkeypatch.setattr(prompt_module, "_answer_format", lambda repair=False: ["Answer in JSON."])
+    elif edit == "example window":
+        monkeypatch.setattr(prompt_module, "EXAMPLE_WINDOW", prompt_module.EXAMPLE_WINDOW + 1)
+    else:
+        monkeypatch.setattr(proposer_module, "SIGNIFICANT_DIGITS", 6)
+    assert p.key_for(sequences(), labels()) != before
+
+
+def test_the_wording_digest_is_the_same_on_every_call():
+    """The key is compared across processes and resumed runs, so the digest of unchanged wording
+    must not vary."""
+    from seqmaestro.proposer.prompt import wording_digest
+
+    assert wording_digest() == wording_digest()
+
+
 def test_the_shared_prompt_names_no_molecule():
-    """Which nucleic acid a run is about belongs in the dataset's own `sequence_layout`, because it
+    """Which nucleic acid a run is about belongs in the dataset's `sequence_layout`, because it
     differs between datasets and the shared prompt does not. Naming one here would contradict the
-    description of every dataset of the other kind, and a model told it is looking at DNA proposes
-    fewer of the features that only make sense for RNA."""
+    description of every dataset of the other kind, and a language model told it is looking at DNA
+    proposes fewer of the features that only make sense for RNA."""
     from seqmaestro.proposer.prompt import SYSTEM_PROMPT
 
     named = [molecule for molecule in ("DNA", "RNA") if molecule in SYSTEM_PROMPT]
@@ -371,7 +443,7 @@ def test_a_covariate_described_otherwise_asks_another_question():
 
 
 def test_rows_with_a_covariate_the_proposer_cannot_describe_are_refused():
-    """A model shown a bare column name would guess at what it measures."""
+    """A language model shown a bare column name would guess at what it measures."""
     with pytest.raises(ValueError, match="no description"):
         proposer(reply(("whole_window_gc", GC_CODE))).propose(with_covariates(sequences()), labels())
 
@@ -410,9 +482,9 @@ def test_rows_of_different_lengths_are_asked_for_code_that_works_at_any_length()
 
 
 def test_the_worked_example_reads_a_window_that_fits_the_rows_it_is_shown_with():
-    """The example names no dataset. Its window is taken from the sequences' length, so the code a
-    model is shown is right for the rows beside it, and where the length varies or is not known
-    the example is the one that works at any length."""
+    """The worked example does not name a dataset. Its window is taken from the sequences' length,
+    so the code a language model is shown is right for the rows beside it, and where the length
+    varies or is not known, the example shown is the one that works at any length."""
     from seqmaestro.proposer.prompt import EXAMPLE_WINDOW, Example, example_window, render_request
 
     assert example_window(101) == EXAMPLE_WINDOW == 20
@@ -470,8 +542,8 @@ PLAIN_LABELS = np.array([1, 1, 1, 1, 0, 0, 0, 0])
 
 
 def plain_case_prompts() -> dict[str, str]:
-    """The fixture's sections by name. Each runs from its marker to the next, and ends with the one
-    newline the fixture adds after it."""
+    """The fixture's sections by name. Each runs from its marker to the next, less the newline the
+    fixture adds after it."""
     sections: dict[str, str] = {}
     name = None
     for line in PLAIN_PROMPTS.read_text().splitlines(keepends=True):
@@ -484,10 +556,10 @@ def plain_case_prompts() -> dict[str, str]:
     return {name: text.removesuffix("\n") for name, text in sections.items()}
 
 
-def test_the_plain_case_is_asked_exactly_as_before():
-    """Rows with no covariates and one length are put to the model byte for byte as they were before
-    covariates and variable lengths existed. Whatever the prompt gained for those renders only where
-    it applies, so every run on such a dataset asks the question earlier runs asked."""
+def test_the_plain_case_is_asked_as_the_fixture_records():
+    """Rows with no covariates and one length are put to the language model byte for byte as the
+    fixture records. What the prompt says about covariates and varying lengths renders only where
+    it applies, so it cannot change the request that a run on such a dataset sends."""
     replies = iter([reply(("gc_share", "def gc_share(X):\n    return X['window'].str.count('G')")),
                     reply(("at_share", "def at_share(X):\n    return X['window'].str.count('A')")),
                     reply(("t_share", "def t_share(X):\n    return X['window'].str.count('T')"))])
@@ -530,8 +602,8 @@ def test_fit_transform_produces_a_named_matrix():
 
     assert list(matrix.columns) == ["whole_window_gc", "adenine_count"]
     assert matrix.shape == (40, 2)
-    # Against a direct computation rather than a literal, so the fixture can change without the
-    # test quietly becoming an assertion about the fixture.
+    # Compared with a direct computation instead of a literal, so the fixture can change without
+    # the test quietly becoming an assertion about the fixture.
     assert matrix["adenine_count"].tolist() == [sequence.count("A") for sequence in rows]
     assert matrix["whole_window_gc"].tolist() == pytest.approx(
         [(sequence.count("G") + sequence.count("C")) / 12 for sequence in rows]
@@ -540,7 +612,7 @@ def test_fit_transform_produces_a_named_matrix():
 
 def test_the_model_is_called_at_fit_and_never_at_transform():
     """The split discipline depends on this, because validation and test rows must not reach the
-    model. A call per transform would also make the arm's cost unbounded."""
+    language model. A call per transform would also make the arm's cost unbounded."""
     client = ScriptedClient(reply(("whole_window_gc", GC_CODE)))
     p = Proposer(client, CONTEXT, settings=ProposalSettings(n_rounds=1, n_per_round=1, n_examples=4),
                  **COLUMNS)
@@ -575,8 +647,8 @@ def test_a_constant_feature_is_dropped():
     assert featuriser.fit_report["dropped"]["constant"] == 1
 
 
-# One value as two computations can return it: every other row carries a relative error of a few
-# units in the last place, as a sum taken in a different order would leave.
+# A value as two computations can return it: every other row has a relative error of a few units
+# in the last place, as a sum taken in a different order would leave.
 NOISY_GC_CODE = (
     "def noisy_gc_tenths(X):\n"
     "    seqs = X['window'].astype(str)\n"
@@ -596,7 +668,7 @@ def test_values_that_differ_only_in_their_last_bits_are_one_value():
     kept = rounded.fit_transform(sequences(), labels())["noisy_gc_tenths"].to_numpy()
     noisy = raw.fit_transform(sequences(), labels())["noisy_gc_tenths"].to_numpy()
 
-    assert len(np.unique(noisy)) > len(np.unique(gc)), "the fixture must carry the noise"
+    assert len(np.unique(noisy)) > len(np.unique(gc)), "the fixture must hold the noise"
     assert len(np.unique(kept)) == len(np.unique(gc))
     assert np.array_equal(kept, (gc / 10).to_numpy())
 
@@ -640,7 +712,7 @@ def test_rounding_to_significant_digits():
 
 
 def test_a_scalar_return_is_refused_rather_than_broadcast():
-    """Broadcasting it would hide a feature that carries no information behind a real-looking column."""
+    """Broadcasting a scalar would hide a feature with no information behind a real-looking column."""
     scalar = "def just_one(X):\n    return 1.0"
     featuriser = GeneratedFeaturiser(proposer(reply(("just_one", scalar), ("whole_window_gc", GC_CODE))))
     featuriser.fit(sequences(), labels())
@@ -696,7 +768,7 @@ def test_non_finite_values_are_filled_rather_than_handed_to_a_model():
 
 
 # --------------------------------------------------------------------------------------------
-# The repair round, and the undefined-value tolerance
+# The repair round and the undefined-value tolerance
 # --------------------------------------------------------------------------------------------
 
 DIVIDES_BY_T = ("def g_per_t(X):\n    s = X['window']\n"
@@ -706,7 +778,7 @@ RAISES = "def g_per_t(X):\n    return X['window'].str.count('G') / 0 + X['missin
 
 
 def repairing_client(first: str, corrected: str) -> ScriptedClient:
-    """Answers a proposal with `first`, and a request to repair it with `corrected`."""
+    """A client that answers a proposal request with `first` and a repair request with `corrected`."""
     return ScriptedClient(lambda system, user: reply(
         ("g_per_t", corrected if "failed when they were run" in user else first)))
 
@@ -743,7 +815,7 @@ UNSAFE = "import os\n\ndef g_per_t(X):\n    return X['window'].str.len() * os.ge
 
 
 def answering(*codes: str) -> ScriptedClient:
-    """Answers each call in turn with one version of `g_per_t`."""
+    """A client that answers each call in turn with the next version of `g_per_t`."""
     replies = iter(codes)
     return ScriptedClient(lambda system, user: reply(("g_per_t", next(replies))))
 
@@ -780,8 +852,8 @@ def correction(replaces: str, name: str, code: str, description: str) -> str:
 
 
 def test_the_request_says_how_to_correct_each_kind_of_failure_it_sends():
-    """A code fault is fixed without changing what the feature measures. A constant feature has to
-    measure something a little different, under a name for it. Only the failures sent are
+    """A code fault is fixed without changing what the feature measures, whereas a constant feature
+    has to measure something a little different, under a name for it. Only the failures sent are
     explained, and every entry of the answer names the function it replaces."""
     code_fault = render_repair_request(
         CONTEXT, [("g_per_t", RAISES, Check(RAISED, "raised KeyError: 'missing_column'"))],
@@ -840,8 +912,9 @@ def test_no_repair_is_asked_for_when_repair_rounds_is_zero():
 
 
 def test_a_feature_undefined_on_a_few_rows_is_kept_and_says_how_many():
-    """Below the tolerance a feature is kept, filled with its median where undefined, and its record
-    says on what share of the training rows. Above it, it is dropped as undefined."""
+    """Below the tolerance, a feature is kept and filled with its median where it is undefined, and
+    its record states on what share of the training rows. Above the tolerance, it is dropped as
+    undefined."""
     code = ("def gc_mostly(X):\n    counts = X['window'].str.count('G').astype(float)\n"
             "    return counts.where(np.arange(len(X)) >= 4)")
     lenient = ProposalSettings(n_rounds=1, n_per_round=1, n_examples=4, max_undefined_share=0.2)
@@ -880,8 +953,9 @@ def test_generated_code_reads_the_covariates_by_name():
 
 
 def test_a_fitted_featuriser_picks_its_own_covariates_and_refuses_rows_without_them():
-    """A saved arm is handed every covariate the dataset declares. It reads the ones it was fitted
-    with, and rows that lack one are refused instead of evaluated against a different frame."""
+    """A saved arm is handed every covariate the dataset declares. It uses the ones it was fitted
+    with, and rows that lack one are refused instead of being evaluated against a different
+    frame."""
     code = "def signal_twice(X):\n    return X['signal'] * 2 + X['window'].str.len() * 0"
     featuriser = GeneratedFeaturiser(proposer(reply(("signal_twice", code)), covariates=DESCRIBED))
     featuriser.fit(with_covariates(sequences()), labels())
@@ -893,7 +967,7 @@ def test_a_fitted_featuriser_picks_its_own_covariates_and_refuses_rows_without_t
 
 
 def test_from_records_needs_no_proposer_and_no_network():
-    """Re-scoring a finished run, or running a test, must not call a model."""
+    """Re-scoring a finished run, or running a test, must not call a language model."""
     records = proposer(reply(("whole_window_gc", GC_CODE))).propose(sequences(), labels())
     featuriser = GeneratedFeaturiser.from_records(records, sequence_column=SEQUENCE)
 
@@ -903,7 +977,7 @@ def test_from_records_needs_no_proposer_and_no_network():
 
 
 def test_records_alone_do_not_say_which_column_their_code_indexes():
-    """A record carries code but not the frame it was written against, so the sequence column
+    """A record holds the code but not the frame it was written against, so the sequence column
     must be given."""
     records = proposer(reply(("whole_window_gc", GC_CODE))).propose(sequences(), labels())
     with pytest.raises(ValueError, match="sequence_column"):
@@ -935,7 +1009,8 @@ def test_describe_records_the_conditions_that_produced_the_features():
 
 
 def planted_split(n, seed):
-    """Sequences where GC content drives the label, so a proposed GC feature can actually learn."""
+    """Sequences where GC content drives the label, so that a model on a proposed GC feature can
+    learn it."""
     rng = np.random.default_rng(seed)
     rows, y = [], []
     for _ in range(n):
@@ -946,11 +1021,11 @@ def planted_split(n, seed):
     return pd.DataFrame({SEQUENCE: rows, TARGET: y})
 
 
-def test_a_generated_arm_produces_the_same_run_directory_as_every_other_arm(tmp_path):
+def test_an_arm_on_a_written_source_writes_the_same_cell_as_every_other_arm(tmp_path):
     """A proposer arm is a fixed-vocabulary arm with a different featuriser passed to `run_model`.
 
-    Whatever reads a run directory (the stability estimator, the judge, the results table) must not
-    be able to tell that a language model was involved.
+    Whatever reads a cell's directory (the stability estimator, the judge, the results table) must
+    not be able to tell that a language model was involved.
     """
     from seqmaestro.models import make_model
 
@@ -980,9 +1055,9 @@ def test_a_generated_arm_produces_the_same_run_directory_as_every_other_arm(tmp_
     assert header["featuriser"]["proposer"]["settings"]["n_rounds"] == 1
 
 
-def test_a_permuted_arm_proposes_from_the_permuted_labels(tmp_path):
-    """The permuted arm supplies the noise pool the judge scores against. If the proposer saw the
-    real labels while the model fitted permuted ones, the control arm would be handed genuine
+def test_a_permuted_cell_proposes_from_the_permuted_labels(tmp_path):
+    """A permuted cell supplies the noise pool the judge scores against. If the proposer saw the
+    real labels while the model fitted permuted ones, the control would be handed genuine
     features."""
     train, val = planted_split(300, 0), planted_split(120, 1)
     seen: list[np.ndarray] = []
@@ -1048,9 +1123,10 @@ def test_an_entry_missing_its_code_is_dropped_rather_than_repaired():
 # The time limit on a generated feature
 # --------------------------------------------------------------------------------------------
 
-#: Loops on every row, and catches any error each row raises, as generated code handling its own
-#: edge cases does. A limit that code could catch would stop one row and let the others run.
-#: Bounded, so that such a failure costs the test seconds and not the rest of the run.
+#: A feature that loops on every row and catches any error each row raises, as generated code
+#: handling its own edge cases does. A limit that code could catch would stop one row and let the
+#: others run. The loop is bounded, so that such a failure costs the test seconds instead of the
+#: rest of the session.
 SLOW_CODE = (
     "def g_per_t(X):\n"
     "    values = []\n"
@@ -1064,9 +1140,9 @@ SLOW_CODE = (
     "        values.append(float(n))\n"
     "    return values"
 )
-#: The same, catching with a bare `except:`, which would catch any exception at all.
+#: `SLOW_CODE` with a bare `except:`, which catches any exception at all.
 SLOW_BARE_EXCEPT = SLOW_CODE.replace("except Exception:", "except:")
-#: Fast on the rows it is fitted on, and slow on any sequence longer than 20.
+#: A feature that is fast on the rows it is fitted on and slow on any sequence longer than 20.
 SLOW_ON_LONG = (
     "def g_per_t(X):\n"
     "    values = []\n"
@@ -1136,7 +1212,8 @@ def test_a_feature_that_runs_out_of_time_at_fit_is_dropped_and_counted():
 
 
 def test_a_feature_out_of_time_at_transform_is_filled_with_its_median_and_counted():
-    """It finished on the rows it was fitted on, so it is in the model, and cannot be dropped."""
+    """The feature finished on the rows it was fitted on, so it is in the model and cannot be
+    dropped."""
     settings = ProposalSettings(n_rounds=1, n_per_round=1, n_examples=4, max_seconds=LIMIT)
     rows = sequences()
     featuriser = GeneratedFeaturiser(proposer(reply(("g_per_t", SLOW_ON_LONG)), settings=settings))

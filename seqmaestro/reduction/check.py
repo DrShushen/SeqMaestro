@@ -1,11 +1,11 @@
-"""A check that rebuilt columns are the arm's columns. **numpy only**, like `eliminate.py`.
+"""A check, in **numpy only** like `eliminate.py`, that rebuilt columns are the arm's columns.
 
-Every Stage 2 cell carries `feature_values.npz`: the features its model used, evaluated on the
+Every Stage 2 cell holds `feature_values.npz`: the features its model used, evaluated on the
 validation rows when the cell was fitted. A later stage that evaluates those features again, from
-the saved featuriser or on a vendored method's side, compares its validation matrix against that
+the saved featuriser or on a vendored method's side, compares its validation matrix with that
 file before fitting anything on it. This directly checks the step that could otherwise go wrong
 silently (a column taken from the wrong featuriser, or a generated function evaluated against a
-differently named column), and it costs one comparison.
+differently named column), and it takes only one comparison.
 """
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ from pathlib import Path
 
 import numpy as np
 
-#: Largest relative disagreement tolerated. A cell stores its values as float32, so the rebuilt ones
-#: are compared at that precision, where they are expected to be exactly equal. The tolerance admits
-#: rounding and nothing else. It is relative because a count reaches the hundreds while an indicator
-#: is 0 or 1.
+#: The largest relative disagreement tolerated. A cell stores its values as float32, so the rebuilt
+#: ones are compared at that precision, where they are expected to be exactly equal. The tolerance
+#: admits rounding and nothing else, and it is relative because a count reaches the hundreds while
+#: an indicator is 0 or 1.
 TOLERANCE = 1e-5
 
 

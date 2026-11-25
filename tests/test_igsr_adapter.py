@@ -1,5 +1,6 @@
-"""The IGSR arm from this side: its adapter's reading of a result, tested without IGSR, the driver's
-wiring of the arm, and a saved model predicting across the environment boundary.
+"""The IGSR arm on SeqMaestro's side of the environment boundary: how the adapter turns a result
+into feature records (tested without IGSR), how the driver wires the arm into a run, how a saved
+model predicts across the boundary, and how the later stages refit its terms.
 
 The adapter runs in IGSR's environment and imports `igsr` only inside its three modes, so what it
 builds from a result (the records, the directions, the permutation importance, what IGSR is told
@@ -19,8 +20,9 @@ import yaml
 
 from seqmaestro.features.base import Inputs
 from seqmaestro.harness.direction import DECREASES_TARGET, INCREASES_TARGET
+from seqmaestro.proposer.prompt import GUIDANCE_INTRODUCTION as PROPOSER_GUIDANCE_INTRODUCTION
 from seqmaestro.provenance import environment_python
-from tests.planted import ANALYSES, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, planted_dataset
 
 REPO = Path(__file__).resolve().parents[1]
 ADAPTER = REPO / "experiments" / "adapters" / "igsr_bundle.py"
@@ -58,13 +60,13 @@ def a_model(terms, weights, intercept=0.1):
 
 
 # --------------------------------------------------------------------------------------------
-# The adapter's contract with this side
+# The adapter's contract with SeqMaestro
 # --------------------------------------------------------------------------------------------
 
 
 def test_the_adapter_restates_this_sides_contract_and_vocabulary():
-    """The adapter restates these to avoid importing across the environment boundary, so the copies
-    are checked here."""
+    """The adapter copies these constants, because importing them would cross the environment
+    boundary. This test checks the copies against the originals."""
     from seqmaestro.features.base import PROVENANCE_SELECTED
     from seqmaestro.harness.bundle import BUNDLE_VERSION
     from seqmaestro.harness.features import SCHEMA_VERSION
@@ -78,7 +80,8 @@ def test_the_adapter_restates_this_sides_contract_and_vocabulary():
 
 
 def test_the_adapter_imports_igsr_only_inside_its_modes():
-    """Loaded above in this environment, where `igsr` is not installed."""
+    """The adapter is loaded at the top of this module, in an environment where `igsr` is not
+    installed."""
     assert importlib.util.find_spec("igsr") is None
     assert callable(adapter.records_for)
 
@@ -140,22 +143,26 @@ def test_the_permutation_importance_is_the_fall_in_r_squared_when_a_term_is_shuf
                                            rng=np.random.default_rng(1)) == {}
 
 
-def test_igsr_is_told_the_task_the_target_the_layout_and_each_covariate():
+def test_igsr_is_told_the_task_the_target_the_layout_each_covariate_and_any_guidance():
     description = {"task": "Predict the thing.", "target_name": "the measured thing",
                    "sequence_layout": "40 bases, 5' to 3'."}
     manifest = {"sequence": {"column": "seq", "window": None},
                 "columns": {"depth": {"kind": "covariate", "params": {"column": "depth"},
                                       "description": "read depth"}}}
-    assert adapter.data_dictionary(description, "y") == (
+    assert adapter.data_dictionary(description, "y", None) == (
         "Predict the thing.\n\nThe target column `y` is the measured thing.")
+    assert adapter.data_dictionary(description, "y", "Use ratios.") == (
+        "Predict the thing.\n\nThe target column `y` is the measured thing.\n\n"
+        f"{adapter.GUIDANCE_INTRODUCTION} Use ratios.")
+    assert adapter.GUIDANCE_INTRODUCTION == PROPOSER_GUIDANCE_INTRODUCTION
     assert adapter.column_descriptions(manifest, description) == {
         "depth": "read depth", "seq": "40 bases, 5' to 3'."}
 
 
 def test_the_search_is_given_the_labels_to_choose_on_and_val_keeps_the_real_ones(tmp_path,
                                                                                    monkeypatch):
-    """What the handover writes is what the adapter reads: the search's validation rows carry the
-    labels to choose on, and `val.csv` keeps the real ones, which the cell is scored against."""
+    """The adapter reads what the handover writes: the search's validation rows hold the labels to
+    choose on, whereas `val.csv` keeps the real ones, which the cell is scored against."""
     from seqmaestro.dataset import Columns
     from seqmaestro.pipeline.vendored import handover
     from seqmaestro.target import CONTINUOUS
@@ -172,8 +179,8 @@ def test_the_search_is_given_the_labels_to_choose_on_and_val_keeps_the_real_ones
 
 
 def test_labels_to_choose_on_that_do_not_fit_the_validation_rows_are_refused():
-    """They are matched to the rows by position, so another column, a second one, or another number
-    of rows means they belong to something else."""
+    """The labels to choose on are matched to the validation rows by position, so a different
+    column, an extra column or a different number of rows means they belong to other rows."""
     val = pd.DataFrame({"seq": ["AC", "GG", "TT"], "y": [0.1, 0.2, 0.3]})
     for wrong in (pd.DataFrame({"y": [0.3, 0.1]}), pd.DataFrame({"z": [0.3, 0.1, 0.2]}),
                   pd.DataFrame({"y": [0.3, 0.1, 0.2], "seq": ["AC", "GG", "TT"]})):
@@ -199,13 +206,14 @@ def a_config(tmp_path, experiment_config, continuous=True, overrides=None):
             "n_bootstrap": 10,
             "permutation_scope": "seed", "permutation_repeats": 0, "judge": False, "judge_direction": False,
             "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                   "max_example_length": 300, "max_seconds": 60},
+                                   "max_example_length": 300, "max_seconds": 60, "guidance": None},
             **({} if continuous else {"class_weight": "balanced"})}
     source = tmp_path / "planted.yaml"
     source.write_text(yaml.safe_dump({
         "name": "planted", "dataset": {"task": "planted", "splits": str(dataset.directory), "blinded": False},
         "grid": grid,
         "models": {"igsr": {"config_overrides": overrides or ["experiment.n_successors=2"]}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"llm_generated_joint": {"models": ["igsr"]},
                  "llm_generated_joint+covariates": {"models": ["igsr"]}},
@@ -240,11 +248,14 @@ def test_the_arm_runs_one_process_per_labels_and_seed_under_the_grids_policy(dri
                     "experiment.function_terms.timeout_seconds=60",
                     "experiment.n_successors=2"]
     assert igsr.run_overrides(config) == from_the_run
-    # The language model is the one the environment names, passed as a cell starts.
+    # When a cell starts, IGSR is given the language model of the provider the environment names,
+    # with how the run calls it. A Claude provider gets no reasoning effort, because the client
+    # states none to Claude either.
     for name, value in {"SEQMAESTRO_LLM_PROVIDER": "claude", "SEQMAESTRO_CLAUDE_KEY": "a-key",
                         "SEQMAESTRO_CLAUDE_MODEL": "a-model"}.items():
         monkeypatch.setenv(name, value)
-    assert igsr.overrides(config) == ["llm=seqmaestro_claude", *from_the_run]
+    assert igsr.overrides(config) == ["llm=seqmaestro_claude", "llm.num_retries=5",
+                                      "llm.request_timeout=120", *from_the_run]
     monkeypatch.delenv("SEQMAESTRO_LLM_PROVIDER")
     with pytest.raises(RuntimeError, match="SEQMAESTRO_LLM_PROVIDER"):
         igsr.overrides(config)
@@ -271,7 +282,7 @@ def test_preflight_names_igsrs_interpreter_when_it_is_missing(driver, tmp_path, 
 
 
 # --------------------------------------------------------------------------------------------
-# Across the boundary
+# Across the environment boundary
 # --------------------------------------------------------------------------------------------
 
 
@@ -282,8 +293,9 @@ def igsr_python() -> Path:
 @pytest.mark.crossenv
 @pytest.mark.skipif(not igsr_python().exists(), reason="IGSR's interpreter is not installed here")
 def test_a_saved_model_predicts_test_rows_on_igsrs_side_in_their_order(tmp_path, monkeypatch):
-    """The reveal's path for an IGSR cell: the rows cross numbered and without their target, the
-    saved terms run under IGSR's interpreter, and the scores come back in the rows' order."""
+    """The reveal's path for an IGSR cell: the rows cross the boundary numbered and without their
+    target, the saved terms run under IGSR's interpreter, and the scores come back in the rows'
+    order."""
     from seqmaestro.pipeline.vendored import igsr as run_igsr
 
     cell = tmp_path / "cell"
@@ -305,9 +317,10 @@ def test_a_saved_model_predicts_test_rows_on_igsrs_side_in_their_order(tmp_path,
     np.testing.assert_allclose(scores, [0.25 + 1.5 * 2 + 0.5 * 2.0, 0.25 + 1.5 + 0.0, 0.25 - 2.0])
 
 
-#: The adapter under IGSR's interpreter with the language model scripted at the call IGSR's tests
-#: script, so the rest runs as it does live. `script.json` beside it names the adapter, the replies
-#: in turn, and arguments to add to those the stage starts it with.
+#: The adapter run under IGSR's interpreter, with the language model scripted at the call that
+#: IGSR's own tests replace (`LiteLLMAgent._create_chat_completion`), so everything else runs as it
+#: does live. `script.json` beside it names the adapter, the replies in order, and the arguments to
+#: add to those the stage starts it with.
 SCRIPTED_ADAPTER = """\
 import json
 import runpy
@@ -332,8 +345,9 @@ sys.argv = [script["adapter"], *sys.argv[1:], *script["arguments"]]
 runpy.run_path(script["adapter"], run_name="__main__")
 """
 
-#: IGSR's configuration for one plain iteration with no language model behind it, as IGSR's tests
-#: compose it. The pruning keeps every term, so the model the search scores predicts from its term.
+#: IGSR's configuration for one plain iteration without a real language model, composed as IGSR's
+#: tests compose it. The pruning keeps every term, so the model the search scores predicts from the
+#: scripted term.
 SCRIPTED_SEARCH = ["experiment.tree=false",
                    "experiment.n_iters=1", "experiment.algorithmic_pruning=true",
                    "experiment.early_stop_enabled=false", "experiment.retry_attempts=1"]
@@ -343,11 +357,11 @@ SCRIPTED_SEARCH = ["experiment.tree=false",
 @pytest.mark.skipif(not igsr_python().exists(), reason="IGSR's interpreter is not installed here")
 def test_a_control_cells_search_chooses_on_shuffled_labels_and_is_scored_on_the_real_ones(
         tmp_path, monkeypatch):
-    """IGSR's search chooses on the validation rows (the iteration it keeps, the terms it prunes, the
-    error its prompts show), so a control arm's must choose against shuffled labels there, or the
-    control carries the real target. A control cell runs end to end through Stage 2: the validation
-    error the search records is the one against the labels it was handed to choose on, and the cell
-    is scored against the real ones."""
+    """IGSR's search makes choices on the validation rows (the iteration it keeps, the terms it
+    prunes, the error its prompts show), so a control cell's search must choose against shuffled
+    labels there, or the control would see the real target. A control cell runs end to end through
+    Stage 2: the validation error its search records is measured against the labels it was handed
+    to choose on, whereas the cell is scored against the real ones."""
     from seqmaestro.harness.runner import permutation_rng
     from seqmaestro.pipeline import config as experiment_config
     from seqmaestro.pipeline import records, stage2
@@ -364,7 +378,8 @@ def test_a_control_cells_search_chooses_on_shuffled_labels_and_is_scored_on_the_
         "arguments": ["--dataset-dir", str(scripted / "datasets")]}))
     (scripted / "adapter.py").write_text(SCRIPTED_ADAPTER)
     monkeypatch.setattr(run_igsr, "ADAPTER", scripted / "adapter.py")
-    # The stage reads the description too, for its blinding check, from where the adapter does.
+    # The stage also reads the task description, for its blinding check, from the directory the
+    # adapter reads it from.
     monkeypatch.setattr(stage2, "DESCRIPTIONS", scripted / "datasets")
     # The stage passes IGSR the provider the environment names. No call is made to it: the
     # scripted adapter answers in the model's place.
@@ -384,8 +399,9 @@ def test_a_control_cells_search_chooses_on_shuffled_labels_and_is_scored_on_the_
                  "permutation_scope": "seed", "permutation_repeats": 2, "judge": False,
                  "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "models": {"igsr": {"config_overrides": SCRIPTED_SEARCH}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"llm_generated_joint": {"models": ["igsr"]}}}, sort_keys=False))
     run_dir = tmp_path / "run"
@@ -410,9 +426,19 @@ def test_a_control_cells_search_chooses_on_shuffled_labels_and_is_scored_on_the_
     assert searched == pytest.approx(np.mean((chosen_on - predicted) ** 2), rel=1e-9)
     assert searched != pytest.approx(np.mean((real - predicted) ** 2), rel=1e-6)
 
+    # IGSR was started under the run's settings. The cell records which model it called and how,
+    # but neither the key nor the endpoint.
+    recorded = json.loads((cell / "run.json").read_text())
+    assert {"llm=seqmaestro_azure", "llm.reasoning_effort=minimal", "llm.num_retries=5",
+            "llm.request_timeout=120"} <= set(recorded["config_overrides"])
+    called = recorded["language_model"]
+    assert (called["provider"], called["model"], called["reasoning_effort"], called["retries"],
+            called["timeout_seconds"]) == ("azure", "azure/dummy", "minimal", 5, 120)
+    assert "dummy-key" not in json.dumps(called) and "dummy.invalid" not in json.dumps(called)
+
 
 # --------------------------------------------------------------------------------------------
-# After Stage 2: least squares here, on terms IGSR evaluates
+# After Stage 2: least-squares fits on SeqMaestro's side, on term values IGSR evaluates
 # --------------------------------------------------------------------------------------------
 
 
@@ -438,8 +464,9 @@ def test_the_fit_the_search_made_is_recorded_for_the_later_stages():
                          [("l2", 5.0, "Ridge"), ("l1", 0.05, "Lasso")])
 def test_least_squares_refits_igsrs_penalised_fits_on_the_values_as_they_are(penalty, alpha,
                                                                              estimator):
-    """A penalty depends on each column's scale, so the refit is made on the raw values, as IGSR
-    makes it, and its predictions are scikit-learn's; the weights are then per standard deviation."""
+    """A penalty depends on each column's scale, so the refit is made on the raw values (as IGSR
+    makes it) and predicts as scikit-learn's estimator does. The weights it reports are then each
+    coefficient times its column's standard deviation."""
     import sklearn.linear_model
 
     from seqmaestro.models.sparse import LeastSquares
@@ -507,10 +534,10 @@ def test_a_pool_saved_in_one_environment_is_read_back_whole_and_in_order(tmp_pat
 
 
 def a_stage2_cell(tmp_path: Path):
-    """An IGSR cell as Stage 2 leaves one, on a planted continuous dataset: its inputs,
-    a bundle holding the saved model and every accepted term, and the records and validation values
-    ingest writes. The final terms read the planted covariate and a sequence count; the search also
-    accepted a third term."""
+    """Make an IGSR cell as Stage 2 leaves one, on a planted continuous dataset: its inputs, a bundle
+    holding the saved model and every accepted term, and the records and validation values that
+    `ingest_bundle` writes. The model's two terms read the planted covariate and count GC in the
+    sequence, and the search also accepted a third term that the model does not use."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import save_feature_values, save_features
 

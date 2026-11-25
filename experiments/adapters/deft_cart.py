@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Everything asked of DEFT after Stage 2. **Runs in `SeqMaestro_Method_deft`.**
+"""Everything SeqMaestro needs from DEFT after Stage 2. **Runs in `SeqMaestro_Method_deft`.**
 
     $DEFT experiments/adapters/deft_cart.py reduce --cell <stage 2 cell> --fit fit.csv \\
         --val val.csv --id-column row_id --target-column <column> --n-target 10 --out <arm dir>
@@ -14,26 +14,26 @@
     $DEFT experiments/adapters/deft_cart.py time --inputs <handed inputs> --target-column <column> \\
         --target-kind binary --sequence-column <column> --out timings.json
 
-A DEFT arm's features are functions its tree carries: positional candidates DEFT enumerates and,
+A DEFT arm's features are functions its tree holds: positional candidates DEFT enumerates and,
 on a pool with `llm_generated_joint`, functions a language model wrote. Only this environment can
-evaluate them. Nothing is recompiled on the other side and no language model is called. The
+evaluate them, so nothing is recompiled on the other side, and no language model is called. The
 functions are the ones the tree saved, or the naive population DEFT builds from the rows the way
 its finder does.
 
-**Stage 3A.** `reduce` eliminates the arm down to N features with DEFT's tree, built from the
+**Stage 3A.** `reduce` eliminates the arm's features down to N with DEFT's tree, built from the
 configuration the cell's fit recorded (`recorded_configuration`). The tree therefore has the
 splitting criterion, the stopping rules and every other setting the arm's tree was fitted with.
-Given a numeric frame, the tree's candidate pool is one identity candidate per column, which makes
-it plain CART over those columns. The Stage 2 tree evaluates the arm's recorded features on the
+On a numeric frame, the tree's candidate pool is one identity candidate per column, which makes it
+plain CART over those columns. The Stage 2 tree evaluates the arm's recorded features on the
 rows. `reduce` writes the elimination trajectory, the validation predictions and three trees
 (`full`, `reduced` and `top_n`), and the other side scores them.
 
 **Stage 3B.** `pool` evaluates the arm's candidate pool on the rows it is handed. For the CART
 finder the pool is DEFT's whole naive population, built on the fitting rows, as it was offered to
-the tree's root. For the generative finder it is the features the tree split on, because that
-finder's candidates never existed as a set. The other side runs Step 0 on that matrix and writes
-its decisions to `prepare.npz`. Then `reproduce` runs the selection on the fitting rows, for the
-other side to check that it returns the reduced model, `select` runs Tier 1's half-sample
+the tree's root, whereas for the generative finder it is the features the tree split on, because
+that finder's candidates never existed as a set. The other side runs Step 0 on that matrix and
+writes its decisions to `prepare.npz`. Then `reproduce` runs the selection on the fitting rows, for
+the other side to check that it returns the reduced model, `select` runs Tier 1's half-sample
 selections, and `refit` fits and saves the leave-one-out trees. All three fit on the pool matrix
 this side computed, with the cell's tree settings and the rows' weights.
 
@@ -41,10 +41,10 @@ this side computed, with the cell's tree settings and the rows' weights.
 saved tree was fitted on, and returns the tree's scores (probabilities, or a continuous target's
 predicted values) beside the row identifiers. `pool` gives Tier 2 the pool on the test rows.
 
-**Before a run.** `time` grows CART on samples of the rows a cell would be handed, each twice the
-last, for the driver's time estimate (`seqmaestro/pipeline/estimate.py`).
+**Before a run.** `time` grows CART on samples of the rows a cell would be handed, each sample
+twice the size of the last, for the driver's time estimate (`seqmaestro/pipeline/estimate.py`).
 
-**The report.** `tree` writes a reduced tree's structure for a figure. It reads the saved tree
+**The report.** `tree` writes a reduced tree's structure for a figure. It loads the saved tree
 without refitting it, routes the fitting rows down it for each node's counts, and checks that
 routing against the tree's own predictions. It also writes the tree's validation predictions, which
 the other side checks against the cell's.
@@ -114,7 +114,7 @@ def load_by_path(name: str, path: Path):
 
 def stage2_adapter():
     """`deft_bundle.py`, the adapter that fitted the Stage 2 cells, for its functions that walk a
-    fitted tree. It is loaded and not copied, because a feature evaluated by a second
+    fitted tree. It is loaded instead of copied, because a feature evaluated by a second
     implementation might not be the feature the cell recorded."""
     return load_by_path("deft_bundle", ADAPTERS / "deft_bundle.py")[0]
 
@@ -161,8 +161,8 @@ def recorded_configuration(cell: Path, bundle):
 
 
 def composed_configuration(overrides: list[str], target_kind: str, bundle):
-    """DEFT's configuration under a run's overrides, composed by hydra as a fit composes it. For a
-    tree no cell has fitted yet, which only the time estimate grows."""
+    """DEFT's configuration under a run's overrides, composed by hydra as a fit composes it. It
+    serves a tree that no cell has fitted yet, which only the time estimate grows."""
     from hydra import compose, initialize_config_dir
 
     with initialize_config_dir(config_dir=str(DEFT_CONF), version_base=None):
@@ -173,9 +173,9 @@ def composed_configuration(overrides: list[str], target_kind: str, bundle):
 def cart_tree(configuration, n_rows: int, sample_weight: np.ndarray | None, target_kind: str):
     """An unfitted tree as `configuration` sets it, with the CART finder, for a fit on `n_rows`.
 
-    Built as DEFT's run builds its tree (`deft.cli.run_deft_tree`): the tree and its splitting
-    criterion are instantiated from the configuration, and a leaf must hold the configured
-    fraction of the rows being fitted. Nothing is saved to disk by the tree.
+    It is built as DEFT's run builds its tree (`deft.cli.run_deft_tree`): the tree and its
+    splitting criterion are instantiated from the configuration, and a leaf must hold the
+    configured fraction of the rows being fitted. The tree saves nothing to disk.
     """
     from deft.features.feature_finder import CartFeatureFinder
     from hydra.utils import instantiate
@@ -218,7 +218,7 @@ def tree_settings(configuration) -> dict:
 class UnsplittableNodes(logging.Filter):
     """Count DEFT's "no candidate could be scored" errors instead of printing thousands of them.
 
-    Each such error is ordinary CART behaviour and signals no fault: a node too small for any cut
+    Each such error is ordinary CART behaviour and signals no fault: a node too small for any split
     to satisfy `min_samples_leaf` becomes a leaf. The messages are counted instead of silenced, and
     the count is recorded.
     """
@@ -271,9 +271,9 @@ def split_features(tree) -> dict[str, str]:
 def impurity_importances(tree, X: pd.DataFrame, y: pd.Series, node_statistics) -> dict[str, float]:
     """Each feature's share of the tree's total impurity reduction.
 
-    Computed as `assign_importances` in `deft_bundle.py` computes the `importance` of every DEFT
-    feature record: each node's impurity decrease weighted by the rows reaching it, summed over the
-    nodes a feature splits at, and normalised across the tree.
+    It is computed as `assign_importances` in `deft_bundle.py` computes the `importance` of every
+    DEFT feature record: each node's impurity decrease weighted by the rows reaching it, summed over
+    the nodes a feature splits at, and normalised across the tree.
     """
     stats = node_statistics(tree, X, y)
     names = split_features(tree)
@@ -318,7 +318,8 @@ def make_fit_step(configuration, node_statistics, sample_weight: np.ndarray | No
 
 
 def features_of(rows: pd.DataFrame, *drop: str | None) -> pd.DataFrame:
-    """The rows as the Stage 2 tree saw its own: every column but the identifier, label and weight."""
+    """The rows as the Stage 2 tree saw its own: every column except the identifier, the label and
+    the weight."""
     return rows.drop(columns=[column for column in drop if column])
 
 
@@ -434,7 +435,7 @@ def tree(args) -> int:
 
     The tree is the saved one and is never refitted. Rows are routed as `node_statistics` routes
     them (`<=` goes left, DEFT's convention), and the routing is checked: every fitting row's leaf
-    must carry the tree's own prediction for that row, so a drawn node's counts are those of the
+    must give the tree's own prediction for that row, so a drawn node's counts are those of the
     leaves the model uses. The validation rows' predictions are written too, for the other side to
     check against the ones the cell recorded.
     """
@@ -504,7 +505,7 @@ REAL_LABELS = "real"
 
 def naive_population(fit: pd.DataFrame, sequence_column: str, window: dict | None = None) -> list:
     """DEFT's naive candidates for these rows, built as its CART finder builds them at a node:
-    positions read in the cell's positional `window` where it had one, and every handed column."""
+    positions taken in the cell's positional `window` where it had one, and every handed column."""
     from deft.features.feature_finder import CartFeatureFinder
 
     return CartFeatureFinder().naive_features(fit, sequence_column=sequence_column,
@@ -650,7 +651,8 @@ def time_fits(args) -> int:
     """How long the tree takes to grow on samples of the rows a cell would be handed: the first
     `--first-rows` of them, then twice as many, until one fit takes `--enough` seconds, uses every
     row, or the next would run past `--budget`. The rows are a random draw, so their first rows are
-    one too. Each fit is grown as a Stage 2 cell's is, from the sequence and the handed columns."""
+    a random draw too. Each fit is grown as a Stage 2 cell's is, from the sequence and the handed
+    columns."""
     from deft.utils.feature import get_naive_features
 
     handed = stage2_adapter()
@@ -659,7 +661,8 @@ def time_fits(args) -> int:
     weights = rows.pop(args.weight_column).to_numpy(dtype=float) if args.weight_column else None
     window = handed.read_window(args.inputs)
     configuration = composed_configuration(args.config_override, args.target_kind, handed)
-    # Every candidate is logged at every node, thousands of lines a node for a vocabulary.
+    # DEFT logs every candidate at every node, which for a vocabulary is thousands of lines per
+    # node.
     logging.getLogger().setLevel(logging.WARNING)
     candidates = len(get_naive_features(rows, sequence_column=args.sequence_column,
                                         positional_window=window))
@@ -673,7 +676,11 @@ def time_fits(args) -> int:
                  positional_window=window)
         seconds = time.perf_counter() - started
         spent += seconds
-        fits.append({"rows": n, "seconds": seconds, "used": len(set(split_features(tree).values()))})
+        splits = split_features(tree)
+        # The splits the tree made, which say how many nodes DEFT's generative finder would write
+        # candidates at on these rows, since it grows the same tree under the same rules.
+        fits.append({"rows": n, "seconds": seconds, "used": len(set(splits.values())),
+                     "nodes": len(splits)})
         if seconds >= args.enough or n == len(rows) or spent + 2 * seconds > args.budget:
             break
         n = min(2 * n, len(rows))

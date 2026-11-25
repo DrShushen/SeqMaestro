@@ -1,9 +1,10 @@
 """`seqmaestro.harness.stability`.
 
+As in the module, a run here (`FeatureRun`) is one fit: a cell's feature records with their values.
 The estimator is checked against the properties that define it (1 for identical selections, about
-0 for independent ones) and not against numbers this implementation happens to produce.
-The matching is checked against the cases it exists for: the same property found twice under
-different names, and the ways two features can look different and compute the same thing.
+0 for independent ones) and not against numbers this implementation happens to produce. The
+matching is checked against the cases it exists for: the same property found twice under different
+names, and the ways two features can look different and compute the same thing.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def test_two_runs_that_found_nothing_do_not_count_as_agreeing():
 
 def test_a_monotone_transform_of_a_feature_is_the_same_feature():
     """A GC count and a GC fraction over the same window are one property. Rank correlation sees
-    that, and Pearson correlation would not."""
+    that, whereas Pearson correlation would not."""
     base = np.abs(noise()) + 0.1
     one = a_run("seed_1", {"count": base})
     two = a_run("seed_2", {"fraction": base**3})
@@ -131,8 +132,8 @@ def test_a_constant_feature_still_matches_when_its_definition_is_known():
 
 
 def test_definitionless_records_are_not_matched_by_their_empty_definition():
-    """A record with no code and no parameters has nothing to identify it. Hashing that fallback
-    would make every such record collide with every other."""
+    """A record with no code and no parameters has nothing to identify it. Hashing its empty
+    definition would make every such record collide with every other."""
     one, two = a_run("seed_1", {"a": noise()}), a_run("seed_2", {"b": noise()})
 
     assert match_pair(one, two, BehaviouralMatcher()) == []
@@ -165,11 +166,11 @@ def test_runs_evaluated_on_different_rows_are_refused():
 
 
 def test_identical_definitions_pair_before_the_matcher_runs():
-    """`exact_first` pairs features that no statistic can match.
+    """`exact_first` pairs features that a statistic cannot match.
 
     The two runs here share a definition, but their columns are unrelated. This mimics a feature
     that is constant on the reference split: it has no rank variation, so behavioural similarity
-    scores it 0 against everything, including its own counterpart. Two features with the same
+    scores it 0 against everything, including its counterpart. Two features with the same
     definition are the same feature whether or not a statistic can tell.
     """
     one = a_run("seed_1", {"f": noise()}, params={"kmer": "ACGT"})
@@ -183,7 +184,7 @@ def test_identical_definitions_pair_before_the_matcher_runs():
 
 def test_two_routes_to_one_property_pair_on_behaviour():
     """Two different definitions that compute one property pair on behaviour. Stability exists to
-    measure this case, and no comparison of definitions can see it."""
+    measure this case, whereas a comparison of definitions cannot see it."""
     values = noise()
     one = a_run("seed_1", {"a": values}, params={"kmer": "ACGT"})
     two = a_run("seed_2", {"b": values}, params={"kmer": "TTTT"})
@@ -199,8 +200,8 @@ def test_phi_is_one_when_every_run_selects_the_same_set():
 
 
 def test_phi_is_near_zero_for_independent_selection():
-    """Phi is corrected for chance, so agreement by luck scores about zero. This is its defining
-    property."""
+    """The defining property of phi is its correction for chance, so agreement by luck scores
+    about zero."""
     rng = np.random.default_rng(1)
     universe, per_run = 200, 20
     selection = np.zeros((40, universe), dtype=int)
@@ -262,7 +263,7 @@ def test_consensus_gives_matched_features_one_label_across_runs():
 
 
 def test_identical_runs_are_perfectly_stable():
-    """The anchor at one end of the axis: a deterministic arm should land here."""
+    """Identical runs mark one end of the scale, which a deterministic arm should reach."""
     columns = {"a": noise(), "b": noise(), "c": noise()}
     runs = [a_run(f"seed_{i}", columns) for i in range(3)]
 
@@ -321,8 +322,8 @@ def test_fewer_than_two_runs_is_refused():
 
 
 def test_a_run_loads_from_the_files_any_arm_writes(tmp_path):
-    """The modularity contract: stability reads `features.json` and `feature_values.npz`, and
-    knows nothing else about the arm that produced them."""
+    """Stability reads only `features.json` and `feature_values.npz` and knows nothing else about
+    the arm that produced them, so any arm that writes the two files takes part."""
     records = [FeatureRecord(name="kmer_ACGT", description="d", kind="kmer", origin="deft")]
     save_features(tmp_path / "features.json", records, importance_kind="deft_split_score")
     save_feature_values(tmp_path / "feature_values.npz", ["kmer_ACGT"], np.array([[1.0], [2.0]]))
@@ -336,7 +337,8 @@ def test_a_run_loads_from_the_files_any_arm_writes(tmp_path):
 
 
 def test_values_that_do_not_line_up_with_the_records_are_refused(tmp_path):
-    """They are paired by position, so a mismatch would silently compare the wrong features."""
+    """Values and records are paired by position, so a mismatch would silently compare the wrong
+    features."""
     save_features(tmp_path / "features.json",
                   [FeatureRecord(name="a", description="d", kind="kmer"),
                    FeatureRecord(name="b", description="d", kind="kmer")])
@@ -353,9 +355,10 @@ def test_a_feature_undefined_on_some_rows_does_not_break_matching():
     """A generated feature can be undefined on some rows without being wrong: a CpG-cluster span
     is NaN for a sequence with no cluster.
 
-    Unhandled, `rankdata` spreads the NaN across the column, and the NaN passes the zero-norm guard
-    because `nan != 0` is True. `linear_sum_assignment` then refuses the matrix, and the stability
-    analysis fails for every arm, not only the arm holding the feature.
+    If the NaN were left unhandled, `rankdata` would spread it across the column, and it would pass
+    the zero-norm guard because `nan != 0` is True. `linear_sum_assignment` would then refuse the
+    matrix, and the stability analysis would fail for every arm, not only the arm holding the
+    feature.
     """
     shared = noise()
     partly_undefined = noise()
@@ -387,7 +390,7 @@ def test_undefined_columns_are_counted_for_reporting():
     assert non_finite_columns(values) == 2
 
 
-# ------------------------------------------- chance-corrected agreement, the reported figure
+# ------------------------------------------- the reported figure: chance-corrected agreement
 
 
 def test_kappa_is_zero_when_real_agreement_matches_its_null():
@@ -407,10 +410,10 @@ def test_kappa_corrects_a_high_baseline_more_than_a_low_one():
     """Chance correction can reverse the ordering of two arms, which is why raw agreement is not
     reported.
 
-    A generative arm can have the highest raw agreement of any arm and also the highest chance
-    level, because it draws from a concentrated prior and proposes similar features whatever the
-    labels say. A fixed-vocabulary arm agrees less, against a chance level near zero. After
-    correction, the fixed-vocabulary arm ranks higher.
+    An arm on a written source can have the highest raw agreement of any arm and also the highest
+    chance level, because its language model draws from a concentrated prior and proposes similar
+    features whatever the labels say. A fixed-vocabulary arm agrees less, against a chance level
+    near zero, so after correction it ranks higher.
     """
     from seqmaestro.harness.stability import chance_corrected_agreement
 
@@ -438,8 +441,8 @@ def test_kappa_is_undefined_when_the_null_leaves_no_room():
 
 
 def test_a_run_of_one_seed_writes_no_stability_table(tmp_path, monkeypatch):
-    """Stability needs a set of runs. With one seed per arm there is none, and the analysis says so
-    and writes nothing, so the report reads it as not measured."""
+    """Stability needs at least two seeds of an arm. With one seed per arm, the analysis says so and
+    writes nothing, and the report treats stability as not measured."""
     from seqmaestro.pipeline.analyses import stability as analysis
 
     cell = tmp_path / "results" / "l1_logistic" / "positional" / "real" / "seed_42"
@@ -447,7 +450,7 @@ def test_a_run_of_one_seed_writes_no_stability_table(tmp_path, monkeypatch):
     (cell / "run.json").write_text("{}")
     (cell / "features.json").write_text("{}")
     (tmp_path / "results" / "stability.csv").write_text("left by an earlier attempt\n")
-    # The cut is the run's setting, which the analysis takes from the run's recorded config.
+    # How many top features to compare is the run's setting, taken from its recorded config.
     stated = SimpleNamespace(analyses=SimpleNamespace(top_n=20))
     monkeypatch.setattr(analysis, "load_recorded", lambda run_dir: stated)
     assert analysis.main(["--run-dir", str(tmp_path)]) == 0

@@ -2,15 +2,15 @@
 
 A report source, `REPORT.src.md`, is prose with four kinds of placeholder:
 
-    {{component:50_reliability_overview}}   a run-independent explanation, from docs/report/components/
+    {{component:50_reliability_overview}}   a run-independent explanation, from seqmaestro/report/components/
     {{table:stage3b_summary}}                a rendered table, from the report's tables/
     {{figure:stage3a_tree}}                  a figure, with the caption and width its build recorded
     {{param:half_samples}}                   a setting the run recorded, from facts.json
 
 **A component can have a twin per kind of target**, `NAME.binary.md` and `NAME.continuous.md`, where
-what it explains differs between the kinds (a classification metric, the classes). The run's kind
-chooses the twin, so a component's prose never switches on the kind inside itself. A component that
-serves both kinds is one file, `NAME.md`.
+what it explains differs between the kinds (a classification metric, the classes). The run's kind of
+target chooses the twin, so a component's prose never switches on the kind inside itself. A
+component that serves both kinds is one file, `NAME.md`.
 
 Components and tables are substituted verbatim, so a number is never retyped. The writer of a report
 chooses which table goes where and says what it means, and the numbers come from the file that
@@ -34,7 +34,7 @@ PLACEHOLDER = re.compile(r"\{\{(component|table|figure|param):([A-Za-z0-9_.+-]+)
 #: brace pair.
 LEFTOVER = re.compile(r"\{\{[^{}]*\}\}")
 
-#: HTML comments a component carries for its maintainers, stripped before the text reaches a reader.
+#: HTML comments a component holds for its maintainers, stripped before the text reaches a reader.
 COMMENT = re.compile(r"<!--.*?-->\s*", re.DOTALL)
 
 
@@ -62,7 +62,7 @@ def figure_markdown(entry: dict) -> str:
     """One figure, as plain markdown with the caption and width its build recorded.
 
     Whether a figure needs a rotated page is a property of the page it is printed on, so the
-    markdown says nothing about it. The figure build decides from the aspect it measured and
+    markdown says nothing about it. The figure build decides from the aspect ratio it measured and
     records the answer in `figures.json`, which the PDF render follows.
     """
     return f"![{entry['caption']}]({entry['path']}){{width={entry['width']}}}"
@@ -94,7 +94,8 @@ def _resolve(kind: str, name: str, sources: Sources) -> str:
 
 
 def expand(text: str, sources: Sources) -> str:
-    """`text` with every placeholder filled, in two passes so a component's own are filled too."""
+    """`text` with every placeholder filled, in two passes so that the placeholders a component
+    brings in are filled too."""
     def replace(match: re.Match) -> str:
         sources.used.append(f"{match.group(1)}:{match.group(2)}")
         return _resolve(match.group(1), match.group(2), sources)

@@ -1,4 +1,5 @@
-"""A report's figures, drawn from `figure_inputs.json`. **Needs matplotlib: `SeqMaestro_LocalUtils`.**
+"""Draw a report's figures from `figure_inputs.json`. **This needs matplotlib, so it runs under
+`SeqMaestro_LocalUtils`.**
 
 Core is the environment that produces results, and a plotting stack that no result depends on stays
 out of it. `tests/test_report.py` checks that no module outside this package imports matplotlib, and

@@ -1,7 +1,7 @@
 """The names of the files an arm's panel writes, and how its summaries and arrays are read back.
 
-`panel.py` documents the layout and writes it. The tables, the fits and the reveal find its files
-through the names defined here, so that a file name is spelled in one place.
+`panel.py` documents the layout and writes it, whereas the tables, the fits and the reveal find its
+files through the names defined here, so that each file name is spelled in one place.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ LOCO_DIR = "loco"
 TIER3_FILE = "tier3.json"
 CHECKS_FILE = "checks.json"
 
-#: Where the in-sample Tier 2 is computed, as its files name it.
+#: The name that the in-sample Tier 2's files give to D, the rows it is computed on.
 DISCOVERY = "discovery"
 
 #: The label sets: the real labels, the global null (the real labels permuted), and the planted
@@ -50,7 +50,8 @@ def tier2_name(split: str, label_set: str) -> str:
 
 
 def loco_cell(label: str) -> str:
-    """A refit's cell, relative to its arm: named for what it drops, which must be a plain name."""
+    """A refit's cell, relative to its arm's directory, named for what the refit drops, which must
+    be a plain name."""
     if not re.fullmatch(r"[A-Za-z0-9_.+-]+", label) or label in {".", ".."}:
         raise ValueError(f"{label!r} cannot name a cell directory.")
     return f"{LOCO_DIR}/{label}"
@@ -97,7 +98,7 @@ def save_tier2(arm_dir: Path, name: str, result: dict, **about: Any) -> dict:
 
 
 def load_tier2(arm_dir: Path, name: str) -> dict:
-    """A saved Tier 2 result, its arrays and names back in."""
+    """A saved Tier 2 result, with its arrays and names restored."""
     arrays = load_arrays(arm_dir / f"{name}.npz")
     return {**read_json(arm_dir / f"{name}.json"), "names": [str(n) for n in arrays.pop("names")],
             **arrays}

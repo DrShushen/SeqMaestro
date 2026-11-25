@@ -1,0 +1,17 @@
+# A model deployed on an Azure AI Foundry resource, read from the SEQMAESTRO_AZURE_FOUNDRY_*
+# variables of SeqMaestro's root .env, exported before the run. Nothing here holds a key. `kind` is
+# LiteLLM's route to the resource's model inference API, and `deployment` is the deployment's
+# name. The open models on Foundry may reason before they answer unless a call turns it off, and
+# `reasoning_effort: none` does so for Kimi K2.6 and DeepSeek V3.2 alike, as SeqMaestro's own calls
+# to the provider do.
+kind: azure_ai
+deployment: ${oc.env:SEQMAESTRO_AZURE_FOUNDRY_DEPLOYMENT}
+endpoint: ${oc.env:SEQMAESTRO_AZURE_FOUNDRY_ENDPOINT}
+api_key: ${oc.env:SEQMAESTRO_AZURE_FOUNDRY_KEY}
+reasoning_effort: none
+
+# How a call is made, which SeqMaestro's arm states from the run's config (`language_model`): the
+# retries after a call that failed, and the seconds a reply is waited for. Null leaves the retries
+# to the agent's own and the wait to LiteLLM's.
+num_retries: null
+request_timeout: null

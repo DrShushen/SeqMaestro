@@ -1,0 +1,25 @@
+# The example dataset with the motif sources, in a few minutes and with no language model:
+# example_quick.yaml's grid and arms, and the arms of _motifs.yaml beside them. It shows what a run
+# on motifs leaves behind, and checks that the motif sources work on an installation built with
+# ./install.sh --with-motifs, which discovery needs.
+#
+# The collection is fetched first, once per machine:
+#
+#     $CORE experiments/prepare/fetch_motif_collection.py jaspar --release 2026 --taxon vertebrates
+extends: [example_quick.yaml, _motifs.yaml]
+name: example_motifs
+
+sources:
+  motif_known:
+    collection: JASPAR2026_CORE_vertebrates_non-redundant
+    # The example's sequences are DNA, which a factor binds on either strand.
+    strands: both
+  motif_discovered:
+    strands: both
+    # Each motif found is compared with the same collection, for a reader.
+    annotate_with: JASPAR2026_CORE_vertebrates_non-redundant
+
+arms:
+  motif_discovered:
+    # Without `pysr`, which example_quick.yaml also leaves out, because of the time its panel takes.
+    models: [l1, ebm, xgboost]

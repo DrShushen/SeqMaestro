@@ -1,10 +1,10 @@
-"""`choose_threshold` must return exactly what a naive implementation returns, but fast.
+"""`choose_threshold` must return the same threshold as a naive implementation, only faster.
 
-The fast form derives the four confusion counts from one sort, where the naive form calls the whole
-metric suite once per candidate cut point. The two must be indistinguishable, so the naive form is
-kept here as the oracle and the two are compared over many random and adversarial inputs. The
-oracle is defined in this file and not imported from the module, because a reference that changes
-with the code it checks cannot catch a regression in it.
+The fast form derives the four confusion counts from one sort, whereas the naive form calls the
+whole metric suite once per candidate cut point. The two must be indistinguishable, so the naive
+form is kept here as the oracle and the two are compared over many random and adversarial inputs.
+The oracle is defined in this file and not imported from the module, because a reference that
+changes with the code it checks cannot catch a regression in it.
 """
 
 from __future__ import annotations
@@ -82,7 +82,8 @@ def test_matches_when_every_score_is_identical(metric):
 @pytest.mark.parametrize("metric", METRICS)
 @pytest.mark.parametrize("label", [0, 1])
 def test_matches_when_one_class_is_absent(metric, label):
-    """`balanced_accuracy` averages over classes present in y_true, so this is not symmetric."""
+    """`balanced_accuracy` averages over the classes present in `y_true`, so the two cases (no
+    positives, no negatives) are not symmetric."""
     y = np.full(20, label)
     p = np.linspace(0.05, 0.95, 20)
     assert choose_threshold(y, p, metric) == pytest.approx(naive_choose_threshold(y, p, metric))
@@ -100,14 +101,14 @@ def test_scores_at_the_interval_boundaries_are_handled():
 @pytest.mark.parametrize("metric", sorted(set(HIGHER_IS_BETTER) - THRESHOLDED_METRICS))
 def test_threshold_free_metrics_behave_as_before(metric):
     """AUROC and the other threshold-free metrics are identical at every cut point, so the choice
-    is vacuous. It must still return the same candidate as the oracle (the largest), and not an
-    arbitrary one."""
+    is vacuous. It must still return the candidate the oracle returns (the largest)."""
     y, p = random_case(120, 7)
     assert choose_threshold(y, p, metric) == pytest.approx(naive_choose_threshold(y, p, metric))
 
 
 def test_the_chosen_threshold_really_is_optimal():
-    """Independent of the oracle: no candidate scores better than the one returned."""
+    """Independently of the oracle, the threshold returned scores at least as well as every other
+    candidate."""
     y, p = random_case(150, 5)
     chosen = choose_threshold(y, p, "balanced_accuracy")
     best = _metrics(y, p, chosen)["balanced_accuracy"]
@@ -122,11 +123,11 @@ def test_empty_input_is_refused():
 
 
 def test_is_fast_enough_to_use_on_a_real_validation_split():
-    """The time bound guards against quadratic complexity, and is not a performance target.
+    """The time bound guards against quadratic complexity and is not a performance target.
 
-    At 40,000 rows a quadratic implementation would take roughly half an hour, and the linear one
-    takes milliseconds. Anything between those indicates a bug, so the bound sits orders of
-    magnitude from both. That also keeps the test from failing spuriously when the suite runs in
+    At 40,000 rows a quadratic implementation would take roughly half an hour, whereas the linear
+    one takes milliseconds. A time between the two indicates a bug, so the bound sits orders of
+    magnitude from both, which also keeps the test from failing spuriously when the suite runs in
     parallel and every core is busy.
     """
     import time

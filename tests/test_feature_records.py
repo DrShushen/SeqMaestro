@@ -1,6 +1,6 @@
 """`seqmaestro.harness.features`: the shared feature record on disk.
 
-The most important writer is one that cannot import this module. The DEFT arm runs in its own
+The most important writer of the record cannot import this module: the DEFT arm runs in a separate
 conda environment and writes `features.json` by hand, so several tests below build the payload as
 raw JSON. If hand-written JSON stops loading, the boundary is broken, and these tests fail before a
 results table is affected.
@@ -55,7 +55,7 @@ def test_a_record_survives_the_round_trip_unchanged(tmp_path):
 
 
 def test_the_header_carries_run_level_facts(tmp_path):
-    """What is true of the whole fit, such as its seed, is recorded once in the header, and not
+    """What is true of the whole fit, such as its seed, is recorded once in the header instead of
     on every record."""
     save_features(tmp_path / "f.json", [a_record()], importance_kind="l1_coefficient",
                   labels="real", seed=42)
@@ -73,7 +73,7 @@ def test_a_featuriser_stamps_its_own_origin():
     assert {record.kind for record in records} == {"kmer"}
 
 
-# ---------------------------------------------- the boundary: written without importing this
+# --------------------------------- the boundary: files written without importing this module
 
 
 def test_hand_written_json_loads(tmp_path):
@@ -256,7 +256,8 @@ def test_a_direction_word_of_the_other_kind_of_target_is_refused(tmp_path):
 
 def test_a_provenance_outside_the_vocabulary_is_refused(tmp_path):
     """An adapter declares how each feature entered its arm's answer, and the word is shown beside
-    the feature in the recurrence table and the spreadsheet, so a third word is refused on read."""
+    the feature in the recurrence table and the spreadsheet, so any word but `selected` and
+    `generated` is refused when the file is loaded."""
     path = hand_written(tmp_path, [{"name": "f", "description": "d", "kind": "kmer",
                                     "provenance": "proposed"}])
     with pytest.raises(ValueError, match="provenance 'proposed'"):

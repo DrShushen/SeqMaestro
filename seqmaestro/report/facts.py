@@ -1,25 +1,25 @@
 """Every number a report quotes, keyed and structured, with the files it was read from.
 
-`facts.json` is one of the two sources a report is written from, and `tables.py` renders the same
-numbers as markdown. A writer includes a table and says what it means, and quotes a number in prose
-only from `facts.json`, so the report and its evidence cannot drift apart.
+`facts.json` is one of the two sources a report is written from, and the other is the same numbers
+rendered as markdown by `tables.py`. A writer includes a table and says what it means, and quotes a
+number in prose only from `facts.json`, so the report and its evidence cannot drift apart.
 
 **Performance is on the test split unless a key says `val_`.** Every test number is the one the
 reveal scored and wrote into a cell's `metrics.json`. Nothing here scores anything.
 
 **A score's key is named by the metric of the target's kind**: `auroc` and `auprc` for a binary
 target, `r2` and `spearman_rho` for a continuous one, so `reduced_auroc` is `reduced_r2` there.
-`metrics` names them, with the chance level and the panel's association and loss, and every reader
-of the facts builds its keys from it.
+`metrics` names them, with the chance level and the panel's association and loss, and every module
+that reads the facts builds its keys from it.
 
-**A fixed rule chooses which configurations lead the report.** The headline set is the best
-configuration of each interpretable model class, the best one built on features enumerated in
-advance, and the strongest black-box reference. Applying the rule here means every dataset's report
-leads with the same kinds of configuration, and a reader can see what the rule was.
+**A fixed rule chooses which arms lead the report** (the headline set), so that every dataset's
+report leads with the same kinds of arm. `docs/developer/report.md` states the rule and its
+reasons.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import numpy as np
@@ -42,14 +42,13 @@ from seqmaestro.target import BINARY, CONTINUOUS, target_for
 STABLE_PI = 0.7
 
 #: The level for the corrected tests. A feature with a q-value at or below it counts as holding, and
-#: a removal with a Holm-corrected p-value below it counts as costing the model.
+#: a removal with a Holm-corrected p-value below it counts as making the model worse.
 ALPHA = 0.05
 
-#: The interpretable model classes that each get one configuration in the headline set, in the
-#: order a report shows them, by the kind of target. They follow from the registry
-#: (`seqmaestro.arms`): every model that is read feature by feature and fits the kind, so the sparse
-#: linear model is the logistic one for a binary target and the least-squares one for a continuous
-#: one.
+#: The interpretable model classes that each get one arm in the headline set, in the order a report
+#: shows them, by the kind of target. They follow from the registry (`seqmaestro.arms`): every model
+#: that is interpreted feature by feature and fits the kind, so the sparse linear model is the
+#: logistic one for a binary target and the least-squares one for a continuous one.
 HEADLINE_FAMILIES = {
     kind: tuple(name for name in naming.MODELS
                 if naming.model_interpretable(name) and kind in registry.spec(name).target_kinds)
@@ -109,11 +108,11 @@ def directions(dataset) -> dict[str, Any]:
 
 
 def headline_set(scores: dict[str, float | None], target_kind: str) -> dict[str, str]:
-    """The configurations the body of a report leads with, keyed by why each is there.
+    """The arms the body of a report leads with, keyed by why each is there.
 
-    The set holds the best configuration of each interpretable model class (`best_<class>`), the
-    best interpretable configuration drawing on features enumerated in advance (`best_enumerated`),
-    which is the contrast the design exists to make, and the strongest black-box reference
+    The set holds the best arm of each interpretable model class (`best_<class>`), the best
+    interpretable arm drawing on features enumerated in advance (`best_enumerated`), which is the
+    contrast the design exists to make, and the strongest black-box reference
     (`black_box_reference`). The reference shows how much signal the data holds and says nothing
     about features. `scores` is each arm's held-out score at the stage the set is chosen for.
     """
@@ -160,6 +159,9 @@ def stage1(run: Run) -> dict[str, Any]:
         # report says so, since a result from a blinded run and one from a run that named the
         # answer cannot otherwise be told apart.
         "blinding": run.blinding,
+        # What the person running the analysis asked of the form of the written features, word for
+        # word, or None. A report states it, since guidance steers what the models wrote.
+        "feature_guidance": run.guidance,
         "checks": {name: result["status"] for name, result in record["checks"].items()},
         # Each finding is kept in full, because a reader needs what was found and what was said
         # about it, and the status alone says only "acknowledged". For example, if some held-out
@@ -191,6 +193,64 @@ def _paired_gap(real: dict[int, Cell], permuted: dict[int, Cell], headline: str)
     gaps = [real[seed].test[headline] - permuted[seed].test[headline]
             for seed in sorted(set(real) & set(permuted))]
     return _mean(gaps)
+
+
+# ------------------------------------------------------------------------------ language models
+
+#: Where a Stage 2 analysis that calls a language model keeps the record of its calls (`Run.analyses`),
+#: with what it called the model for (`naming.CALLED_FOR`).
+ANALYSES_CALLING = {"judge": "judge", "concept_recurrence": "recurrence"}
+
+
+def calls_recorded(value: Any) -> list[dict[str, Any]]:
+    """Every record of the calls (`seqmaestro.llm.describe_calls`) held anywhere in a cell's
+    `run.json`: the one a vendored cell writes, and a proposer's inside the featuriser's record,
+    however deep the pool's parts nest it."""
+    if isinstance(value, dict):
+        found = [value["language_model"]] if isinstance(value.get("language_model"), dict) else []
+        return found + [record for key, item in value.items() if key != "language_model"
+                        for record in calls_recorded(item)]
+    if isinstance(value, list):
+        return [record for item in value for record in calls_recorded(item)]
+    return []
+
+
+def language_models(run: Run) -> list[dict[str, Any]]:
+    """Each language model the run called, as the parts that called it recorded it, with what it
+    was called for (`used_for`, keys of `naming.CALLED_FOR`) and how many cells and analyses
+    recorded it (`n_records`).
+
+    A run calls one model, under one setting, for every part, so one entry is usual and none means
+    no part called a model. More than one entry means the model or how it was called changed
+    between calls, as when a run is continued with another model named in the environment, and a
+    report says so.
+    """
+    found: dict[str, dict[str, Any]] = {}
+
+    def add(record: dict[str, Any], role: str) -> None:
+        entry = found.setdefault(json.dumps(record, sort_keys=True),
+                                 {**record, "used_for": [], "n_records": 0})
+        if role not in entry["used_for"]:
+            entry["used_for"].append(role)
+        entry["n_records"] += 1
+
+    for arm, by_labels in run.suite.items():
+        role = naming.written_role(arm)
+        if role is None:
+            continue
+        for seeds in by_labels.values():
+            for cell in seeds.values():
+                # An iterative cell records its proposer twice, in its pool and in its loop.
+                held = {json.dumps(record, sort_keys=True): record for record in calls_recorded(cell.run)}
+                for record in held.values():
+                    add(record, role)
+    for name, role in ANALYSES_CALLING.items():
+        analysis = run.analyses.get(name)
+        if isinstance(analysis, dict) and isinstance(analysis.get("language_model"), dict):
+            add(analysis["language_model"], role)
+    order = list(naming.CALLED_FOR)
+    return [{**entry, "used_for": sorted(entry["used_for"], key=order.index)}
+            for entry in found.values()]
 
 
 def stage2(run: Run, names: dict[str, Any]) -> dict[str, Any]:
@@ -286,11 +346,13 @@ def baseline(run: Run, budget: int | None, names: dict[str, Any]) -> dict[str, A
 
 def ranked_features(reduced: ReducedArm) -> list[dict[str, Any]]:
     """The columns the reduction kept, strongest first by the importance the reduction recorded,
-    with a column the reduced model gives no weight included.
+    including any column the reduced model gives no weight.
 
     Direction and marginal effect come from the Stage 2 cell, the only place they are recorded for
     every arm. The direction is therefore the one the arm's full model gave the feature, before the
-    reduction.
+    reduction. A discovered motif also holds the known motif that Tomtom found closest to it, where
+    the run compared it with a collection (`closest_known` of the record's `extra`). This is for a
+    reader of the report, since neither the feature's name nor its description names that motif.
     """
     record = reduced.record
     importance = dict(zip(record["final_columns"], record["final_importance"], strict=True))
@@ -304,6 +366,7 @@ def ranked_features(reduced: ReducedArm) -> list[dict[str, Any]]:
             "reduction_importance": importance[name],
             "direction": source.direction,
             "marginal_effect": _number(source.marginal_effect),
+            "closest_known": (source.extra or {}).get("closest_known"),
         })
     return rows
 
@@ -342,7 +405,7 @@ def stage3a(run: Run, names: dict[str, Any]) -> dict[str, Any]:
         }
     budgets = {entry["n_target"] for entry in arms.values()}
     if len(budgets) > 1:
-        raise ValueError(f"The reduced arms were cut to different sizes: {sorted(budgets)}.")
+        raise ValueError(f"The arms were reduced to different numbers of features: {sorted(budgets)}.")
     return {"arms": arms, "feature_budget": budgets.pop() if budgets else None}
 
 
@@ -434,8 +497,8 @@ def stage3b(run: Run, names: dict[str, Any]) -> dict[str, Any]:
 def parameters(run: Run, facts: dict[str, Any], concept_similarity: float) -> dict[str, str]:
     """Settings a dataset-independent explanation has to quote, read from what the run recorded.
 
-    These differ between runs. A component that stated one as a constant would be silently wrong on
-    a run configured otherwise, so it asks for them through `{{param:NAME}}` instead.
+    These differ between runs, so a component that stated one as a constant would be silently wrong
+    on a run configured otherwise. A component asks for them through `{{param:NAME}}` instead.
     """
     word = markdown.word
     panel = next(iter(run.profiled.values()), None)

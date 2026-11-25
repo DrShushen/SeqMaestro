@@ -74,6 +74,8 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+# The API reference sphinx-autodoc2 writes while it builds the docs.
+docs/api/
 
 # PyBuilder
 .pybuilder/
@@ -202,8 +204,10 @@ methods/*/data/
 /experiments/configs/*.yaml
 !/experiments/configs/_shared.yaml
 !/experiments/configs/_shared_continuous.yaml
+!/experiments/configs/_motifs.yaml
 !/experiments/configs/example.yaml
 !/experiments/configs/example_quick.yaml
+!/experiments/configs/example_motifs.yaml
 
 /experiments/datasets/*.json
 !/experiments/datasets/example.json
@@ -212,6 +216,7 @@ methods/*/data/
 !/experiments/prepare/build_example_dataset.py
 !/experiments/prepare/check_sequence_provenance.py
 !/experiments/prepare/design_power.py
+!/experiments/prepare/fetch_motif_collection.py
 !/experiments/prepare/finalise_dataset.py
 !/experiments/prepare/predict_alphagenome_summaries.py
 !/experiments/prepare/write_group_map.py
@@ -237,6 +242,10 @@ experiments/runs/
 
 workdir/
 workdir_reporting/
+
+# Code and outputs used only to compare SeqMaestro with other methods (black-box models,
+# motif discovery), for the paper. None of it is part of SeqMaestro.
+/baselines/
 
 # Claude Code: a user's own settings for this repository. The skill and the shared settings under
 # .claude/ are tracked.

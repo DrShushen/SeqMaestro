@@ -1,4 +1,4 @@
-"""Checks whether a sequence dataset's strand convention is what it is assumed to be.
+"""Checks that a sequence dataset's strand convention is what it is assumed to be.
 
 There are two independent checks, because they fail in different ways and neither is sufficient
 alone.
@@ -13,18 +13,20 @@ palindromic fits both hypotheses equally well. `asymmetry` reports how distingui
 hypotheses were before the data chose between them, and the verdict is `INCONCLUSIVE` when the
 profile is too palindromic or the margin between the hypotheses is thin. Second, the check is
 **target-sensitive**: on a dataset whose negatives are structureless, running it over all rows
-together dilutes the signal that carries the answer. `orientation_by_group` makes running it per
+together dilutes the signal that holds the answer. `orientation_by_group` makes running it per
 class, or per tertile of a continuous target, the easy option.
 
 This check cannot detect a global flip: if every record were reverse complemented, the two strands
 would still agree perfectly.
 
 **Against a reference.** One lookup settles what composition cannot: whether the forward-strand
-records match the reference exactly. `classify_against_reference` does only the comparison. The
-caller fetches the reference, so this module stays offline and testable. Comparing against several
-candidate builds also identifies the build, since the wrong one matches nothing.
+records match the reference exactly. `classify_against_reference` does only the comparison,
+whereas the caller fetches the reference, so that this module stays offline and testable.
+Comparing against several candidate builds also identifies the build, since the wrong one matches
+nothing.
 
-Nothing here assumes a length, an alphabet, or DNA. The complement map is an argument.
+The code here does not assume a length, an alphabet, or DNA, since the complement map is an
+argument.
 """
 
 from __future__ import annotations
@@ -62,7 +64,7 @@ def reverse_complement(sequence: str, complement: dict[str, str] = DNA_COMPLEMEN
 def positional_profile(
     sequences: list[str], alphabet: tuple[str, ...] | None = None
 ) -> tuple[np.ndarray, tuple[str, ...]]:
-    """Per-position symbol frequencies, shape ``(length, len(alphabet))``.
+    """Per-position symbol frequencies, of shape `(length, len(alphabet))`.
 
     The alphabet is learned from the data unless given. Sequences must be of equal length, because
     a positional profile over ragged sequences is meaningless.
@@ -88,9 +90,9 @@ def reverse_complement_profile(
 ) -> np.ndarray:
     """The profile the same sequences would have if each were reverse complemented.
 
-    A symbol with no entry in `complement` maps to itself. That is correct for the ambiguity codes
-    found in real assemblies (N is its own complement), and it keeps this function consistent with
-    `reverse_complement`, which leaves such symbols in place. The whole check rests on the two
+    A symbol without an entry in `complement` maps to itself, which is correct for the ambiguity
+    codes found in real assemblies (N is its own complement), and keeps this function consistent
+    with `reverse_complement`, which leaves such symbols in place. The whole check rests on the two
     functions agreeing, and a test checks that they do.
 
     An alphabet that cannot express the flip is refused: if a symbol's partner is absent from the
@@ -206,7 +208,7 @@ def orientation_by_group(
     groups: list,
     **kwargs,
 ) -> dict[object, OrientationEvidence]:
-    """Run the check within each group, plus `None` for all rows pooled.
+    """Run the check within each group, plus an entry under `None` for all rows pooled.
 
     Group by the class label, or by tertiles of a continuous target: a dataset whose negatives are
     structureless can give a clear answer within its positives and none overall, and the rows at one
@@ -236,9 +238,9 @@ def classify_against_reference(
 ) -> str:
     """How a record relates to the reference sequence at the same coordinates.
 
-    `AS_GIVEN` for a forward-strand record means the data is not globally flipped;
-    `REVERSE_COMPLEMENT` for a reverse-strand record means it was oriented. `NO_MATCH` across a
-    whole sample usually means the wrong genome build, or a window offset by a base.
+    `AS_GIVEN` for a forward-strand record means the data is not globally flipped, whereas
+    `REVERSE_COMPLEMENT` for a reverse-strand record means that record was oriented. `NO_MATCH`
+    across a whole sample usually means the wrong genome build, or a window offset by a base.
     """
     if not case_sensitive:
         sequence, reference = sequence.upper(), reference.upper()

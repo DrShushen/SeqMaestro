@@ -18,6 +18,7 @@ Trees](https://arxiv.org/abs/2604.12060) (AISTATS 2026).
 > | Commit | `110378e9143af85fc791207d8666e09c1c602b53` ("Include tests", 2026-07-06) |
 > | Copied | 2026-08-05, via `git archive HEAD`; all 183 tracked files md5-verified against upstream |
 > | Since then | reduced to the method itself, and modified — see [What changed](#what-changed) |
+> | Licence | MIT ([`LICENSE`](LICENSE)) |
 >
 > There is no nested `.git`, no remote and no submodule: SeqMaestro owns the history from the
 > copy onwards.
@@ -64,16 +65,20 @@ key under `src/deft/conf/llm_models/`, and how the engine calls a model of that 
 | provider | `llm_models=` | `llm=` |
 |---|---|---|
 | Azure OpenAI | `seqmaestro_azure` | `gpt5` |
+| a model deployed on Azure AI Foundry | `seqmaestro_azure_foundry` | `foundry` |
 | the OpenAI API | `seqmaestro_openai` | `gpt5` |
 | the Claude API | `seqmaestro_claude` | `claude` |
 
 `generic_user.yaml`, `openai_gpt4o_mini.yaml` and `env.yaml` remain as alternatives. `llm/claude.yaml`
 differs from `llm/gpt5.yaml` in three settings, each because the Claude API refuses or ignores what
 the GPT-5 settings send: no `top_p` beside the temperature, no reasoning effort, and one completion
-per request.
+per request. `llm/foundry.yaml` differs in one: it turns the model's reasoning off
+(`reasoning_effort: none`), since the open models on Foundry may otherwise spend the whole reply
+reasoning.
 
 All LLM calls go through **LiteLLM**, so `model` is a LiteLLM model string carrying its own
-provider prefix (`azure/<deployment>`, `openai/<model>`, `anthropic/<model>`). One Azure subtlety
+provider prefix (`azure/<deployment>`, `azure_ai/<deployment>`, `openai/<model>`,
+`anthropic/<model>`). One Azure subtlety
 is worth knowing: a deployment's name appears in no model map, so `base_model` supplies the real
 family and is what lets `reasoning_effort` through. The config comments and
 `src/deft/llm/engines/litellm_engine.py`'s docstring explain it in full.

@@ -1,9 +1,9 @@
-"""The package is installed, under the name it claims.
+"""The package is installed under the name it claims.
 
-The main guard is against a distribution whose name differs from its importable top-level package,
-for example a distribution named `deft` whose top-level package is `src`, so `import deft` fails.
-`pyproject.toml` accepts that without complaint, and the mistake stays invisible until another
-project tries to depend on the package.
+The main test guards against a distribution whose name differs from its importable top-level
+package, for example a distribution named `deft` whose top-level package is `src`, so that
+`import deft` fails. `pyproject.toml` accepts that without complaint, and the mistake stays
+invisible until another project tries to depend on the package.
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ def test_the_version_is_not_two_versions(declared):
 
 
 def test_the_base_install_stays_light(declared):
-    """Base dependencies must stay installable into a method's own environment, so they include
-    no boosting library and no LLM client. Those live behind the `models` and `llm` extras.
+    """Base dependencies must stay installable into a method's environment, so they include neither
+    a boosting library nor a language-model client. Those are in the `models` and `llm` extras.
 
     `scipy` is listed because the harness imports it directly for the Hungarian assignment and
     rank transforms, and `threadpoolctl` because the reliability panel imports it to hold a worker

@@ -2,8 +2,8 @@
 and the names and interpreters that every call it makes relies on.
 
 The stages themselves are tested where they live, and the scheduler in `tests/test_schedule.py`.
-These tests cover the driver's own logic, with every process it starts replaced so that nothing is
-fitted.
+These tests cover the driver's logic alone, with every process it starts replaced so that nothing
+is fitted.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from seqmaestro.dataset import load_dataset
+from seqmaestro.llm import CallSettings
 from seqmaestro.pipeline import stage2
 from seqmaestro.pipeline.repository import REPO
 from seqmaestro.pipeline.vendored import deft, igsr
@@ -23,7 +24,7 @@ from seqmaestro.provenance import (
     missing_python,
     python_override_variable,
 )
-from tests.planted import ANALYSES, planted_dataset
+from tests.planted import ANALYSES, LANGUAGE_MODEL, planted_dataset
 
 EVERY_ARM = {
     "positional": {"models": ["l1_logistic", "ebm", "xgboost", "deft_or_cart"]},
@@ -54,7 +55,7 @@ def driver():
     return experiment_config, run_experiment
 
 
-def a_config(tmp_path, experiment_config, arms=None, blinded=False, sources=None):
+def a_config(tmp_path, experiment_config, arms=None, blinded=False, sources=None, guidance=None):
     dataset = planted_dataset(tmp_path)
     source = tmp_path / "planted.yaml"
     arms = arms or EVERY_ARM
@@ -65,8 +66,10 @@ def a_config(tmp_path, experiment_config, arms=None, blinded=False, sources=None
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60,
+                                        "guidance": guidance}},
         "sources": sources_for(arms) if sources is None else sources,
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms,
         "reduction": {"n_features": 3},
@@ -78,7 +81,7 @@ def a_config(tmp_path, experiment_config, arms=None, blinded=False, sources=None
 
 
 # --------------------------------------------------------------------------------------------
-# The stages, and the reveal among them
+# The stages and the reveal among them
 # --------------------------------------------------------------------------------------------
 
 
@@ -114,7 +117,7 @@ def test_a_reduction_that_reduces_no_arm_is_no_stage(driver, tmp_path):
 
 def test_the_judge_runs_only_where_the_grid_says_so(driver, tmp_path):
     """`grid.judge` is required, so a run's config says whether the judge was meant to run, and a
-    run that leaves it out has no judge stage to fail or to ask for credentials."""
+    run that leaves the judge out has no judge stage that could fail or ask for credentials."""
     import yaml
 
     experiment_config, run_experiment = driver
@@ -137,9 +140,9 @@ def test_the_judge_runs_only_where_the_grid_says_so(driver, tmp_path):
 
 
 def test_a_run_with_no_written_source_and_no_judge_calls_no_language_model(driver, tmp_path):
-    """The recurrence analysis groups features a language model wrote, so it asks one only in a
-    run with an arm on a written source. Without one, and without the judge, preflight asks for no
-    credentials."""
+    """The recurrence analysis groups features a language model wrote, so it calls a language model
+    only in a run with an arm on a written source. Without such an arm, and without the judge,
+    preflight does not ask for credentials."""
     experiment_config, run_experiment = driver
     fixed = {"positional": {"models": ["l1_logistic", "xgboost"]}}
     config = a_config(tmp_path / "fixed", experiment_config, arms=fixed)
@@ -171,7 +174,41 @@ def test_every_arm_that_writes_takes_the_one_policy_for_failed_features(driver, 
         "the CART finder writes nothing, so it is told nothing about writing"
     assert igsr.stated(config)["experiment.function_terms.timeout_seconds"] == 60
     assert config.to_mapping()["grid"]["generated_features"] == {
-        "repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60}
+        "repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60, "guidance": None}
+
+
+def test_the_guidance_on_the_form_of_the_features_reaches_every_arm_that_writes(driver, tmp_path):
+    """The proposer takes the run's guidance among its settings, and DEFT's generative finder and
+    IGSR through their adapters. The CART finder writes nothing and is given no guidance, and a run
+    that states none gives none to any arm."""
+    experiment_config, _ = driver
+    asked = "Write each feature as a ratio of two counts."
+    config = a_config(tmp_path, experiment_config, guidance=asked)
+    assert config.to_mapping()["grid"]["generated_features"]["guidance"] == asked
+    assert stage2.proposal_settings(config).guidance == asked
+    assert deft.guidance(config, "positional+llm_generated_joint") == asked
+    assert deft.guidance(config, "positional") is None, "the CART finder writes nothing"
+    plain = a_config(tmp_path / "plain", experiment_config)
+    assert stage2.proposal_settings(plain).guidance is None
+    assert deft.guidance(plain, "positional+llm_generated_joint") is None
+
+
+def test_guidance_that_could_not_reach_defts_prompts_is_refused_before_anything_starts(
+        driver, tmp_path, monkeypatch):
+    """A hand-written prompt config fixes DEFT's wording, so a run's guidance would be lost on its
+    arms. The driver's check refuses it, whereas the adapter would refuse it only once the cell
+    starts."""
+    experiment_config, _ = driver
+    written = tmp_path / "params_generation"
+    written.mkdir()
+    (written / "planted.yaml").write_text("defaults: [default, _self_]\n")
+    monkeypatch.setattr(deft, "HAND_WRITTEN_PROMPTS", written)
+    arms = {"positional": {"models": ["l1"]},
+            "positional+llm_generated_joint": {"models": ["deft_or_cart"]}}
+    guided = a_config(tmp_path / "guided", experiment_config, arms=arms, guidance="Use ratios.")
+    with pytest.raises(experiment_config.ConfigError, match="hand-written config"):
+        stage2.check(guided)
+    stage2.check(a_config(tmp_path / "plain", experiment_config, arms=arms))
 
 
 def test_the_language_model_is_the_environments_and_no_config_names_one(driver, tmp_path, monkeypatch):
@@ -184,21 +221,71 @@ def test_the_language_model_is_the_environments_and_no_config_names_one(driver, 
     for name, value in {"SEQMAESTRO_LLM_PROVIDER": "claude", "SEQMAESTRO_CLAUDE_KEY": "a-key",
                         "SEQMAESTRO_CLAUDE_MODEL": "a-model"}.items():
         monkeypatch.setenv(name, value)
+    # Claude is given no reasoning effort from the run, as the client gives it none.
     assert deft.overrides(config, joint) == ["llm_models=seqmaestro_claude", "llm=claude",
+                                             "llm.num_retries=5", "llm.request_timeout=120",
                                              *deft.run_overrides(config, joint)]
     monkeypatch.setenv("SEQMAESTRO_LLM_PROVIDER", "openai")
     monkeypatch.delenv("SEQMAESTRO_OPENAI_KEY", raising=False)
     with pytest.raises(RuntimeError, match="missing SEQMAESTRO_OPENAI_KEY"):
         deft.overrides(config, joint)
+    monkeypatch.setenv("SEQMAESTRO_OPENAI_KEY", "a-key")
+    monkeypatch.setenv("SEQMAESTRO_OPENAI_MODEL", "a-model")
+    assert deft.overrides(config, joint) == [
+        "llm_models=seqmaestro_openai", "llm=gpt5", "llm.num_retries=5", "llm.request_timeout=120",
+        "llm.reasoning_effort=minimal", *deft.run_overrides(config, joint)]
+    assert igsr.overrides(config) == [
+        "llm=seqmaestro_openai", "llm.num_retries=5", "llm.request_timeout=120",
+        "llm.reasoning_effort=minimal", *igsr.run_overrides(config)]
     assert deft.overrides(config, "positional") == deft.run_overrides(config, "positional")
 
     source = tmp_path / "planted.yaml"
     document = yaml.safe_load(source.read_text())
-    for model, naming in (("deft_or_cart", "llm_models=seqmaestro_azure"), ("deft_or_cart", "llm=gpt5")):
+    for model, naming in (("deft_or_cart", "llm_models=seqmaestro_azure"), ("deft_or_cart", "llm=gpt5"),
+                          ("deft_or_cart", "llm.request_timeout=30"),
+                          ("deft_or_cart", "++llm.reasoning_effort=high")):
         document["models"] = {model: {"config_overrides": [naming]}}
         source.write_text(yaml.safe_dump(document))
         with pytest.raises(experiment_config.ConfigError, match="SEQMAESTRO_LLM_PROVIDER"):
             run_experiment.build_stages(experiment_config.load(source), tmp_path / "run")
+    # A setting of DEFT's engine that the run does not state is left to DEFT.
+    document["models"] = {"deft_or_cart": {"config_overrides": ["llm.max_tokens=8000"]}}
+    source.write_text(yaml.safe_dump(document))
+    assert "llm.max_tokens=8000" in deft.run_overrides(experiment_config.load(source), joint)
+
+
+def test_how_every_call_to_the_language_model_is_made_is_a_setting_of_the_run(driver, tmp_path):
+    """The reasoning effort, the retries and the timeout are stated in the config, recorded with
+    the run and handed to every client the run builds, including the proposer's."""
+    experiment_config, _ = driver
+    config = a_config(tmp_path, experiment_config)
+    assert config.language_model == CallSettings(reasoning_effort="minimal", retries=5,
+                                                 timeout_seconds=120)
+    assert config.to_mapping()["language_model"] == LANGUAGE_MODEL
+    assert experiment_config.CONFIG_VERSION == 4
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    (None, "missing language_model"),
+    ({"reasoning_effort": "minimal", "retries": 5}, "missing timeout_seconds"),
+    ({**LANGUAGE_MODEL, "temperature": 1}, "has no key temperature"),
+    ({**LANGUAGE_MODEL, "reasoning_effort": "lowest"}, "expected one of none, minimal, low"),
+    ({**LANGUAGE_MODEL, "retries": -1}, ">= 0"),
+    ({**LANGUAGE_MODEL, "timeout_seconds": 0}, ">= 1"),
+    ({**LANGUAGE_MODEL, "timeout_seconds": True}, ">= 1"),
+])
+def test_how_calls_are_made_is_stated_in_full(driver, tmp_path, change, message):
+    experiment_config, _ = driver
+    a_config(tmp_path, experiment_config)
+    source = tmp_path / "planted.yaml"
+    document = yaml.safe_load(source.read_text())
+    if change is None:
+        del document["language_model"]
+    else:
+        document["language_model"] = change
+    source.write_text(yaml.safe_dump(document))
+    with pytest.raises(experiment_config.ConfigError, match=message):
+        experiment_config.load(source)
 
 
 def test_preflight_asks_for_the_providers_settings_only_where_a_stage_calls_a_model(
@@ -218,7 +305,7 @@ def test_preflight_asks_for_the_providers_settings_only_where_a_stage_calls_a_mo
 
     assert unset(quiet) == []
     (problem,) = unset(calling)
-    assert "missing SEQMAESTRO_LLM_PROVIDER (one of azure, openai, claude)" in problem
+    assert "missing SEQMAESTRO_LLM_PROVIDER (one of azure, azure_foundry, openai, claude)" in problem
     monkeypatch.setenv("SEQMAESTRO_LLM_PROVIDER", "claude")
     (problem,) = unset(calling)
     assert "missing SEQMAESTRO_CLAUDE_KEY, SEQMAESTRO_CLAUDE_MODEL" in problem
@@ -246,16 +333,102 @@ def test_a_vendored_models_settings_may_not_restate_what_the_grid_states(driver,
         run_experiment.build_stages(experiment_config.load(source), tmp_path / "run")
 
 
+def with_models(tmp_path, experiment_config, models, arms=None):
+    """The planted config, with `models` stated as given."""
+    a_config(tmp_path, experiment_config, arms=arms)
+    source = tmp_path / "planted.yaml"
+    document = yaml.safe_load(source.read_text())
+    document["models"] = models
+    source.write_text(yaml.safe_dump(document))
+    return source
+
+
+def test_a_core_models_settings_reach_every_cell_the_record_and_the_dry_run(driver, tmp_path,
+                                                                            capsys):
+    """A Core model takes the settings its class lists, under the name a config gives it. Every
+    cell builds the model with them (a proposer arm's through the same `new_model`), the recorded
+    config keeps them, and the dry run shows each setting of each model the run fits, with the
+    default where the config leaves one alone."""
+    from seqmaestro.models.additive import ExplainableBoosting
+    from seqmaestro.pipeline.rows import Rows
+
+    experiment_config, run_experiment = driver
+    source = with_models(tmp_path, experiment_config,
+                         {"l1": {"C": 0.5}, "xgboost": {"n_estimators": 50, "max_depth": 2}})
+    config = experiment_config.load(source)
+    assert config.models == {"l1_logistic": {"C": 0.5},
+                             "xgboost": {"n_estimators": 50, "max_depth": 2}}
+    effective = config.effective_model_settings()
+    assert effective["l1_logistic"] == {"C": 0.5}
+    assert effective["xgboost"] == {"n_estimators": 50, "max_depth": 2, "learning_rate": 0.1}
+    assert effective["ebm"] == {"outer_bags": ExplainableBoosting.DEFAULT_OUTER_BAGS,
+                                **ExplainableBoosting.library_defaults()}
+    assert "deft_or_cart" not in effective, "a vendored model's overrides are its method's"
+
+    recorded = tmp_path / "recorded.yaml"
+    recorded.write_text(config.to_yaml())
+    assert experiment_config.load(recorded).models == config.models
+
+    rows = Rows.of(config)
+    assert stage2.FixedArm(config, rows, tmp_path / "run", "l1_logistic", "positional").new_model(
+        7).describe()["C"] == 0.5
+    assert stage2.FixedArm(config, rows, tmp_path / "run", "xgboost", "positional").new_model(
+        7).describe()["max_depth"] == 2
+    assert stage2.FixedArm(config, rows, tmp_path / "run", "ebm", "positional").new_model(
+        7).describe()["outer_bags"] == ExplainableBoosting.DEFAULT_OUTER_BAGS
+
+    run_experiment.main(["--config", str(source), "--dry-run", "--run-dir", str(tmp_path / "run")])
+    printed = capsys.readouterr().out
+    assert "#   l1_logistic: C=0.5" in printed
+    assert "#   xgboost: n_estimators=50, max_depth=2, learning_rate=0.1" in printed
+
+
+@pytest.mark.parametrize(("models", "message"), [
+    ({"ebm": {"interactions": 2}},
+     "has no setting interactions. A config may change outer_bags, learning_rate, max_rounds"),
+    ({"xgboost": {"n_estimators": 2.5}}, "must be a positive whole number, not 2.5"),
+    ({"xgboost": {"max_depth": True}}, "must be a positive whole number, not True"),
+    ({"l1": {"C": 0}}, "must be a positive number, not 0"),
+    ({"ebm": {}}, "states no setting"),
+    ({"l1": {"C": 0.5}, "l1_logistic": {"C": 0.2}}, "states the settings of l1_logistic twice"),
+    ({"l1_linear": {"strength": 2.0}}, "has no settings for l1_linear"),
+    ({"pysr": {"niterations": 10}}, "which no arm fits"),
+])
+def test_a_core_models_settings_are_checked_as_the_config_loads(driver, tmp_path, models, message):
+    experiment_config, _ = driver
+    source = with_models(tmp_path, experiment_config, models)
+    with pytest.raises(experiment_config.ConfigError, match=message):
+        experiment_config.load(source)
+
+
+def test_a_value_the_model_refuses_is_refused_as_the_config_loads(driver, tmp_path):
+    """The model is built once with its settings, so that a value it refuses stops the config, and
+    not every cell of the arm. PySR needs an equation of at least seven nodes."""
+    experiment_config, _ = driver
+    source = with_models(tmp_path, experiment_config, {"pysr": {"maxsize": 5}},
+                         arms={"positional": {"models": ["l1_logistic", "pysr"]}})
+    with pytest.raises(experiment_config.ConfigError, match="needs at least 7, not 5"):
+        experiment_config.load(source)
+
+
 @pytest.mark.parametrize(("change", "message"), [
     (None, "missing generated_features"),
-    ({"repair_rounds": 1, "max_undefined_share": 1.5, "max_example_length": 300, "max_seconds": 60},
+    ({"repair_rounds": 1, "max_undefined_share": 1.5, "max_example_length": 300, "max_seconds": 60, "guidance": None},
      r"in \[0, 1\]"),
-    ({"repair_rounds": -1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60},
+    ({"repair_rounds": -1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60, "guidance": None},
      ">= 0"),
-    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_seconds": 60}, "missing max_example_length"),
-    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300}, "missing max_seconds"),
-    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 0},
-     ">= 1"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_seconds": 60, "guidance": None},
+     "missing max_example_length"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "guidance": None},
+     "missing max_seconds"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 0,
+      "guidance": None}, ">= 1"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60},
+     "missing guidance"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60,
+      "guidance": " "}, "the text of the guidance, or null"),
+    ({"repair_rounds": 1, "max_undefined_share": 0.2, "max_example_length": 300, "max_seconds": 60,
+      "guidance": 3}, "the text of the guidance, or null"),
 ])
 def test_the_policy_for_failed_features_is_stated_in_full(driver, tmp_path, change, message):
     import yaml
@@ -347,8 +520,8 @@ def test_a_source_some_pool_holds_is_stated_in_full_and_no_other(driver, tmp_pat
 
 
 def test_an_entry_leaves_its_models_out_of_stage_3_only_with_a_reason(driver, tmp_path):
-    """Every arm is reduced and profiled unless its entry says otherwise, with the reason the run
-    records. A black-box model is left out of the panel by its kind."""
+    """Every arm is reduced and profiled unless its entry says otherwise and gives a reason, which
+    the run records. A black-box model is left out of the reliability panel because of its kind."""
     experiment_config, _ = driver
     config = a_config(tmp_path, experiment_config, arms={
         "positional": {"models": ["l1", "ebm", "xgboost"],
@@ -373,8 +546,8 @@ def test_an_entry_leaves_its_models_out_of_stage_3_only_with_a_reason(driver, tm
 
 
 def test_the_share_of_rows_a_seed_fits_on_is_stated_and_below_one(driver, tmp_path):
-    """No stage has a value of its own for it, so a config without one is refused, and so is one
-    under which every seed would fit on the same rows."""
+    """No stage has a default for it, so a config without one is refused, as is one under which
+    every seed would fit on the same rows."""
     experiment_config, _ = driver
     config = a_config(tmp_path, experiment_config)
     assert config.grid.train_fraction == 0.8
@@ -396,8 +569,9 @@ def test_the_share_of_rows_a_seed_fits_on_is_stated_and_below_one(driver, tmp_pa
 
 
 def test_how_the_analyses_take_the_cells_is_stated_in_full(driver, tmp_path):
-    """The cut an analysis takes, the judge's ratings and the grouping's settings decide what a
-    table of the run holds, so a config states each and a run records them."""
+    """How many features an analysis takes from each cell (`top_n`), the judge's ratings and the
+    grouping's settings decide what a table of the run holds, so a config states each and a run
+    records them."""
     experiment_config, _ = driver
     config = a_config(tmp_path, experiment_config)
     assert config.analyses.top_n == 20 and config.analyses.judge.repeats == 3
@@ -421,7 +595,8 @@ def test_how_the_analyses_take_the_cells_is_stated_in_full(driver, tmp_path):
 
 def test_a_recorded_config_states_its_version_and_a_stage_reads_no_other(driver, tmp_path):
     """A stage takes its settings from the config the driver recorded, whose shape the version
-    names. A file without one is no record of a run, and one of another version is refused."""
+    names. A file without a version is not a record of a run, and one of another version is
+    refused."""
     experiment_config, run_experiment = driver
     config = a_config(tmp_path, experiment_config)
     run_dir = tmp_path / "run"
@@ -499,7 +674,7 @@ NAMES_THE_TARGET = "The outcome column marks the windows that carry the planted 
         "not blinded"])
 def test_the_preflight_refuses_a_blinding_that_cannot_stand(driver, tmp_path, monkeypatch, blinded,
                                                              judge_only, refusal):
-    """A property of the whole run, so checked whatever stages are selected."""
+    """Blinding is a property of the whole run, so it is checked whatever stages are selected."""
     experiment_config, run_experiment = driver
     datasets = tmp_path / "datasets"
     datasets.mkdir()
@@ -518,6 +693,32 @@ def test_the_preflight_refuses_a_blinding_that_cannot_stand(driver, tmp_path, mo
     else:
         assert len(problems) == 1 and refusal in problems[0]
 
+@pytest.mark.parametrize(("guidance", "refusal"), [
+    ("Count the GGCGCC motif in each window.",
+     "the feature guidance holds the withheld word 'ggcgcc'"),
+    ("Count short words in each window.", None),
+], ids=["guidance naming what is withheld", "guidance naming nothing withheld"])
+def test_the_preflight_refuses_guidance_that_names_what_a_blinded_run_withholds(
+        driver, tmp_path, monkeypatch, guidance, refusal):
+    experiment_config, run_experiment = driver
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    (datasets / "planted.json").write_text(json.dumps(
+        {"task": "Predicting a class from random windows.", "judge_only": "Its motif is GGCGCC."}))
+    monkeypatch.setattr(run_experiment, "DESCRIPTIONS", datasets)
+    config = a_config(tmp_path, experiment_config, arms={"positional": {"models": ["l1_logistic"]}},
+                      blinded=True, guidance=guidance)
+    stages = [stage for stage in run_experiment.build_stages(config, tmp_path / "run")
+              if stage.name == "l1_logistic/positional"]
+    problems = [problem for problem in run_experiment.preflight(config, tuple(stages), tmp_path / "run")
+                if "blinded" in problem]
+    if refusal is None:
+        assert problems == []
+    else:
+        assert any(refusal in problem and "grid.generated_features.guidance" in problem
+                   for problem in problems)
+
+
 def test_the_figures_are_drawn_where_the_plotting_stack_is(driver, tmp_path):
     experiment_config, run_experiment = driver
     stages = run_experiment.build_stages(a_config(tmp_path, experiment_config), tmp_path / "run")
@@ -528,9 +729,9 @@ def test_the_figures_are_drawn_where_the_plotting_stack_is(driver, tmp_path):
 
 
 def test_every_call_the_driver_makes_has_a_name_no_other_call_has(driver, tmp_path):
-    """A call's log, its invocation record and its failures file share its name, so no two calls
-    of a run may share one. That covers every cell of every arm, each arm's reduction and panel,
-    and the panel before and after the reveal."""
+    """A call's log, its invocation record and its failures file share its name, so two calls of a
+    run must never share a name. That covers every cell of every arm, each arm's reduction and
+    panel, and the panel before and after the reveal."""
     experiment_config, run_experiment = driver
     config = a_config(tmp_path, experiment_config)
     logs = [command.log for stage in run_experiment.build_stages(config, tmp_path / "run")
@@ -540,8 +741,9 @@ def test_every_call_the_driver_makes_has_a_name_no_other_call_has(driver, tmp_pa
 
 
 def test_every_arm_runs_as_one_process_per_labels_and_seed(driver, tmp_path):
-    """The cells of one labels and seed depend on no other cells of their arm, so each arm runs as
-    one process per pair, and its real-label processes name the arm whose cells they write."""
+    """The cells of one label condition and seed do not depend on the other cells of their arm, so
+    each arm runs as one process per pair, and its processes on real labels name the arm whose
+    cells they write."""
     experiment_config, run_experiment = driver
     config = a_config(tmp_path, experiment_config)
     stages = {stage.name: stage for stage in run_experiment.build_stages(config, tmp_path / "run")}
@@ -561,9 +763,9 @@ def test_every_arm_runs_as_one_process_per_labels_and_seed(driver, tmp_path):
 
 
 def test_an_arm_is_reduced_and_profiled_as_soon_as_its_cells_are_there(driver, tmp_path):
-    """Each arm's reduction waits for the processes that write its real-label cells and nothing
-    else, and its panel for its reduction, so a cheap arm is reduced and profiled while the slow
-    ones run. The analyses compare arms, so they wait for every arm."""
+    """Each arm's reduction waits only for the processes that write its real-label cells, and its
+    panel only for its reduction, so a fast arm is reduced and profiled while the slow ones still
+    run. The analyses compare arms, so they wait for every arm."""
     experiment_config, run_experiment = driver
     config = a_config(tmp_path, experiment_config)
     stages = {stage.name: stage
@@ -604,15 +806,15 @@ def test_a_revealed_run_resumes_from_the_reveal_and_a_stop_stops_before_it(drive
 
 
 # --------------------------------------------------------------------------------------------
-# A run, with the stages stubbed out
+# A run with the stages stubbed out
 # --------------------------------------------------------------------------------------------
 
 
 @pytest.fixture
 def stubbed(driver, tmp_path, monkeypatch):
     """The driver on a small config, with every process it starts recorded by its log's name, and
-    those of the stages named in `fail` failing. A stage of one process logs under the stage's name;
-    one of several logs each under the stage's name and its slice."""
+    those of the stages named in `fail` failing. A stage of one process logs under the stage's name,
+    whereas each process of a stage of several logs under the stage's name and its slice."""
     experiment_config, run_experiment = driver
     datasets = tmp_path / "datasets"
     datasets.mkdir()
@@ -679,9 +881,95 @@ def test_a_revealed_run_runs_only_what_comes_after(stubbed):
         "a fitting stage is refused"
 
 
+@pytest.fixture
+def detached(stubbed, monkeypatch):
+    """`stubbed`, with the process `--detach` starts recorded in place of started, which runs on
+    for as long as it is watched unless `stops_with` gives an exit code."""
+    import subprocess
+
+    run_experiment, argv, run_dir, _, _ = stubbed
+    started, stops_with = [], {}
+
+    class Started:
+        pid = 4321
+
+        def __init__(self, argv, **options):
+            started.append((tuple(argv), options))
+
+        def wait(self, timeout):
+            if "code" in stops_with:
+                return stops_with["code"]
+            raise subprocess.TimeoutExpired("driver", timeout)
+
+    monkeypatch.setattr(run_experiment.subprocess, "Popen", Started)
+    return run_experiment, argv, run_dir, started, stops_with
+
+
+def test_detach_starts_the_run_again_in_a_session_of_its_own(detached, capsys):
+    """A harness may end what an agent's command started once the command returns, which a
+    process in a session of its own outlives. The checks are made before the call returns."""
+    run_experiment, argv, run_dir, started, _ = detached
+    assert run_experiment.main([*argv, "--detach"]) == 0
+    [(command, options)] = started
+    assert command[1].endswith("run_experiment.py") and "--detach" not in command
+    assert command[command.index("--run-dir") + 1] == str(run_dir)
+    assert options["start_new_session"] is True
+    assert (run_dir / "logs" / run_experiment.DETACHED_OUTPUT).exists()
+    assert "process 4321" in capsys.readouterr().out
+    assert not (run_dir / "config.yaml").exists(), "the run it started records the config"
+
+
+def test_a_detached_run_that_stops_at_once_says_so_where_it_was_launched(detached, capsys):
+    run_experiment, argv, _, _, stops_with = detached
+    stops_with["code"] = 2
+    assert run_experiment.main([*argv, "--detach"]) == 2
+    assert run_experiment.DETACHED_OUTPUT in capsys.readouterr().err
+
+
+def test_detach_goes_with_a_run_only(detached):
+    run_experiment, argv, _, started, _ = detached
+    assert run_experiment.main([*argv, "--detach", "--dry-run"]) == 2
+    assert run_experiment.main([*argv, "--detach", "--estimate"]) == 2
+    assert not started
+
+
+def test_the_driver_records_the_model_the_environment_names_where_a_stage_calls_one(
+        driver, tmp_path, monkeypatch):
+    """The config does not name a model, so when the driver starts a stage that calls one, its
+    record of the call says which model the environment named and how the run calls it. A call
+    that starts no such stage records no model."""
+    from types import SimpleNamespace
+
+    experiment_config, run_experiment = driver
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    (datasets / "planted.json").write_text(json.dumps({"task": "Predicting a planted motif."}))
+    monkeypatch.setattr(run_experiment, "DESCRIPTIONS", datasets)
+    config = a_config(tmp_path, experiment_config, arms={"positional": {"models": ["l1_logistic"]},
+                                                         "llm_generated": {"models": ["l1_logistic"]}})
+    source = tmp_path / "resolved.yaml"
+    source.write_text(config.to_yaml())
+    monkeypatch.setattr(run_experiment, "start_process", lambda argv, log, environment, cwd: (
+        SimpleNamespace(pid=None, poll=lambda: 0), None))
+    for name, value in {"SEQMAESTRO_LLM_PROVIDER": "claude", "SEQMAESTRO_CLAUDE_KEY": "a-key",
+                        "SEQMAESTRO_CLAUDE_MODEL": "a-model"}.items():
+        monkeypatch.setenv(name, value)
+    run_dir = tmp_path / "run"
+    given = ["--config", str(source), "--run-dir", str(run_dir)]
+    record = run_dir / "invocations" / f"{run_experiment.CALL}.json"
+
+    assert run_experiment.main([*given, "--only", "l1_logistic/positional"]) == 0
+    assert "language_model" not in json.loads(record.read_text())
+    assert run_experiment.main([*given, "--only", "l1_logistic/llm_generated"]) == 0
+    assert json.loads(record.read_text())["language_model"] == {
+        "provider": "claude", "model": "anthropic/a-model", "reasoning_effort": None,
+        "retries": 5, "timeout_seconds": 120}
+    assert "a-key" not in record.read_text()
+
+
 def test_a_run_is_matched_to_its_config_by_the_name_it_recorded(driver, tmp_path, monkeypatch):
     """Starting a run for a config that already has one is refused, and the earlier run is offered.
-    A run of another config whose name holds this one's is no run of this config."""
+    A run of another config whose name contains this one's is not a run of this config."""
     from types import SimpleNamespace
 
     _, run_experiment = driver
@@ -734,8 +1022,8 @@ def test_an_interpreter_is_found_under_this_conda_root_unless_overridden(monkeyp
 
 
 def test_preflight_names_pysrs_interpreter_for_the_stages_that_fit_it(driver, tmp_path, monkeypatch):
-    """PySR's search runs in its own environment, so its arm's stage, the reduction and the panel
-    need that interpreter; a stage that fits no PySR model does not."""
+    """PySR's search runs in a separate environment, so its arm's stage, the reduction and the
+    panel need that interpreter, whereas a stage that fits no PySR model does not."""
     experiment_config, run_experiment = driver
     config = a_config(tmp_path, experiment_config, arms={
         "positional": {"models": ["l1_logistic", "pysr"]},

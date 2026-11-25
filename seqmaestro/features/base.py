@@ -1,34 +1,35 @@
-"""What a featuriser is, and what it produces.
+"""What a featuriser is and what it produces.
 
-`docs/feature_record.md` documents the record below field by field. It is maintained alongside this
-module, so a change to one needs a change to the other.
+`FeatureRecord` describes each field of the record below, and `docs/developer/feature_record.md`
+says which producer fills each field, how the records reach a run and how a field is added. The
+page is maintained alongside this module, so a change to one needs a change to the other.
 
 Four ideas shape the module.
 
-**A feature is a record, not a column.** The write-up specifies a library entry as description,
-reasoning, code and evidence, and a language-model proposer emits that shape. The
-fixed-vocabulary featurisers emit the same shape, so *k*-mers, model-proposed features and later
-additions such as PWM scans all go into one library with no adapter between them.
+**A feature is a record, not a column.** A record holds what the feature computes, the reasoning
+behind it, its code and the evidence for it, which is the shape in which the proposer returns the
+features a language model writes. The fixed-vocabulary featurisers produce the same shape, so
+*k*-mers, written features and motif scans all go into one library with no adapter between them.
 
-**A featuriser reads rows, and a row is more than its sequence.** A dataset may declare covariates:
-numbers measured beside each sequence, such as a chromatin signal. `Inputs` carries the sequences
-and the covariates together, and every featuriser takes one. A featuriser asks for
-`inputs.sequences` or `inputs.covariates` and never for a column by name, so which columns of a
-split file are which is decided in one place (`seqmaestro.dataset.Columns`). A bare sequence column
-is accepted too, as rows with no covariates.
+**The rows a featuriser is given hold more than the sequences.** A dataset may declare covariates:
+numbers measured beside each sequence, such as a chromatin signal. `Inputs` holds the sequences and
+the covariates together, and every featuriser takes an `Inputs`. A featuriser asks for
+`inputs.sequences` or `inputs.covariates`, never for a column by name, so which columns of a split
+file are which is decided in one place (`seqmaestro.dataset.Columns`). A bare sequence column is
+accepted too, as rows with no covariates.
 
 **Nothing is assumed about the data.** Sequence length, alphabet and vocabulary are learned at `fit`
-and recorded, and a count's dtype is derived from a bound on what the input can hold
-(`count_dtype`). Datasets differ in width and alphabet, and an implementation that hard-codes them
-either breaks or silently truncates on the next dataset. Where a fixed property is genuinely
+and recorded, and the dtype of a count is derived from a bound on the largest count the input allows
+(`count_dtype`). Datasets differ in sequence length and alphabet, so an implementation that
+hard-codes them breaks, or silently truncates, on the next dataset. Where a fixed property is
 required (positional features need equal lengths or a declared window), it is checked, and data
 without it are refused.
 
-**`fit` is separate from `transform` even where it need not be.** Exact *k*-mers have a vocabulary
-derivable from the data alone, so the separation hardly matters for them. STREME motifs are
-*discovered* and PWM thresholds are *calibrated*, both from data, and if either is derived from
-anything but the training split, the experiment leaks. With the separation built into the
-interface, such featurisers fit in without changing it.
+**`fit` is separate from `transform`, even for featurisers that do not need it.** The vocabulary of
+exact *k*-mers follows from the sequences alone, so the separation hardly matters for them.
+Discovered motifs, by contrast, are found with the labels, and if they were found in any rows
+besides those the model fits on, the evaluation would leak. Because the interface separates the two
+steps for every featuriser, one that learns from the labels needs no change to it.
 """
 
 from __future__ import annotations
@@ -45,24 +46,12 @@ from pandas.api.types import is_numeric_dtype
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# Whose method produced a feature. The values are a convention and are not enumerated here: a
-# vendored method uses its own name (`"deft"`), so features pooled from several runs stay
-# attributable without this module knowing about every method. SeqMaestro's own name is below.
+# Whose method produced a feature (`FeatureRecord.origin`). The values are a convention and are not
+# enumerated here: a vendored method uses its name (`"deft"`), so features pooled from several runs
+# stay attributable without this module knowing every method. The value for SeqMaestro is below.
 ORIGIN_SEQMAESTRO = "seqmaestro"
 
-#: How a feature entered an arm's answer. Compare `kind`, which is what the feature computes.
-#:
-#: `selected`: the arm took it from the input pool it was handed. `generated`: the arm constructed
-#: it while fitting, so it was not available to any other arm drawing on the same pool.
-#:
-#: **Declared by whoever produced the record, never inferred.** An extensional test ("is this
-#: function inside the pool's span") is undecidable in general and ill-defined for nonlinear
-#: features, so the field records what the producer did.
-#:
-#: It is relative to the *arm*. A language-model pool handed to a model is `selected` there,
-#: because that arm only chose from it, while the same feature constructed mid-fit by an iterative
-#: arm is `generated`. Two arms can report the same feature under different provenance and both be
-#: right.
+#: The two values of `FeatureRecord.provenance`, whose docstring says what each means.
 PROVENANCE_SELECTED = "selected"
 PROVENANCE_GENERATED = "generated"
 PROVENANCES = (PROVENANCE_SELECTED, PROVENANCE_GENERATED)
@@ -70,38 +59,62 @@ PROVENANCES = (PROVENANCE_SELECTED, PROVENANCE_GENERATED)
 
 @dataclass(frozen=True)
 class FeatureRecord:
-    """One feature, however it was arrived at. The whole system uses this record type.
+    """The record of one feature: the type every arm produces and every analysis uses.
 
-    A *k*-mer count, a positional indicator, a PWM scan and a function a language model wrote all
-    take this shape, so the stability estimator, the judge and the results table consume one format
-    and need not know which arm produced a given row.
+    A *k*-mer count, a positional indicator, a motif scan and a function a language model wrote all
+    take this shape, so the stability estimator, the judge and the results table use one format and
+    need not know which arm produced a record. Only `name`, `description` and `kind` are required.
+    The optional fields are filled in at different steps: `source` and `rationale` when a language
+    model proposes the feature, `importance` and `direction` when a fitted model says how much it
+    used the feature and which way, and `marginal_effect` when its cell is scored.
 
-    `kind` and `params` are the extension point. Adding gapped *k*-mers, mismatch *k*-mers, STREME
-    motifs or CentriMo-style positional concentration means adding a `Featuriser` that emits a new
-    `kind` with its own `params`, with no change here or downstream:
+    - `name`: a legal Python identifier, which `__post_init__` checks. A language model copies the
+      naming conventions it is shown into the function names it writes, so a name such as
+      `upstream_-15nt_GC` would lead to code that does not compile.
+    - `description`: what the feature computes, in words. For a written feature it is the language
+      model's own description, which the judge and the recurrence analysis are shown.
+    - `kind`: what the feature computes, as a category such as `kmer`, `pwm_scan` or
+      `llm_generated`, which the analyses filter on. It also separates the candidates DEFT's
+      language model writes from the naive positional ones DEFT adds at every node, which DEFT's
+      `llm_split_share` counts.
+    - `params`: the recipe of a feature that is not code, such as `{"kmer": "GGT", "k": 3}`. It is
+      empty for written code.
+    - `source`: the function's code, for a feature that is code.
+    - `rationale`: for a feature a language model proposed, the model's stated reason why it might
+      predict the target. The judge is shown it.
+    - `origin`: whose method produced the feature: `seqmaestro` (`ORIGIN_SEQMAESTRO`), or the name
+      of a vendored method, such as `deft` or `igsr`.
+    - `importance`: the fitted model's own measure of how much it used the feature. Its unit
+      differs by model and is named once per file (`importance_kind`), so importances are compared
+      between arms only by rank (`seqmaestro.harness.features.rank_by_importance`).
+    - `permutation_importance`: how far the arm's headline metric falls when the feature's column
+      is shuffled on the validation rows: AUROC for a binary target, R-squared for a continuous one.
+      It is computed the same way for every arm, so unlike `importance` it means the same thing
+      across arms (`seqmaestro.harness.importance`). `None` where it was not computed.
+    - `direction`: which class the fitted model uses the feature to argue for, or which way it
+      moves a continuous target, in words every arm shares (`seqmaestro.harness.direction`). Each
+      model arrives at a direction by a different method, so the file names the basis once, in
+      `direction_kind`. `None` where the model has no basis for a direction, or where the feature
+      does not change its predictions.
+    - `marginal_effect`: how strongly the feature is associated with the target on its own, over
+      every training row against the real target: the rank-biserial correlation (`2 * AUC - 1`)
+      for a binary target, positive where higher values are more common in the positive class, and
+      Spearman's rho for a continuous one, positive where higher values go with a higher target. It
+      needs no model, so it describes the data, whereas `direction` describes what was fitted to
+      it. A disagreement between the two is a finding (`seqmaestro.harness.effect`).
+    - `provenance`: how the arm came to have the feature. `selected` means that the arm took it
+      from the pool it was handed, and `generated` that the arm constructed it while fitting, so
+      that no other arm on the same pool had it. Provenance is relative to the arm: a written
+      feature handed to a model in a pool is `selected` for that arm, because the arm only chose
+      it, whereas the same feature written during the fit of an arm on the iterative source is
+      `generated`. Whoever produces the record declares it, because inferring it would need a test
+      of whether a function lies in the span of the pool's columns, which is undecidable in general
+      and ill-defined for nonlinear features. `None` where the producer did not declare it.
+    - `extra`: what one method knows and the others do not, such as the nodes a DEFT feature splits
+      at or a discovered motif's matrix. It has no schema.
 
-        gapped_kmer   {"pattern": "GG.TCA", "k": 5, "n_gaps": 1}
-        pwm_scan      {"motif_id": "MA0139.1", "db": "JASPAR", "mode": "max"}
-
-    The optional fields fill in as a feature acquires history: `source` and `rationale` when a
-    model proposes it, `importance` and `direction` when a fitted model says how much it used it and
-    which way, and `marginal_effect` when its cell is scored.
-
-    **`kind` and `origin` are independent, and both are needed.** `kind` is what the feature
-    computes, and `origin` is whose method produced it (`"deft"`, `"seqmaestro"`). They differ where
-    the research question lies. An `llm_generated` feature proposed by DEFT and one proposed by our
-    own shared proposer have the same kind and different origins, and once features from several
-    runs pool into one library, `origin` is the only field that tells them apart. `kind` in turn
-    separates DEFT's LLM candidates from the naive positional ones it seeds every node with, which
-    is what DEFT's `llm_split_share` (in its provenance record) counts.
-
-    `extra` carries whatever a method knows and others do not, such as a tree depth, a split
-    threshold or the path from the root. It has no schema, because most methods have no depth or
-    threshold to record.
-
-    The record is flat and plain-typed because the arm that runs in a vendored method's own conda
-    environment cannot import this module, and has to write conforming JSON by hand (see
-    `seqmaestro.harness.features`).
+    `docs/developer/feature_record.md` says which producer fills each field, how the records reach
+    a run, and how a field is added.
     """
 
     name: str
@@ -112,25 +125,9 @@ class FeatureRecord:
     rationale: str | None = None
     origin: str | None = None
     importance: float | None = None
-    #: How far the arm's headline metric falls when this feature's column is shuffled on the
-    #: validation rows: AUROC for a binary target, R-squared for a continuous one. It is computed
-    #: the same way for every arm, so unlike `importance` it means the same thing across arms (see
-    #: `seqmaestro.harness.importance`). `None` where it was not computed.
     permutation_importance: float | None = None
-    #: Which class the fitted model uses this feature to argue for, or which way it moves a
-    #: continuous target, in words every arm shares (see `seqmaestro.harness.direction`). Each model
-    #: answers from different machinery, so the file names the basis once, in `direction_kind`, as
-    #: it does for `importance`. `None` where the model has no basis for a direction, or the feature
-    #: does not move the model.
     direction: str | None = None
-    #: How far the feature goes with the target *on its own*, over every training row against the
-    #: real target: the rank-biserial correlation (`2 * AUC - 1`) for a binary target, positive
-    #: meaning higher in the positive class, and Spearman's rho for a continuous one, positive
-    #: meaning higher values go with a higher target. It is computed the same way for every arm and
-    #: needs no model, so unlike `direction` it describes the data and not what was fitted to it. A
-    #: disagreement between the two is a finding (see `seqmaestro.harness.effect`).
     marginal_effect: float | None = None
-    #: `selected` or `generated` (see `PROVENANCES`). `None` where the producer did not declare it.
     provenance: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -145,21 +142,21 @@ class FeatureRecord:
 
 @dataclass(frozen=True, eq=False)
 class Inputs:
-    """The rows a featuriser reads: each row's sequence, and the covariates measured beside it.
+    """The rows a featuriser takes: each row's sequence and the covariates measured beside it.
 
     `seqmaestro.dataset.Columns.inputs` builds one from a split frame, using the columns
-    `dataset.json` records, so no stage picks the sequence or covariate columns out of a frame by
-    itself. `from_sequences` builds rows with no covariates, which is what a featuriser handed a
-    bare sequence column reads.
+    `dataset.json` records, so a stage never picks the sequence or covariate columns out of a frame
+    itself. `from_sequences` builds rows with no covariates, which is what a featuriser makes of a
+    bare sequence column.
 
-    Both parts are checked once, here. The sequences must be strings, none missing. The covariates
-    must be numbers, all finite, under names that are legal Python identifiers, because a generated
-    function indexes a covariate by name and a covariate's feature is named after it. They are held
-    as float64, in the order given, which is the order the dataset declares. A boolean becomes 0
-    or 1.
+    Both parts are checked once, here. Every sequence must be present and be a string. The
+    covariates must be finite numbers under names that are legal Python identifiers, because a
+    generated function indexes a covariate by name and a covariate's feature is named after it. They
+    are held as float64 (a boolean becomes 0 or 1), in the order given, which is the order the
+    dataset declares.
 
-    No column name is held for the sequences. A featuriser that reads `sequences` needs none. One
-    whose code indexes a column by name knows the name that code was written against, and builds
+    No column name is held for the sequences, because a featuriser that uses `sequences` needs none.
+    One whose code indexes a column by name knows the name that code was written against, and builds
     the frame it hands the code with `frame`.
     """
 
@@ -217,9 +214,10 @@ class Inputs:
     def select(self, covariates) -> Inputs:
         """These rows with only the named covariates, in the order named.
 
-        A featuriser that reads covariates records at `fit` which ones it read, and selects them
-        by name here when it transforms. So a fitted featuriser can be handed every covariate the
-        dataset declares, and rows that lack one it read are refused instead of misread.
+        A featuriser that uses covariates records at `fit` which ones it used, and selects them by
+        name here when it transforms. A fitted featuriser can therefore be handed every covariate
+        the dataset declares, and rows that lack one it used are refused instead of featurised
+        wrongly.
         """
         covariates = list(covariates)
         missing = [name for name in covariates if name not in self.covariates.columns]
@@ -231,11 +229,12 @@ class Inputs:
 
     def frame(self, sequence_column: str) -> pd.DataFrame:
         """The rows as one frame: the sequences under `sequence_column`, then the covariates under
-        their own names, indexed from 0. This is what a generated function is handed as `X`.
+        their names, indexed from 0. This is what a generated function is handed as `X`.
 
-        Built in one step and copied, which holds the covariates' columns together in memory. A
-        frame read from a CSV holds each column separately, and adding a column to one with more
-        than a hundred covariates makes pandas warn, on every call, that the frame is fragmented.
+        The frame is built in one step and copied, so the covariates' columns are held together in
+        memory. A frame read from a CSV holds each column separately, and adding a column to such a
+        frame with more than a hundred covariates makes pandas warn, on every call, that the frame
+        is fragmented.
         """
         if sequence_column in self.covariates.columns:
             raise ValueError(f"{sequence_column!r} names a covariate as well as the sequences.")
@@ -261,15 +260,16 @@ class Featuriser(ABC):
              sample_weight: np.ndarray | None = None) -> list[FeatureRecord]:
         """Learn from the training rows and return this featuriser's feature records, in column order.
 
-        `y` is the training labels, and most featurisers ignore it: a *k*-mer vocabulary and a
-        positional one-hot layout are properties of the sequences alone. It exists for featurisers
-        that cannot work without it. A language-model proposer shown no labels would propose the same
-        features for a permuted-label arm as for a real one, which would leave the permuted runs
-        with no noise-derived features and the judge with no negative controls.
+        `y` is the training labels, which most featurisers ignore, because a *k*-mer vocabulary and
+        a positional one-hot layout are properties of the sequences alone. It exists for featurisers
+        that cannot work without it. A language-model proposer shown no labels would propose the
+        same features for a permuted cell as for a real one, so the permuted cells would have no
+        features fitted to noise, and the judge would have no negative controls.
 
         `sample_weight` is the weight each training row is fitted with, where the design has
         weights. Only a featuriser that fits a model while it builds its columns uses it (the
-        iterative source), so that the fit it reports on is weighted as the arm's model is.
+        iterative source), so that the fit it shows the language model is weighted as the arm's
+        model is.
         """
 
     @abstractmethod
@@ -313,7 +313,7 @@ class Featuriser(ABC):
 
     def transform(self, inputs) -> pd.DataFrame:
         """The feature matrix for these rows, indexed as they are. Takes what `fit` takes."""
-        # Read before `_transform`, so an unfitted featuriser fails here with a clear message.
+        # Fetched before `_transform`, so an unfitted featuriser fails here with a clear message.
         # Otherwise an unfitted subclass reaches for fitted state and fails on whatever happens to
         # be None first, which says nothing about the real mistake.
         records = self.records
@@ -337,9 +337,9 @@ class Featuriser(ABC):
 
 
 class ComposedFeaturiser(Featuriser):
-    """Several featurisers side by side, their columns concatenated.
+    """Several featurisers whose columns are concatenated side by side.
 
-    Composition is why a pool of several members needs no implementation of its own:
+    Because featurisers compose, a pool of several sources needs no featuriser written for it:
     `positional+kmer` is the composition of `positional` and `kmer`.
     """
 
@@ -382,14 +382,14 @@ WRITTEN_SUFFIX = "written"
 
 
 def _under_a_free_name(record: FeatureRecord, taken: set[str]) -> FeatureRecord:
-    """A written feature under a name no earlier column of its pool has.
+    """A written feature renamed so that its name differs from every earlier column of its pool.
 
     A feature that is code is named by whoever wrote it, and a language model shown the pool's
     columns can name a function after one of them, such as `kmer_CG`. The two compute different
     things, so both are kept: the written one takes the suffix `_written`, numbered where that is
     taken too, and its record keeps the name it was proposed under in `extra["name_as_proposed"]`.
-    Two enumerated columns with one name are a different case, a conflict between recipes, and
-    `Featuriser.fit` refuses them.
+    Two enumerated columns with one name are a different case, a conflict between recipes, which
+    `Featuriser.fit` refuses.
     """
     name, count = f"{record.name}_{WRITTEN_SUFFIX}", 1
     while name in taken:
@@ -400,8 +400,8 @@ def _under_a_free_name(record: FeatureRecord, taken: set[str]) -> FeatureRecord:
 
 
 def as_inputs(inputs) -> Inputs:
-    """`inputs` as `Inputs`: an `Inputs` as it is, and anything else as the sequences alone, rows
-    with no covariates."""
+    """`inputs` as `Inputs`: an `Inputs` unchanged, and anything else as sequences alone (rows with
+    no covariates)."""
     return inputs if isinstance(inputs, Inputs) else Inputs.from_sequences(inputs)
 
 
@@ -429,7 +429,8 @@ def as_sequences(sequences) -> pd.Series:
 
 
 def alphabet_of(sequences: pd.Series) -> list[str]:
-    """The symbols actually present, sorted. Taken from the data rather than assumed to be ACGT."""
+    """The symbols present in the sequences, sorted. They are taken from the data instead of
+    assumed to be ACGT."""
     return sorted(set("".join(sequences)))
 
 
@@ -447,11 +448,12 @@ def count_dtype(maximum_possible_count: int) -> np.dtype:
 
 
 def check_symbols_are_nameable(alphabet: list[str]) -> None:
-    """Refuse any symbol that cannot be part of a column name, since column names are identifiers.
+    """Refuse any symbol that cannot be part of a column name, because column names are Python
+    identifiers.
 
-    Such a symbol is refused and not transliterated. The right replacement depends on what the
-    symbol means in the data (a gap, an ambiguity code, a mask), and one invented here would be
-    arbitrary and invisible.
+    Such a symbol is refused instead of transliterated, because the right replacement depends on
+    what the symbol means in the data (a gap, an ambiguity code, a mask), and one invented here
+    would be arbitrary and invisible.
     """
     illegal = [symbol for symbol in alphabet if not IDENTIFIER.match(f"x{symbol}")]
     if illegal:

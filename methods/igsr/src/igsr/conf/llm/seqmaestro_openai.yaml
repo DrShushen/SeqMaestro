@@ -4,3 +4,11 @@
 kind: openai
 deployment: ${oc.env:SEQMAESTRO_OPENAI_MODEL}
 api_key: ${oc.env:SEQMAESTRO_OPENAI_KEY}
+
+# How a call is made, which SeqMaestro's arm states from the run's config (`language_model`): the
+# reasoning effort every call states, the retries after a call that failed, and the seconds a
+# reply is waited for. Null states no effort, and leaves the retries to the agent's own and the
+# wait to LiteLLM's.
+reasoning_effort: null
+num_retries: null
+request_timeout: null

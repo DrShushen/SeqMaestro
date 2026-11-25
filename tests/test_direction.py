@@ -1,8 +1,8 @@
-"""Which way a feature points: the shared vocabulary, and each model's route to it.
+"""Which way a feature points: the shared vocabulary and each model's route to it.
 
-A direction is worth recording only if two things hold. Every model must reach the same word from
-its own machinery (a coefficient, a shape function, an attribution). A model must also be able to
-say that there is no single direction, instead of reporting a net trend that hides a reversal.
+A direction is worth recording only if two things hold. Every model must reach the same word,
+whatever its machinery (a coefficient, a shape function, an attribution). A model must also be able
+to say that there is no single direction, instead of reporting a net trend that hides a reversal.
 Both are checked here on data where the answer is known by construction.
 """
 
@@ -37,7 +37,7 @@ def planted(n=400, length=40, seed=0):
     """Sequences whose class is decided by the GC content of their first quarter.
 
     The signal runs in one direction and in known columns, so a direction that comes out the other
-    way is a bug and not an artefact of the data.
+    way is a bug instead of an artefact of the data.
     """
     rng = np.random.default_rng(seed)
     seqs = pd.Series(["".join(rng.choice(list("ACGT"), length)) for _ in range(n)])
@@ -66,7 +66,8 @@ def test_the_shared_primitive_reads_a_sequence_of_steps(increments, expected):
 
 
 def test_a_feature_that_moves_the_model_nowhere_has_no_direction():
-    """A flat response is the absence of a direction, so it gives `None` and not one of the words."""
+    """A flat response is the absence of a direction, so it gives `None` instead of one of the
+    words."""
     assert from_increments([0.0, 0.0], BINARY_WORDS) is None
     assert from_increments([], BINARY_WORDS) is None
 
@@ -117,7 +118,8 @@ def test_a_feature_that_separates_nothing_scores_zero():
 
 def test_the_marginal_effect_is_unmoved_by_a_monotone_reparameterisation():
     """A count and a fraction of the same thing over the same window are one feature. A rank
-    statistic scores them alike and a difference of means does not, so the effect uses ranks."""
+    statistic scores them alike, whereas a difference of means does not, so the effect uses
+    ranks."""
     rng = np.random.default_rng(0)
     y = rng.integers(0, 2, 200)
     values = rng.normal(size=(200, 1)) + y[:, None]
@@ -172,7 +174,7 @@ def test_every_point_of_a_curve_is_a_bin_of_rows_and_the_largest_value_is_in_the
 
 def test_rows_that_share_a_value_share_a_bin():
     """A feature that is zero on most rows gives one point for its zeros and the others for the
-    rows above them, where edges at the quantiles of its values would all fall on zero."""
+    rows above them, whereas edges at the quantiles of its values would all fall on zero."""
     x = np.array([0.0] * 90 + list(range(1, 11)))
     curve = dependence_curve(x, np.where(x > 0, 1.0, 0.0))
     assert curve.tolist() == [0.0, 1.0]
@@ -210,7 +212,7 @@ def test_a_model_agrees_with_the_data_where_the_signal_was_planted(model_name):
     only if the words come out the same on a signal every model can see.
 
     The check uses the features each model relied on most, as ranked by its importance, because a
-    direction read from a feature the model barely used reflects noise.
+    direction taken from a feature the model barely used reflects noise.
     """
     seqs, y = planted()
     X = make_featuriser("positional").fit_transform(seqs, y)
@@ -239,8 +241,9 @@ def test_a_linear_fit_can_never_be_non_monotone():
 
 
 def test_the_boosted_model_refuses_a_frame_it_was_not_fitted_on():
-    """TreeSHAP columns are read positionally, so a frame with different columns would attribute
-    one feature's contributions to another. XGBoost's own feature-name check prevents that."""
+    """TreeSHAP's columns are matched to features by position, so a frame with different columns
+    would attribute one feature's contributions to another. XGBoost's feature-name check prevents
+    that."""
     seqs, y = planted()
     featuriser = make_featuriser("positional")
     X = featuriser.fit_transform(seqs, y)

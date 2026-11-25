@@ -1,9 +1,9 @@
-"""Permutation importance, the importance that means the same thing for every arm.
+"""Permutation importance, which means the same thing for every arm.
 
-Each model's importance cannot be compared with another model's. That is fine while an
-analysis compares an arm with itself, but not when it asks whether several arms found the same
-thing. These tests cover the measure that answers the second question: what it reports, what it
-refuses, and that it leaves the caller's frame alone.
+A model's own importance cannot be compared with another model's. That is fine while an analysis
+compares an arm with itself, but not when it judges whether several arms found the same thing.
+These tests cover the measure used for that comparison: what it reports, what it refuses, and that
+it leaves the caller's frame unchanged.
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ def test_the_column_a_model_uses_carries_the_drop():
     X, y = frame()
     scores = permutation_importance(UsesOneColumn("signal"), X, y,
                                     repeats=3, rng=np.random.default_rng(1))
-    assert scores["signal"] > 0.3, "shuffling what the model scores on must cost it"
-    assert abs(scores["ignored"]) < 0.05, "a column the model never reads cannot matter"
+    assert scores["signal"] > 0.3, "shuffling the column the model scores on must lower its score"
+    assert abs(scores["ignored"]) < 0.05, "a column the model never uses cannot matter"
 
 
 def test_the_callers_frame_is_untouched():
@@ -88,7 +88,7 @@ def test_only_the_columns_asked_for_are_measured():
 
 
 def pool(n: int = 240) -> pd.DataFrame:
-    """Indicators, counts and continuous columns, the types a pool's columns come in."""
+    """A frame with the column types a pool holds: indicators, counts and continuous columns."""
     rng = np.random.default_rng(3)
     return pd.DataFrame({"indicator": rng.integers(0, 2, n).astype(np.uint8),
                          "count": rng.integers(0, 6, n),
@@ -125,8 +125,8 @@ def test_a_model_predicts_the_same_from_any_frame_of_its_columns(kind, name):
 
 @pytest.mark.parametrize(("kind", "name"), [*MODELS, (CONTINUOUS, "least_squares")])
 def test_a_model_refuses_columns_other_than_its_own(kind, name):
-    """The names and their order are checked before the values are used, as the libraries checked
-    them when they were handed the frame."""
+    """The names and their order are checked before the values are used, as a library checks them
+    when it is handed a frame."""
     model, X = fitted(kind, name)
     with pytest.raises(ValueError, match="another order"):
         model.predict(X[list(reversed(X.columns))])
@@ -136,8 +136,8 @@ def test_a_model_refuses_columns_other_than_its_own(kind, name):
 
 @pytest.mark.parametrize(("kind", "name"), MODELS)
 def test_the_importance_is_what_shuffling_the_frame_gives(kind, name):
-    """The importance shuffles one array and predicts from it. Shuffling a copy of the frame one
-    column at a time, with the same generator, gives the same numbers."""
+    """The measure shuffles one array and predicts from it. Shuffling a copy of the frame one column
+    at a time, with the same generator, must give the same numbers."""
     model, X = fitted(kind, name)
     y = target(X, kind)
     computed = permutation_importance(model, X, y, repeats=2, rng=np.random.default_rng(5))

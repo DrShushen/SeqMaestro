@@ -2,9 +2,9 @@
 Page layout for the PDF: where a page break falls, and which figures get a rotated page.
 
 The report is plain markdown and says nothing about page geometry, because the same document
-renders on a web page, in a portrait PDF and in a landscape one, and only the PDFs care how wide a
-panel is. So the decision arrives as metadata: `wide-figures`, a comma-separated list of image file
-names that `build_report_figures.py` measured as too wide.
+renders on a web page, in a portrait PDF and in a landscape one, and only the PDFs depend on how
+wide a panel is. So the decision is passed in as metadata: `wide-figures`, a comma-separated list
+of image file names that `build_report_figures.py` measured as too wide.
 
 `pdflscape` turns the page in the viewer and leaves the text block alone, so a figure inside it at
 `\linewidth` comes out the width it would have been in portrait, only turned. The horizontal extent
@@ -14,7 +14,7 @@ of the turned page is the paper height less the margins, and `render_pdf.sh` pas
 `page-break-before` is a Lua pattern matched against level 1 and 2 headings, so the appendices start
 on a fresh page without the report saying so.
 
-Both happen only on the LaTeX path. Any other output format sees the document unchanged.
+Both happen only on the LaTeX path, so any other output format gets the document unchanged.
 ]]
 
 local wide = {}
@@ -23,7 +23,7 @@ local resource_dir = nil
 local figure_width = "\\linewidth"
 local break_before = nil
 
---- Characters LaTeX reads as syntax, in a caption that arrives as plain text.
+--- Escape the characters LaTeX treats as syntax in a caption that arrives as plain text.
 local function escape(text)
   return (text:gsub("([&%%%$#_{}])", "\\%1"):gsub("~", "\\textasciitilde{}")
               :gsub("%^", "\\textasciicircum{}"))

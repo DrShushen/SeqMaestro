@@ -1,31 +1,15 @@
-"""An arm's candidates (`Pool`): every feature its selection could have chosen, over the rows of D.
+"""An arm's candidates (`Pool`): every feature its selection could have chosen, over the rows of D
+(the training and validation rows).
 
-**The candidates are what the arm's model was offered, not only what it kept.** This makes Tier 1
-a statement about the whole selection and not only its last step. A positional arm is offered
-every (position, symbol) indicator and keeps few of them, so a profile over those few would say
-nothing about the step that discarded the rest. Holding every candidate also makes the
-position-level summary possible, since grouping a position's indicators needs all of them.
-
-| arm | candidates | evaluated by |
-|---|---|---|
-| a Core model | the whole vocabulary of the featuriser the source cell saved, every round's | that featuriser |
-| `deft_or_cart`, CART | DEFT's naive candidate population, as its tree's root was offered it | DEFT, on its side |
-| `deft_or_cart`, DEFT | the features its tree split on | DEFT, on its side |
-| `igsr` | every term its search accepted, at every node | IGSR, on its side |
-
-The tree is CART on a pool without `llm_generated_joint` and DEFT on one with it
-(`seqmaestro.arms`). The DEFT row departs from this, and cannot be brought into line without
-calling a language model. Its generative finder wrote its candidates node by node, conditioned on
-the rows reaching each node, so they never existed as a set. Its profile is therefore over
-candidates that are already the model's output, which makes its Tier 1 optimistic by construction,
-and every record of the arm says so (`RECORDED_CAVEAT`).
-
-No feature is re-implemented here: each column is computed, in float64, by the Stage 2 model's
-featuriser, by DEFT's feature function, or by IGSR's evaluation of its terms.
+The candidates are everything the arm's model was offered, including what it discarded.
+`docs/developer/reliability.md` says which they are for each kind of arm, and why DEFT's make its
+Tier 1 optimistic, which every record of such an arm says (`RECORDED_CAVEAT`). Features are not
+reimplemented here: each column is computed, in float64, by the Stage 2 model's featuriser, by
+DEFT's feature function, or by IGSR's evaluation of its terms.
 
 Candidates computed in another environment are saved as `pool.npz` (`Pool.save`, `Pool.load`): the
 names, kinds, parameters and descriptions, the values, where the candidates come from (`source`),
-and the row identifiers, which are checked on reading to be every row handed over, in order.
+and the row identifiers, which are checked on loading to be every row handed over, in order.
 """
 
 from __future__ import annotations
@@ -37,6 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from seqmaestro.features.base import Featuriser, Inputs
+from seqmaestro.features.motif import MOTIF_DISCOVERED
 from seqmaestro.harness.runner import evaluate_columns
 from seqmaestro.reliability.prefilter import position_group
 
@@ -46,11 +31,16 @@ NAIVE_CANDIDATES = "naive_candidates"
 RECORDED_FEATURES = "recorded_features"
 SEARCH_HISTORY = "search_history"
 
-#: The caveat that candidates taken from the recorded features carry wherever they are reported.
+#: The caveat attached to candidates taken from the recorded features, wherever they are reported.
 RECORDED_CAVEAT = (
     "The pool is the features the tree split on: the generative finder wrote its candidates node "
     "by node and never held them as a set, so this pool is already the model's output and its "
     "Tier 1 is optimistic by construction.")
+
+#: The caveat attached to a pool holding discovered motifs, wherever it is reported.
+DISCOVERED_CAVEAT = (
+    "The discovered motifs among the candidates were found in the source cell's fitting rows, with "
+    "their labels, and those rows are part of D, so Tier 1 is optimistic for them.")
 
 
 @dataclass
@@ -100,12 +90,21 @@ class Pool:
                        descriptions=[str(text) for text in saved["descriptions"]],
                        values=np.asarray(saved["values"], dtype=float), source=str(saved["source"]))
 
+    def caveat(self) -> str | None:
+        """What a reader of the pool's Tier 1 must be told, or `None`: that the candidates are a
+        tree's output, that some were discovered using the labels of rows in D, or both."""
+        found = [RECORDED_CAVEAT] if self.source == RECORDED_FEATURES else []
+        if any((params or {}).get("source") == MOTIF_DISCOVERED for params in self.params):
+            found.append(DISCOVERED_CAVEAT)
+        return " ".join(found) or None
+
     def position_groups(self) -> list[str]:
         return [position_group(kind, params) for kind, params in zip(self.kinds, self.params, strict=True)]
 
 
 def from_featuriser(featuriser: Featuriser, inputs: Inputs) -> Pool:
-    """One of our arms' candidates: its featuriser's whole vocabulary, evaluated on these rows."""
+    """The candidates of an arm fitted in Core: its featuriser's whole vocabulary, evaluated on these
+    rows."""
     records = list(featuriser.records)
     names = [record.name for record in records]
     return Pool(names=names, kinds=[record.kind for record in records],

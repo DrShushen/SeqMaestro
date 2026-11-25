@@ -1,9 +1,9 @@
-"""Tree-walking in the DEFT adapter, tested without DEFT.
+"""The DEFT adapter and the Core side of a DEFT arm, tested without DEFT.
 
-The adapter runs in DEFT's environment. The code tested here walks a tree structurally and never
-imports `deft`, so stand-in nodes can exercise it in this environment. The adapter must get right
-which nodes count as a selected feature, because a count that is too high looks like a richer
-method and not like a bug.
+The adapter runs in DEFT's environment, whereas the code tested here never imports `deft`: it walks
+a tree structurally, so stand-in nodes can exercise it in this environment. The adapter must get
+right which nodes count as a selected feature, because a count that is too high looks like a richer
+method instead of a bug.
 """
 
 from __future__ import annotations
@@ -19,6 +19,9 @@ import pandas as pd
 import pytest
 
 from seqmaestro.dataset import Columns
+from seqmaestro.features import make_featuriser
+from seqmaestro.motifs import Collection
+from seqmaestro.proposer.prompt import GUIDANCE_INTRODUCTION as PROPOSER_GUIDANCE_INTRODUCTION
 from seqmaestro.target import BINARY
 
 ADAPTER = Path(__file__).resolve().parents[1] / "experiments" / "adapters" / "deft_bundle.py"
@@ -51,15 +54,15 @@ def a_tree(root, target_kind="binary", **attributes):
 
 
 def adapter_feature_positional():
-    """One naive candidate as DEFT's own sequence enumeration names and renders it."""
+    """One naive candidate as DEFT's sequence enumeration names and renders it."""
     return feature("pos_50_is_A", origin="naive")
 
 
 def test_leaves_are_not_selected_features():
-    """A leaf can carry a feature left over from a search that declined to split there.
+    """A leaf can hold a feature left over from a search that declined to split there.
 
-    Counting it would invent a feature the tree never uses, unnamed and with an unknown origin, so
-    a depth-1 tree would report two features for one split.
+    Counting it would invent a feature the tree never uses, unnamed and of unknown origin, so a
+    depth-1 tree would report two features for one split.
     """
     leaf = node(feature(None, origin="unknown"))
     tree = a_tree(root=node(feature("real_split"), left=leaf, right=node()))
@@ -69,8 +72,9 @@ def test_leaves_are_not_selected_features():
 
 
 def test_a_proposed_name_that_is_not_an_identifier_is_made_legal_and_kept_as_proposed():
-    """DEFT keeps the name a language model proposed, which can hold a hyphen. SeqMaestro refuses a
-    record under such a name, so the cell would fail after its tree had been grown."""
+    """DEFT keeps the name a language model proposed, which can hold a hyphen, whereas SeqMaestro
+    refuses a record under such a name. Without the renaming, the cell would fail after its tree
+    had been grown."""
     tree = a_tree(root=node(feature("Half-window_CpG_imbalance", origin="llm"),
                             left=node(feature("Half_window_CpG_imbalance"), left=node(), right=node()),
                             right=node(feature("3prime-GC", origin="llm"), left=node(), right=node())))
@@ -117,10 +121,11 @@ def test_a_feature_winning_twice_is_one_record_carrying_both_nodes():
 
 
 def test_importance_is_absent_until_the_rows_have_been_routed():
-    """`importance` is a share of impurity reduction, which needs coverage the tree does not store.
+    """`importance` is a share of impurity reduction, which needs each node's coverage (how many
+    rows reach it), and the tree does not store coverage.
 
-    The split score must not fill the gap. It is a node's local purity, valid for choosing among
-    candidates at one node and meaningless across nodes of different sizes.
+    The split score must not fill the gap, because it is a node's local purity: valid for choosing
+    among candidates at one node, and meaningless across nodes of different sizes.
     """
     tree = a_tree(root=node(feature("f", score=0.9), left=node(), right=node()))
     assert adapter.collect_features(tree)[0]["importance"] is None
@@ -141,8 +146,8 @@ def test_origin_is_the_method_and_kind_is_how_the_feature_was_proposed():
     """`origin` says whose method produced a feature and `kind` says how it was proposed, and this
     adapter must keep the two apart.
 
-    Writing DEFT's internal `llm`/`naive` into `origin` would make the field mean the method on the
-    SeqMaestro arms and the way of proposing here. Our own proposer shows why that fails, because
+    Writing DEFT's internal `llm`/`naive` label into `origin` would make the field mean the method
+    on SeqMaestro's arms but the way of proposing here. SeqMaestro's proposer shows why that fails:
     its features are `seqmaestro` by method and `llm` by way of proposing.
     """
     tree = a_tree(root=node(
@@ -155,12 +160,12 @@ def test_origin_is_the_method_and_kind_is_how_the_feature_was_proposed():
     assert {r["origin"] for r in by_name.values()} == {"deft"}, "origin is the method, always"
     assert by_name["generated"]["kind"] == "llm_generated"
     assert by_name["generated"]["provenance"] == "generated"
-    # Not a recognised positional name, so it is a column we supplied: its kind travels in the pool
-    # manifest and is not guessed here.
+    # Not a recognised positional name, so it is a column SeqMaestro supplied, whose kind is
+    # recorded in the pool's manifest instead of being guessed here.
     assert by_name["enumerated"]["kind"] == "unknown"
     assert by_name["enumerated"]["provenance"] == "selected"
 
-    # DEFT's own label is kept in `extra`, which holds what only one method knows.
+    # DEFT's label is kept in `extra`, which holds what only one method knows.
     assert by_name["generated"]["extra"]["deft_origin"] == "llm"
 
 
@@ -172,17 +177,18 @@ def test_an_unrecognised_deft_origin_is_marked_unknown_rather_than_guessed():
 
 
 # --------------------------------------------------------------------------------------------
-# Which dataset DEFT is told it is looking at: SeqMaestro supplies this, not the vendored method
+# Which dataset DEFT is told it is looking at: SeqMaestro supplies this to the vendored method
 # --------------------------------------------------------------------------------------------
 
 
-def resolve(task, tmp_path, config_dir=None, dataset_dir=None, target_kind="binary"):
+def resolve(task, tmp_path, config_dir=None, dataset_dir=None, target_kind="binary", guidance=None):
     return adapter.resolve_task(
         task,
         config_dir if config_dir is not None else adapter.TASK_CONFIG_DIR,
         dataset_dir if dataset_dir is not None else adapter.DATASET_DIR,
         generate_into=tmp_path,
         target_kind=target_kind,
+        guidance=guidance,
     )
 
 
@@ -222,8 +228,8 @@ def described(tmp_path, name="promoters"):
 
 def test_a_hand_written_config_wins_over_a_generated_one(tmp_path):
     """A hand-written config exists to reproduce published prompts. It is used whenever it exists,
-    with no extra flag, because a forgotten flag would swap the paper's wording for generated
-    wording and the run would still complete normally."""
+    with no extra flag, because a forgotten flag would replace the published wording with generated
+    wording, and the run would still complete normally."""
     written = tmp_path / "conf"
     (written / adapter.TASK_GROUP).mkdir(parents=True)
     (written / adapter.TASK_GROUP / "promoters.yaml").write_text("defaults: [default, _self_]\n")
@@ -237,8 +243,8 @@ def test_a_hand_written_config_wins_over_a_generated_one(tmp_path):
 
 
 def test_an_unknown_task_fails_before_anything_is_spent(tmp_path):
-    """Left to hydra, an unknown task surfaces as a composition error inside a subprocess, after
-    an LLM arm has already started paying for API calls."""
+    """Left to hydra, an unknown task would surface as a composition error inside a subprocess,
+    after an arm that calls a language model had already started paying for API calls."""
     with pytest.raises(SystemExit) as excinfo:
         resolve("no_such_dataset", tmp_path / "out", config_dir=tmp_path / "conf",
                 dataset_dir=described(tmp_path))
@@ -248,9 +254,35 @@ def test_an_unknown_task_fails_before_anything_is_spent(tmp_path):
     assert "promoters" in message, "it should say what is available"
 
 
+def test_the_guidance_ends_the_dataset_information_every_prompt_states(tmp_path):
+    """DEFT's prompts interpolate the dataset information, so the guidance, introduced in the words
+    the proposer's requests use, reaches each of them."""
+    import yaml
+
+    asked = "Write each feature as a ratio of two counts."
+    resolve("promoters", tmp_path / "out", dataset_dir=described(tmp_path), guidance=asked)
+    written = yaml.safe_load((tmp_path / "out" / "params_generation" / "promoters.yaml").read_text())
+    assert written["dataset_info"].endswith(f"{adapter.GUIDANCE_INTRODUCTION} {asked}")
+    assert written["dataset_info"].startswith("Predicting whether transcription initiates.")
+    assert adapter.GUIDANCE_INTRODUCTION == PROPOSER_GUIDANCE_INTRODUCTION
+
+
+def test_guidance_is_refused_where_it_could_not_reach_the_prompts(tmp_path):
+    """A hand-written config fixes its wording, and with no task there is no config to hold the
+    guidance, so in either case a run's guidance would be silently lost."""
+    written = tmp_path / "conf"
+    (written / adapter.TASK_GROUP).mkdir(parents=True)
+    (written / adapter.TASK_GROUP / "promoters.yaml").write_text("defaults: [default, _self_]\n")
+    with pytest.raises(SystemExit, match="hand-written"):
+        resolve("promoters", tmp_path / "out", config_dir=written, dataset_dir=described(tmp_path),
+                guidance="Use ratios.")
+    with pytest.raises(SystemExit, match="needs --task"):
+        resolve(None, tmp_path, guidance="Use ratios.")
+
+
 def test_no_task_means_defts_own_task_neutral_prompts(tmp_path):
-    """The CART arm never prompts, so running with no task is valid, and DEFT then uses its own
-    task-neutral prompts."""
+    """The CART arm never calls a language model, so running with no task is valid, and DEFT then
+    uses its default task-neutral prompts."""
     assert resolve(None, tmp_path) == ([], "deft default (task-neutral)")
 
 
@@ -268,8 +300,8 @@ def test_a_hand_written_config_inherits_rather_than_replaces():
 
 
 def test_a_hand_written_config_agrees_with_the_dataset_description():
-    """A hand-written config restates the sequence layout in its own prose, so it and the dataset
-    description can drift apart silently, because both files stay valid.
+    """A hand-written config restates the sequence layout in its own prose, so it can drift apart
+    from the dataset description without either file becoming invalid.
 
     The test compares the numbers in the layout (how long the window is and where the site sits),
     because a generated feature's positions are interpreted against them.
@@ -294,13 +326,12 @@ def test_a_hand_written_config_agrees_with_the_dataset_description():
 
 def test_a_withheld_fact_does_not_reach_the_vendored_method(tmp_path):
     """DEFT's generative finder proposes features, so, like the proposer, it must not see a fact
-    withheld from the proposing side.
+    withheld from the models that write features.
 
-    The config is generated from the same description the judge reads, and that description may
-    carry a fact only the judge is told. This test pins the behaviour instead of relying on the
-    template's field list, because an edit that widened the list would leak silently: the run
-    would still complete, and only a reader who knew the dataset was blinded could tell the result
-    was worthless.
+    The config is generated from the task description, which may hold a fact that only the judge
+    is told (`judge_only`). This test pins the behaviour instead of relying on the template's field
+    list, because an edit that widened the list would leak silently: the run would still complete,
+    and only a reader who knew the dataset was blinded could tell the result was worthless.
     """
     description = {
         "task": "Predicting a thing.",
@@ -308,7 +339,7 @@ def test_a_withheld_fact_does_not_reach_the_vendored_method(tmp_path):
         "target_name": "thing-ness",
         "judge_only": "The factor is Widgetin-4.",
     }
-    adapter.generate_task_config(description, "thing", tmp_path, "binary")
+    adapter.generate_task_config(description, "thing", tmp_path, "binary", None)
     written = (tmp_path / adapter.TASK_GROUP / "thing.yaml").read_text()
 
     assert "Predicting a thing." in written
@@ -316,13 +347,13 @@ def test_a_withheld_fact_does_not_reach_the_vendored_method(tmp_path):
 
 
 def test_the_vendored_method_describes_no_dataset():
-    """DEFT ships only task-neutral prompts, one config per kind of target, because a method that
-    carried a description of one dataset would have to be edited to run another. They are the
-    configs the generated ones inherit."""
+    """DEFT ships only task-neutral prompts (one config per kind of target), because a method that
+    held a description of one dataset would have to be edited to run another. The generated configs
+    inherit these."""
     shipped = Path(__file__).resolve().parents[1] / "methods" / "deft" / "src" / "deft" / "conf"
     names = {p.stem for p in (shipped / "params_generation").glob("*.yaml")}
     assert names == set(adapter.PROMPTS_FOR.values()), \
-        f"a dataset description is back inside the method: {names}"
+        f"a dataset description is inside the method: {names}"
 
 
 def test_an_empty_tree_yields_no_features():
@@ -330,8 +361,8 @@ def test_an_empty_tree_yields_no_features():
 
 
 def test_a_feature_that_raises_becomes_nan_not_a_crash():
-    """Generated code is expected to be imperfect, so one feature that raises must not cost the
-    others."""
+    """Generated code is expected to be imperfect, so one feature that raises an error must not
+    prevent the others from being evaluated."""
     def explodes(X):
         raise RuntimeError("bad generated code")
 
@@ -374,7 +405,7 @@ def test_the_adapter_declares_the_contract_version_the_harness_expects():
 
 
 def test_a_naive_positional_split_is_reported_as_the_recipe_not_as_code():
-    """DEFT renders a positional split as a function, and SeqMaestro renders it as
+    """DEFT renders a positional split as a function, whereas SeqMaestro renders it as
     `{position, symbol}`.
 
     `definition_digest` hashes normalised source when a record has source, and `{kind, params}`
@@ -391,9 +422,9 @@ def test_a_naive_positional_split_is_reported_as_the_recipe_not_as_code():
 
 
 def test_deft_and_our_own_positional_features_hash_alike():
-    """Comparing DEFT's positional features with ours depends on this. Without matching digests,
-    the two arms could only be said to have found features that behave alike, and not the same
-    feature."""
+    """Comparing DEFT's positional features with SeqMaestro's depends on this. Without matching
+    digests, the two arms could be said to have found only features that behave alike, instead of
+    the same feature."""
     from seqmaestro.features import PositionalFeaturiser
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import definition_digest
@@ -405,13 +436,13 @@ def test_deft_and_our_own_positional_features_hash_alike():
     ours = {r.params["position"]: r for r in ours if r.params["symbol"] == "A"}[50]
 
     assert definition_digest(theirs) == definition_digest(ours)
-    assert theirs.name != ours.name, "and it holds despite the names differing, as they always did"
+    assert theirs.name != ours.name, "the digests agree although the names differ"
 
 
 def test_a_threshold_is_a_property_of_the_node_not_of_the_feature():
     """The threshold is recorded per node and kept out of `params`. Every naive split has the same
-    0.5 threshold, so in `params` it would describe no feature, and records holding only it would
-    all hash alike under one kind."""
+    0.5 threshold, so in `params` it would not describe any feature, and records holding only the
+    threshold would all hash alike under one kind."""
     tree = a_tree(root=node(adapter_feature_positional(), left=node(), right=node()))
     record = adapter.collect_features(tree)[0]
     assert "threshold" not in record["params"]
@@ -419,7 +450,7 @@ def test_a_threshold_is_a_property_of_the_node_not_of_the_feature():
 
 
 # --------------------------------------------------------------------------------------------
-# Which pools a DEFT arm can be given. Others are refused up front, before anything is spent
+# Which pools a DEFT arm can be given. Others are refused up front, before any fit starts
 # --------------------------------------------------------------------------------------------
 
 
@@ -436,18 +467,28 @@ def test_a_pool_without_positional_is_refused():
 
 
 def test_the_pools_deft_can_be_given_and_what_is_computed_for_each():
-    """`positional` DEFT derives itself, the covariates are handed over as the data they are, the
-    k-mers are computed on this side as columns, and the features DEFT's generative finder writes
-    choose that finder. The k-mers are not handed to the generative finder, whose prompts show every
-    column it is given (`seqmaestro.arms`)."""
+    """DEFT derives `positional` itself, the covariates are handed over as data, and the k-mers and
+    both motif sources are computed on this side as columns. A pool holding the features that
+    DEFT's generative finder writes (`llm_generated_joint`) selects that finder. Neither the k-mers
+    nor the known motifs are handed to the generative finder, whose prompts show every column it is
+    given (`seqmaestro.arms`), whereas the tens of motifs a discovery finds are."""
     runner = deft_runner()
-    assert runner.DEFT_POOLS == ("positional", "positional+kmer", "positional+covariates",
-                                 "positional+kmer+covariates", "positional+llm_generated_joint",
-                                 "positional+llm_generated_joint+covariates")
-    assert [runner.supplied_members(pool) for pool in runner.DEFT_POOLS] == [
-        (), ("kmer",), (), ("kmer",), (), ()]
+    enumerated = ("positional", "positional+kmer", "positional+motif_known",
+                  "positional+motif_discovered", "positional+kmer+motif_known",
+                  "positional+kmer+motif_discovered", "positional+motif_known+motif_discovered",
+                  "positional+kmer+motif_known+motif_discovered")
+    written = ("positional+llm_generated_joint", "positional+motif_discovered+llm_generated_joint")
+    assert (*enumerated, *(f"{pool}+covariates" for pool in enumerated),
+                                 *written, *(f"{pool}+covariates" for pool in written)) == runner.DEFT_POOLS
+    assert [runner.supplied_members(pool) for pool in enumerated] == [
+        (), ("kmer",), ("motif_known",), ("motif_discovered",), ("kmer", "motif_known"),
+        ("kmer", "motif_discovered"), ("motif_known", "motif_discovered"),
+        ("kmer", "motif_known", "motif_discovered")]
+    assert [runner.supplied_members(f"{pool}+covariates") for pool in enumerated] == [
+        runner.supplied_members(pool) for pool in enumerated], "the covariates are handed as data"
+    assert [runner.supplied_members(pool) for pool in written] == [(), ("motif_discovered",)]
     assert [runner.finder_for(pool) for pool in runner.DEFT_POOLS] == [
-        "cart", "cart", "cart", "cart", "default", "default"]
+        *["cart"] * 16, *["default"] * 4]
 
 
 # --------------------------------------------------------------------------------------------
@@ -534,7 +575,8 @@ def test_node_statistics_recover_coverage_and_a_true_decrease():
     stats = adapter.node_statistics(tree, X, y)
     adapter.check_node_statistics(stats)
 
-    # 1 - ((2/8)^2 + (6/8)^2) = 0.375 at the root; the left child holds 2/2 and the right is pure.
+    # 1 - ((2/8)^2 + (6/8)^2) = 0.375 at the root. The left child holds two rows of each class, and
+    # the right child is pure.
     assert stats[""]["n_samples"] == 8
     assert stats[""]["impurity_decrease"] == pytest.approx(0.375 - 0.5 * 0.5 - 0.5 * 0.0)
 
@@ -629,8 +671,8 @@ def test_routing_reproduces_the_trees_own_predictions():
 
 
 def test_two_nodes_may_share_a_feature_name_and_not_a_function():
-    """DEFT attaches a feature to each node, so one name can carry two different callables, such
-    as a signed quantity at one node and its sign-flipped twin at another.
+    """DEFT attaches a feature to each node, so one name can stand for two different callables,
+    such as a signed quantity at one node and its sign-flipped twin at another.
 
     Caching a routed column by name alone would send the second node through the first node's
     values, and `check_tree_predictions` catches that only when the substitution happens to change
@@ -675,7 +717,8 @@ def test_permuting_a_feature_costs_the_tree_its_separation():
     scores = adapter.permutation_importances(tree, X, y, ["a"], repeats=5,
                                              rng=np.random.default_rng(0))
 
-    # The tree separates the classes perfectly, so shuffling its only feature must cost most of it.
+    # The tree separates the classes perfectly, so shuffling its only feature must lose most of
+    # that separation.
     assert scores["a"] > 0.3
 
 
@@ -720,8 +763,8 @@ def test_node_statistics_record_the_class_rate_on_each_side_of_a_split():
 
     stats = adapter.node_statistics(tree, X, y)
 
-    # Left is `<= threshold`, matching how the rows are routed, so a higher rate on the right is
-    # a feature running with the positive class.
+    # Left is `<= threshold`, matching how the rows are routed, so a higher rate on the right means
+    # that the feature runs with the positive class.
     assert stats[""]["rate_left"] == pytest.approx(0.5)
     assert stats[""]["rate_right"] == pytest.approx(1.0)
 
@@ -753,7 +796,7 @@ def test_a_regression_trees_nodes_record_the_targets_mean_on_each_side():
     assert stats[""]["mean_left"] == pytest.approx(1.5)
     assert stats[""]["mean_right"] == pytest.approx(5.5)
     assert "rate_left" not in stats[""]
-    # The split leaves the variance within the sides, 0.25, of the root's 4.25.
+    # The split leaves a variance of 0.25 within the sides, out of the root's 4.25.
     assert stats[""]["impurity_decrease"] == pytest.approx(1.0 - 0.25 / 4.25)
     assert record["direction"] == "increases_target"
     assert record["importance"] == pytest.approx(1.0)
@@ -778,13 +821,13 @@ def test_a_regression_trees_permutation_importance_is_lost_r_squared():
     scores = adapter.permutation_importances(tree, X, y, ["a"], repeats=5,
                                              rng=np.random.default_rng(0))
 
-    # The tree explains every row, R-squared 1, and a shuffle leaves about half the rows wrong.
+    # The tree explains every row (R-squared 1), and a shuffle leaves about half the rows wrong.
     assert scores["a"] > 0.5
 
 
 def test_a_continuous_targets_prompts_inherit_defts_regression_prompts(tmp_path):
     description = {"task": "Predicting a number.", "target_name": "the change"}
-    adapter.generate_task_config(description, "thing", tmp_path, "continuous")
+    adapter.generate_task_config(description, "thing", tmp_path, "continuous", None)
     written = (tmp_path / adapter.TASK_GROUP / "thing.yaml").read_text()
     assert "defaults:\n  - regression\n" in written
 
@@ -797,8 +840,8 @@ def test_a_continuous_target_is_grown_by_the_squared_error_unless_the_cell_names
 
 def test_a_feature_the_tree_uses_both_ways_has_no_single_direction():
     """A tree may split one feature one way at the root and the other way inside a branch. A net
-    sign would report that as a weak direction, but it is a different claim, so it gets its own
-    word, `non_monotone`."""
+    sign would report that as a weak direction, but it is a different claim, so it is reported with
+    a separate word, `non_monotone`."""
     record = {"extra": {"nodes": [
         {"n_samples": 100, "rate_left": 0.2, "rate_right": 0.8},
         {"n_samples": 100, "rate_left": 0.8, "rate_right": 0.2},
@@ -834,8 +877,8 @@ def test_a_feature_whose_rows_were_never_routed_has_no_direction():
 
 
 class ReadsTheFrame:
-    """A stand-in tree: predicts each sequence's share of G, and remembers the frame it was handed,
-    whose columns matter as much as its values."""
+    """A stand-in tree that predicts each sequence's share of G and remembers the frame it was
+    handed, whose columns matter as much as its values."""
 
     def __init__(self):
         self.seen = None
@@ -862,8 +905,8 @@ def test_predict_refuses_rows_without_their_identifiers():
 
 
 def test_the_deft_inputs_hold_no_test_split(tmp_path):
-    """The inputs hold only the training, validation and effect rows. The test split reaches DEFT
-    only as unlabelled rows at the reveal."""
+    """The inputs hold only the training rows, the validation rows and the rows the marginal effect
+    is measured on, whereas the held-out split reaches DEFT only as unlabelled rows at the reveal."""
     runner = deft_runner()
     frame = pd.DataFrame({"sequence": ["ACGT", "AGGT", "ACCT", "TTGA"], "label": [1, 0, 1, 0]})
     paths = runner.write_inputs("positional", frame, frame["label"].to_numpy(), frame, frame,
@@ -921,7 +964,7 @@ def test_a_cell_is_predicted_through_the_adapter_by_row_identifier(tmp_path, mon
 
 
 # --------------------------------------------------------------------------------------------
-# What DEFT is handed about its columns, and what comes back
+# What DEFT is handed about its columns and what comes back
 # --------------------------------------------------------------------------------------------
 
 COVARIATE_ROWS = pd.DataFrame({"sequence": ["ACGTAC", "AGGT", "ACCTAG", "TTGA"],
@@ -994,8 +1037,8 @@ def test_the_kmers_are_handed_over_as_counted_and_come_back_as_kmers(tmp_path):
     runner = deft_runner()
     runner.write_inputs("positional+kmer", COVARIATE_ROWS, COVARIATE_ROWS["label"].to_numpy(),
                         COVARIATE_ROWS, COVARIATE_ROWS, tmp_path / "inputs",
-                        columns=ALL_COLUMNS.without_covariates(), k_range=(1, 2),
-                        kmer_normalise="per_length")
+                        columns=ALL_COLUMNS.without_covariates(),
+                        supplied=make_featuriser("kmer", k_range=(1, 2), kmer_normalise="per_length"))
     train = pd.read_csv(tmp_path / "inputs" / "train.csv")
     assert list(train.columns)[:3] == ["sequence", "label", "kmer_A"]
     assert len(train.columns) == 2 + 4 + 11, "the sequence, the label, and every 1- and 2-mer seen"
@@ -1007,6 +1050,33 @@ def test_the_kmers_are_handed_over_as_counted_and_come_back_as_kmers(tmp_path):
                                "sequence")
     assert list(frame.columns) == list(train.columns.drop("label")), \
         "every later stage hands the tree the columns it was fitted on"
+
+
+def test_a_discovered_motif_comes_back_with_what_its_record_held(tmp_path):
+    """A discovered motif's record holds its matrix and the closest known motif in `extra`, which
+    the report names. The manifest takes them across, and DEFT's split on the motif comes back with
+    them, beside what DEFT knows of the split. Only the description reaches DEFT's prompts."""
+    from dataclasses import replace
+
+    from tests.small_motifs import MOTIFS, discovered_motifs
+
+    discovered = replace(discovered_motifs(), annotate_with=Collection("small", MOTIFS, digest="small"))
+    runner = deft_runner()
+    runner.write_inputs("positional+motif_discovered", COVARIATE_ROWS,
+                        COVARIATE_ROWS["label"].to_numpy(), COVARIATE_ROWS, COVARIATE_ROWS,
+                        tmp_path / "inputs", columns=ALL_COLUMNS.without_covariates(),
+                        supplied=make_featuriser("motif_discovered", motif_discovered=discovered))
+    pool = adapter.read_pool(tmp_path / "inputs")
+    name = next(iter(pool))
+    assert pool[name]["extra"]["closest_known"]["motif_id"] == "SM1"
+
+    tree = a_tree(root=node(feature(f"value_of_{name}"), left=node(), right=node()))
+    [record] = adapter.collect_features(tree, pool)
+
+    assert (record["kind"], record["params"]) == ("pwm_scan", pool[name]["params"])
+    assert record["extra"]["closest_known"] == pool[name]["extra"]["closest_known"]
+    assert record["extra"]["deft_origin"] == "naive" and len(record["extra"]["nodes"]) == 1
+    assert "SM1" not in json.dumps(adapter.dataset_config(tmp_path / "inputs"))
 
 
 def test_a_handed_covariate_needs_its_description(tmp_path):
@@ -1041,9 +1111,10 @@ def test_a_repaired_deft_feature_says_so_in_its_record():
 
 
 def test_a_deft_cell_is_fitted_again_only_where_no_grown_tree_is_at_stake(tmp_path):
-    """DEFT refuses a directory an earlier fit wrote in. The Core side clears it where a second
-    fit chooses nothing: after a fit that saved no tree, and under `--force`. A bundle with a tree
-    and no finished cell is completed from the tree, since a second fit would draw another."""
+    """DEFT refuses a directory that an earlier fit wrote in. The Core side clears it in two cases:
+    after a fit that saved no tree, where nothing is lost, and under `--force`, where a new fit was
+    asked for. A bundle with a tree but no finished cell is completed from that tree instead,
+    because a second fit would grow a different one."""
     from seqmaestro.pipeline.vendored.deft import make_room
 
     bundle = tmp_path / "bundle"

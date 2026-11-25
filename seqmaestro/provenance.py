@@ -1,4 +1,4 @@
-"""What produced a result: which environment, and which command.
+"""Recording what produced a result: the environment and the command.
 
 A number in a report can be trusted only as far as its origin is known, and a record of that origin
 kept by hand goes stale. This module writes both halves of the record automatically.
@@ -8,29 +8,33 @@ kept by hand goes stale. This module writes both halves of the record automatica
 1. **Declaration**: `pyproject.toml`, per package. What a thing *needs*.
 2. **Recipe**: `ENVIRONMENTS.md`. Which environments exist, how to build them, and the
    constraints that keep them apart.
-3. **Snapshot**: `write_snapshot`. What was *actually installed* when something ran. This differs
-   from the declaration, because an environment keeps a package its declaration has dropped until
-   the environment is rebuilt. An environment with a Julia runtime inside it also has its Julia
-   project recorded, since pip knows nothing of the Julia packages.
-4. **Attribution**: `environment.json` beside a result, so a number can be traced back.
+3. **Snapshot**: `write_snapshot`. What was *actually installed* when something ran. This can
+   differ from the declaration, because an environment keeps a package its declaration has dropped
+   until the environment is rebuilt. An environment with a Julia runtime inside it also has its
+   Julia project recorded, since pip does not see the Julia packages.
+4. **Attribution**: the manifest of each snapshot (`environment.json`), kept in the run beside its
+   results, so that a number can be traced to the environment that produced it.
 
-**The command.** `record_invocation` writes the exact command line, the resolved arguments, and
-the commit the code was at. It also records **whether the working tree was dirty**. A commit SHA
+**The command.** `record_invocation` writes the command line, the resolved arguments and the
+commit the code was at. It also records **whether the working tree was dirty**. A commit SHA
 taken against modified files does not identify the code that ran, so a result produced that way
 cannot be reproduced by anyone, including its author. Every stage of a run records its call itself
 (`record_call`), so the record does not depend on a person remembering to make it.
 
+A snapshot can also be written from the command line:
+
     python -m seqmaestro.provenance SeqMaestro_Core experiments/runs/<date>_<name>/environment/core
 
-Run it with the interpreter of the environment being recorded. `write_snapshot` called from
-another environment's interpreter runs this module under the named environment's own, so a stage
-running in Core can record the environment a model's search ran in (`snapshot_directory` names its
-directory beside Core's).
+Run it with the interpreter of the environment being recorded. Called from another environment's
+interpreter, `write_snapshot` runs this module under the named environment's interpreter, so a
+stage running in Core can record the environment a model's search ran in (`snapshot_directory`
+names its directory beside Core's).
 
 **Which interpreter runs another environment's code.** A stage that shells out to DEFT's
-environment, or a report's figures to LocalUtils', asks `environment_python` for the interpreter
-instead of holding an absolute path. The interpreter is found under the running interpreter's conda
-root, and an environment variable overrides it on a machine laid out differently.
+environment, or the report's figure script to `SeqMaestro_LocalUtils`, asks `environment_python`
+for the interpreter instead of holding an absolute path. The interpreter is found under the running
+interpreter's conda root, and an environment variable overrides it on a machine laid out
+differently.
 
 *(`deft.provenance` in the vendored method is unrelated: it measures how much of a fitted tree the
 language model contributed.)*
@@ -55,7 +59,7 @@ from seqmaestro.execution import allowed_threads
 
 def _conda_root(prefix: Path) -> Path:
     """The conda installation an interpreter belongs to: two levels up from a named environment
-    (`<root>/envs/<name>`), the prefix itself for the base environment."""
+    (`<root>/envs/<name>`), or the prefix itself for the base environment."""
     return prefix.parent.parent if prefix.parent.name == "envs" else prefix
 
 
@@ -68,7 +72,7 @@ JULIA_PROJECT = "julia_env"
 
 
 def python_override_variable(environment: str) -> str:
-    """The variable that points `environment_python` elsewhere, e.g.
+    """The environment variable that points `environment_python` elsewhere, e.g.
     `SEQMAESTRO_PYTHON_SEQMAESTRO_METHOD_DEFT`."""
     return "SEQMAESTRO_PYTHON_" + "".join(c if c.isalnum() else "_" for c in environment).upper()
 
@@ -76,11 +80,11 @@ def python_override_variable(environment: str) -> str:
 def environment_python(environment: str) -> Path:
     """The interpreter of a conda environment on this machine.
 
-    `<conda root>/envs/<environment>/bin/python`, the root being the running interpreter's, unless
-    `python_override_variable(environment)` names another file. The path is not checked here, so a
-    module can name an interpreter a machine does not have without failing to import. Whoever is
-    about to run it checks that it exists: the driver's preflight does, and names the variable to
-    set.
+    It is `<conda root>/envs/<environment>/bin/python`, under the running interpreter's conda root,
+    unless `python_override_variable(environment)` names another file. The path is not checked
+    here, so a module can name an interpreter a machine does not have without failing to import.
+    The caller checks that it exists before running it, as the driver's preflight does, which also
+    names the variable to set.
     """
     override = os.environ.get(python_override_variable(environment))
     if override:
@@ -98,7 +102,8 @@ def missing_python(environment: str) -> str | None:
 
 
 def _run(command: list[str]) -> str | None:
-    """Return a command's stdout, or None if it is unavailable. A missing conda is not fatal."""
+    """Return a command's stdout, or None where the command cannot run or fails, so that a missing
+    conda is not fatal."""
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=180, check=False)
     except (OSError, subprocess.TimeoutExpired):
@@ -124,8 +129,9 @@ def git_sha(repo_root: Path) -> str | None:
 def git_is_dirty(repo_root: Path) -> bool | None:
     """Whether tracked files differ from the recorded commit. None when git cannot answer.
 
-    The commit alone is not enough. Runs are usually made while something is half-edited, and a
-    SHA recorded against a modified tree points at code that was never what ran.
+    The commit alone does not identify the code: runs are usually made while something is
+    half-edited, and a SHA recorded against a modified tree points at code that differs from what
+    ran.
     """
     status = _run(["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"])
     return None if status is None else bool(status.strip())
@@ -140,15 +146,16 @@ def record_invocation(
     warn: bool = True,
     **extra,
 ) -> dict:
-    """Write the command, the code it ran, and the conditions, into `out_dir`.
+    """Write a record of the command, the code it ran and the conditions it ran under into
+    `out_dir`.
 
-    A command calls this itself. `arguments` should be the *resolved* argument namespace, because
-    an argument left at its default does not appear on the command line, and the record would not
-    show what value it took.
+    Each command calls this itself. `arguments` should be the *resolved* argument namespace,
+    because an argument left at its default does not appear on the command line, so the record
+    would not otherwise show the value it took.
 
-    `filename` tells apart the records of commands that write into one directory, so that a second
-    command does not overwrite the first's record. Every command names its record, and there is no
-    default.
+    `filename` keeps apart the records of commands that write into one directory, so that a second
+    command does not overwrite the first's record. It has no default, so every command names its
+    record.
     """
     repo_root = Path(repo_root or Path(__file__).resolve().parents[1])
     out_dir = Path(out_dir)
@@ -164,7 +171,7 @@ def record_invocation(
         "python": platform.python_version(),
         "executable": sys.executable,
         "seqmaestro_version": _version(),
-        # The threads its fits were given (`seqmaestro.execution`); None for every core.
+        # The threads its fits were given (`seqmaestro.execution`), or None for every core.
         "threads": allowed_threads(),
         **extra,
     }
@@ -186,9 +193,9 @@ INVOCATIONS_DIR = "invocations"
 
 def record_call(run_dir: Path | str, call: str, arguments: dict, **extra) -> dict:
     """Write the invocation record of one call of a run, `invocations/<call>.json`. A call is one
-    process of the run, and `call` its name (`seqmaestro.pipeline.layout.call_name`), which its log
-    and its failures file share. `arguments` are the parsed ones, so a flag left out of the command
-    shows the value it took."""
+    process of the run, and `call` is its name (`seqmaestro.pipeline.layout.call_name`), which its
+    log and its failures file share. `arguments` are the parsed arguments, so a flag left out of the
+    command shows the value it took."""
     return record_invocation(Path(run_dir) / INVOCATIONS_DIR, arguments=arguments,
                              filename=f"{call}.json", call=call, **extra)
 
@@ -196,7 +203,7 @@ def record_call(run_dir: Path | str, call: str, arguments: dict, **extra) -> dic
 def _version() -> str | None:
     try:
         from seqmaestro import __version__
-    except ImportError:  # pragma: no cover - only if the package is broken
+    except ImportError:  # pragma: no cover (only if the package is broken)
         return None
     return __version__
 
@@ -212,12 +219,24 @@ def write_snapshot(
 ) -> dict:
     """Write the snapshot files and return the manifest that was written alongside them.
 
-    A snapshot records what is installed where it runs, so an environment whose interpreter exists
-    and is not the one running this is snapshotted by its own interpreter, which runs this module.
+    A snapshot is a directory of files:
 
-    `skip_if_present` returns the existing manifest instead of rewriting, for the case where several
-    invocations run **concurrently into one run directory**. Without it they would race on fixed
-    filenames, and each would spend seconds shelling out to `pip` and `conda` to produce the same
+    - `pip-freeze.txt`: every package pip sees in the environment, with its version.
+    - `conda-environment.yml`: the environment as conda exports it, where conda can export it.
+    - `python-version.txt`: the interpreter's version.
+    - `julia/`: the `Project.toml` and `Manifest.toml` of the environment's Julia project, for an
+      environment that has one (`snapshot_julia`).
+    - `environment.json`: the manifest, which names the environment, its interpreter, the platform
+      and the commit, with a digest of the freeze, so that two snapshots can be compared without
+      reading their package lists.
+
+    A snapshot records what is installed in the environment it runs in. So when the named
+    environment's interpreter exists and is not the one running this function, that interpreter
+    runs this module to take the snapshot.
+
+    With `skip_if_present`, an existing manifest is returned and nothing is rewritten. It is for
+    invocations that run **concurrently into one run directory**, which would otherwise race on
+    fixed filenames, each spending seconds shelling out to `pip` and `conda` to produce the same
     snapshot of the same environment.
     """
     repo_root = repo_root or Path(__file__).resolve().parents[1]
@@ -259,7 +278,7 @@ def write_snapshot(
 
 def snapshot_julia(prefix: Path, out_dir: Path) -> dict | None:
     """Copy the Julia project of the environment at `prefix` into `out_dir / "julia"`, and return
-    what identifies it. None for an environment without a Julia project.
+    what identifies it, or None for an environment without a Julia project.
 
     The Julia packages an environment uses are fixed by its project's `Manifest.toml`, which pip
     does not see, so the freeze alone would leave them unrecorded. `Project.toml` states what was

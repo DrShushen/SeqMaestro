@@ -86,7 +86,7 @@ def test_a_fixed_vocabulary_arm_reloads_and_predicts_identically(pool, tmp_path)
 
 def test_a_generated_arm_reloads_and_predicts_identically(tmp_path):
     """A generated featuriser holds compiled functions, which pickle cannot serialise, so it
-    recompiles them from the source each record carries."""
+    recompiles them from the source each record holds."""
     frame = labelled()
     featuriser = GeneratedFeaturiser(proposer_of(("gc_fraction", GC_CODE), ("a_count", A_CODE)))
     X = featuriser.fit_transform(frame[SEQUENCE], frame[TARGET].to_numpy())
@@ -183,9 +183,9 @@ def test_every_model_run_through_the_harness_leaves_a_loadable_arm(model_name, t
 
 
 def test_the_saved_arm_agrees_with_the_predictions_the_cell_recorded(tmp_path):
-    """The restored arm must reproduce the run's own validation predictions exactly, which shows
-    that the file is the model that produced the numbers and not something similar. The reveal
-    predicts the test split with this file alone."""
+    """The restored arm must reproduce the cell's validation predictions exactly, which shows that
+    the file holds the model that produced the numbers instead of something similar. The reveal
+    predicts the held-out split with this file alone."""
     frame = labelled(n=70)
     train, val = frame.iloc[:50], frame.iloc[50:]
     out = tmp_path / "ebm"

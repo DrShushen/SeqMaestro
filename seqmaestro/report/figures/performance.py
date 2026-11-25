@@ -1,4 +1,5 @@
-"""How well each model configuration did, drawn beside the two comparisons that give it meaning.
+"""Draw how well each model configuration did, beside the two comparisons that give its score
+meaning.
 
 Two comparisons decide whether a score means anything, and both are drawn beside the bar so a reader
 does not have to hold them in mind. The first is the shuffled-label control: the same configuration
@@ -32,11 +33,11 @@ def _bar_style(row: dict) -> dict:
 
 def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, subtitle: str,
               metric_label: str, chance: float) -> Path:
-    """One bar per configuration, with its shuffled-label control and any interval it carries.
+    """One bar per configuration, with its shuffled-label control and any interval it has.
 
-    A row draws `control`, `low` and `high` when it has them. Bars start at `chance`, the metric's
-    value for a model that knows nothing, and run left of it for a score below chance, as an R²
-    can be.
+    A row's `control`, `low` and `high` are drawn when it has them. Bars start at `chance`, the
+    metric's value for a model that knows nothing, and run left of it for a score below chance, as
+    an R² can be.
     """
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -64,7 +65,8 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
             axis.plot([row["control"]], [position], marker="|", markersize=11, color=style.INK,
                       markeredgewidth=1.6, zorder=5)
             drew_control = True
-        # Past whatever the row drew furthest out, so the label never lands on a whisker.
+        # The label goes past whatever the row drew furthest out, so that it never overlaps a
+        # whisker.
         if row["value"] >= floor:
             axis.text(label_at + 0.007, position, f"{row['value']:.3f}", va="center", ha="left",
                       fontsize=7.8, color=style.INK_SECONDARY, zorder=6)
@@ -74,8 +76,8 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
             axis.text(leftmost - 0.007, position, f"{row['value']:.3f}", va="center", ha="right",
                       fontsize=7.8, color=style.INK_SECONDARY, zorder=6)
 
-    # One line per reference, labels stacked above the top bar so two close values do not print
-    # over each other or over the data.
+    # One line per reference, with the labels stacked above the top bar so that two close values do
+    # not print over each other or over the data.
     for index, mark in enumerate(baselines):
         axis.axvline(mark["value"], color=style.BASELINE, linewidth=1.6, zorder=2,
                      linestyle=mark.get("linestyle", "-"))
@@ -98,7 +100,7 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
     right = max(floor + 0.45, furthest + 0.055)
     left = lowest - (0.012 if lowest == floor else 0.06)
     # A score below chance prints its value left of its leftmost mark, so the axis also reaches past
-    # that label, about a tenth of the axis wide, or the label runs into the row names.
+    # that label (about a tenth of the axis wide), or the label would run into the row names.
     labelled = [min(value for value in (row["value"], row.get("low"), row.get("control"))
                     if value is not None) - 0.007 for row in rows if row["value"] < floor]
     if labelled:
@@ -107,7 +109,7 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
     axis.grid(axis="x", zorder=0)
     axis.set_axisbelow(True)
 
-    # The legend lists only the marks some row carries.
+    # The legend lists only the marks that some row has.
     legend = []
     if any(row["interpretable"] and row["writes_features"] for row in rows):
         legend.append(Patch(facecolor=style.WRITTEN, label="features a language model wrote"))
@@ -125,8 +127,8 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
     for mark in baselines:
         legend.append(Line2D([0], [0], color=style.BASELINE, linewidth=1.6,
                              linestyle=mark.get("linestyle", "-"), label=mark["legend"]))
-    # The legend sits below the axes. How far the bars run depends on the dataset, so no corner
-    # inside the axes is free of data on every dataset.
+    # The legend sits below the axes. How far the bars run depends on the dataset, so every corner
+    # inside the axes holds data on some dataset.
     legend_columns = 2 if len(legend) <= 4 else 3
     legend_rows = int(np.ceil(len(legend) / legend_columns))
     figure.legend(handles=legend, loc="lower center", fontsize=7.8, ncols=legend_columns,
@@ -142,10 +144,10 @@ def draw_grid(rows: list[dict], path: Path, baselines: list[dict], title: str, s
 
 def draw_cost(rows: list[dict], path: Path, reduced_label: str, title: str, subtitle: str,
               metric_label: str, chance: float) -> Path:
-    """What each configuration gave up when it was cut to a few features.
+    """What each configuration gave up when it was reduced to a few features.
 
-    Each row carries `full` and `reduced`. A short connector between the two makes the size of the
-    drop what the eye measures.
+    Each row has `full` and `reduced`. A short connector between the two makes the size of the drop
+    what the eye measures.
     """
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -170,8 +172,8 @@ def draw_cost(rows: list[dict], path: Path, reduced_label: str, title: str, subt
                   color=style.INK_SECONDARY)
 
     # The quantity shown is the distance between the two circles, so the axis spans the values
-    # instead of starting at chance. Anchored at chance, every pair would crowd into one end of the
-    # axis on a dataset whose models score well.
+    # instead of starting at chance. An axis anchored at chance would crowd every pair into one end
+    # on a dataset whose models score well.
     values = [value for row in rows for value in (row["full"], row["reduced"])]
     lowest, highest = min(values), max(values)
     span = highest - lowest

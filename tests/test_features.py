@@ -1,10 +1,10 @@
-"""`seqmaestro.features`.
+"""The featurisers of `seqmaestro.features` and the pools built from them.
 
 These tests concentrate on generality, because that is where this code is most likely to be wrong
-without anyone noticing. A dataset's sequences may all be one width over ACGT, and an
-implementation that assumed either would pass every test written against that data and then break
-on the next dataset. So the length, the alphabet and the count dtype are each tested away from any
-one dataset's values.
+without anyone noticing. A dataset's sequences may all have one length and the alphabet ACGT, and
+an implementation that assumed either would pass every test written against that data and then
+break on the next dataset. The length, the alphabet and the count dtype are therefore each tested
+away from any one dataset's values.
 """
 
 from __future__ import annotations
@@ -26,11 +26,15 @@ from seqmaestro.features import (
 )
 from seqmaestro.features.base import Inputs, count_dtype
 from seqmaestro.features.positional import PAD, PositionalWindow, window_symbols
+from tests.small_motifs import pool_settings
 
 DNA = pd.Series(["ACGT", "TGCA", "GGCC", "AAAA"])
+#: The labels the pools are fitted against. Of the sources, only discovery uses them, and it needs
+#: two rows of each class.
+LABELS = np.array([1, 0, 1, 0])
 
-#: The pools read from the sequence alone. Those with the covariates are tested in
-#: `test_covariates.py`, on rows that carry some.
+#: The pools computed from the sequence alone. Those with the covariates are tested in
+#: `test_covariates.py`, on rows that have some.
 SEQUENCE_POOLS = [pool for pool in FIXED_POOLS if COVARIATES not in parse_pool(pool)]
 
 
@@ -100,7 +104,8 @@ def test_a_window_read_from_the_end_counts_its_positions_up_to_the_last_base():
 
 
 def test_without_a_window_nothing_changes():
-    """The plain case keeps its columns, descriptions and description of itself."""
+    """Without a window, each record has the plain description, and the featuriser's description
+    of itself names no window."""
     featuriser = PositionalFeaturiser().fit(DNA)
     assert featuriser.records[0].description == "1 when position 0 (0-based) of the sequence is A, else 0"
     assert "window" not in featuriser.describe()
@@ -147,7 +152,8 @@ def test_kmer_range_is_inclusive_at_both_ends():
 
 
 def test_kmer_handles_variable_length_sequences():
-    """Unlike positional, k-mer counting has no fixed-length requirement, and must not gain one."""
+    """Unlike positional features, k-mer counts do not require a fixed length, and must not come to
+    require one."""
     X = KmerFeaturiser(k_range=(1, 2), normalise="counts").fit_transform(pd.Series(["ACGT", "AC", "ACGTACGT"]))
 
     assert X.loc[0, "kmer_A"] == 1
@@ -177,7 +183,7 @@ def test_counts_per_length_are_counts_over_the_kmer_positions():
     assert featuriser.describe()["normalise"] == "per_length"
 
 
-def test_counts_are_the_default_and_describe_themselves_as_before():
+def test_counts_are_the_default_and_add_nothing_to_the_description():
     featuriser = KmerFeaturiser(k_range=(1, 2), normalise="counts").fit(DNA)
     assert "normalise" not in featuriser.describe()
     assert all("normalise" not in record.params for record in featuriser.records)
@@ -195,8 +201,8 @@ def test_kmer_rejects_a_nonsense_range(k_range):
 
 
 def test_the_alphabet_comes_from_the_data_not_from_acgt():
-    """Protein sequences, an RNA alphabet and ambiguity codes all work, because no alphabet is
-    special-cased."""
+    """Protein sequences, an RNA alphabet and ambiguity codes all work, because the featurisers do
+    not special-case any alphabet."""
     protein = pd.Series(["MKVL", "LVKM"])
     featuriser = PositionalFeaturiser().fit(protein)
 
@@ -234,7 +240,7 @@ def test_a_symbol_that_cannot_be_named_is_refused_not_transliterated():
 
 def test_every_feature_name_is_a_legal_python_identifier():
     for mode in SEQUENCE_POOLS:
-        names = make_featuriser(mode, k_range=(1, 2), kmer_normalise="counts").fit(DNA).feature_names
+        names = make_featuriser(mode, **pool_settings(mode)).fit(DNA, LABELS).feature_names
         assert all(name.isidentifier() for name in names), mode
 
 
@@ -255,7 +261,7 @@ def test_the_count_dtype_is_derived_from_the_bound(bound, expected):
 
 
 def test_a_longer_sequence_widens_the_dtype_instead_of_overflowing():
-    """The dtype is computed per transform and not fixed at fit, because the counts for a
+    """The dtype is computed per transform instead of fixed at fit, because the counts for a
     validation sequence longer than any in training must not overflow and wrap around."""
     featuriser = KmerFeaturiser(k_range=(1, 2), normalise="counts").fit(pd.Series(["ACGT" * 10]))
 
@@ -267,7 +273,7 @@ def test_a_longer_sequence_widens_the_dtype_instead_of_overflowing():
     assert long.loc[0, "kmer_A"] == 200, "800 nt of ACGT repeats contains A exactly 200 times"
 
 
-# -------------------------------------------------------------------------------- composition
+# ------------------------------------------------------------- composing sources into a pool
 
 
 def test_a_pool_of_two_sources_is_the_two_concatenated():
@@ -280,7 +286,7 @@ def test_a_pool_of_two_sources_is_the_two_concatenated():
 
 
 def test_composition_stays_flat():
-    """`a + b + c` describes three parts, not a nested pair and a third."""
+    """`a + b + c` describes three parts instead of a nested pair and a third."""
     combined = (PositionalFeaturiser() + KmerFeaturiser(k_range=(1, 1), normalise="counts")
                 + KmerFeaturiser(k_range=(2, 2), normalise="counts"))
 
@@ -299,7 +305,7 @@ def test_an_unknown_pool_member_is_named_in_the_error():
 
 
 def test_a_pool_with_kmers_is_refused_until_it_is_told_how_they_are_counted():
-    """How k-mers are counted is a setting of a run, so nothing here fills it in."""
+    """How k-mers are counted is a setting of a run, so the featuriser does not fill it in."""
     for given in ({}, {"k_range": (1, 2)}, {"kmer_normalise": "counts"}):
         with pytest.raises(ValueError, match="must say how they are counted"):
             make_featuriser("positional+kmer", **given)
@@ -312,14 +318,14 @@ def test_a_pool_with_kmers_is_refused_until_it_is_told_how_they_are_counted():
 @pytest.mark.parametrize("mode", SEQUENCE_POOLS)
 def test_transform_before_fit_is_refused(mode):
     with pytest.raises(RuntimeError, match="not fitted"):
-        make_featuriser(mode, k_range=(1, 2), kmer_normalise="counts").transform(DNA)
+        make_featuriser(mode, **pool_settings(mode)).transform(DNA)
 
 
 @pytest.mark.parametrize("mode", SEQUENCE_POOLS)
 def test_the_vocabulary_comes_only_from_what_fit_saw(mode):
-    """If a featuriser learned from anything but the training split, the experiment would leak, so
-    the columns after transform must be exactly those learned at fit."""
-    featuriser = make_featuriser(mode, k_range=(1, 2), kmer_normalise="counts").fit(DNA.iloc[:2])
+    """A featuriser that learned from anything but the training split would leak information from
+    the other splits, so the columns after transform must be exactly those learned at fit."""
+    featuriser = make_featuriser(mode, **pool_settings(mode)).fit(DNA, LABELS)
     transformed = featuriser.transform(DNA.iloc[:2])
 
     assert list(transformed.columns) == featuriser.feature_names
@@ -328,25 +334,25 @@ def test_the_vocabulary_comes_only_from_what_fit_saw(mode):
 @pytest.mark.parametrize("mode", SEQUENCE_POOLS)
 def test_the_index_survives_transform(mode):
     """Rows must stay joinable to their labels."""
-    sequences = pd.Series(["ACGT", "TGCA"], index=[17, 42])
-    X = make_featuriser(mode, k_range=(1, 2), kmer_normalise="counts").fit_transform(sequences)
+    sequences = pd.Series(["ACGT", "TGCA", "GGCC", "AAAA"], index=[17, 42, 5, 9])
+    X = make_featuriser(mode, **pool_settings(mode)).fit_transform(sequences, LABELS)
 
-    assert list(X.index) == [17, 42]
+    assert list(X.index) == [17, 42, 5, 9]
 
 
 @pytest.mark.parametrize("mode", SEQUENCE_POOLS)
 def test_a_pools_featuriser_describes_itself_for_the_cells_record(mode):
-    described = make_featuriser(mode, k_range=(1, 3), kmer_normalise="counts").fit(DNA).describe()
+    described = make_featuriser(mode, **pool_settings(mode, (1, 3))).fit(DNA, LABELS).describe()
 
-    assert described["kind"] in {"positional", "kmer", "composed"}
-    assert "3" in str(described) or described["kind"] == "positional"
+    assert described["kind"] in {"positional", "kmer", "motif_known", "motif_discovered", "composed"}
+    assert "3" in str(described) or "kmer" not in parse_pool(mode)
 
 
 # --------------------------------------------------------------------------------- input guards
 
 
 def test_a_frame_is_refused_rather_than_guessed_at():
-    """Which columns of a frame are the sequences and the covariates is recorded in dataset.json
+    """Which columns of a frame are the sequences and the covariates is recorded in `dataset.json`
     and read by `Columns.inputs`, never guessed by a featuriser."""
     with pytest.raises(TypeError, match="not the frame"):
         PositionalFeaturiser().fit(pd.DataFrame({"window": ["ACGT"]}))
@@ -377,7 +383,7 @@ def test_a_plain_list_is_accepted():
 
 
 def rows_with(**covariates) -> Inputs:
-    """DNA with the given covariate columns beside it."""
+    """`DNA` with the given covariate columns beside it."""
     return Inputs(DNA, pd.DataFrame(covariates, index=DNA.index))
 
 
@@ -391,8 +397,8 @@ def test_the_sequence_featurisers_read_the_same_rows_with_or_without_covariates(
     """A covariate never enters a positional, k-mer or composition feature."""
     rows = rows_with(signal=[0.1, 0.2, 0.3, 0.4])
     for pool in SEQUENCE_POOLS:
-        bare = make_featuriser(pool, k_range=(1, 2), kmer_normalise="counts").fit_transform(DNA)
-        again = make_featuriser(pool, k_range=(1, 2), kmer_normalise="counts").fit_transform(rows)
+        bare = make_featuriser(pool, **pool_settings(pool)).fit_transform(DNA, LABELS)
+        again = make_featuriser(pool, **pool_settings(pool)).fit_transform(rows, LABELS)
         pd.testing.assert_frame_equal(again, bare)
 
 
@@ -435,8 +441,8 @@ def test_selecting_covariates_keeps_the_named_ones_and_refuses_an_absent_one():
 
 
 def test_the_frame_generated_code_is_handed():
-    """The sequences under the name the code was written against, the covariates under their own,
-    indexed from 0 however the rows were indexed."""
+    """The frame holds the sequences under the name the code was written against and the covariates
+    under their own names, indexed from 0 however the rows were indexed."""
     rows = Inputs(pd.Series(["ACGT", "TTTT"], index=[7, 9]),
                   pd.DataFrame({"signal": [1.5, 2.5]}, index=[7, 9]))
     frame = rows.frame("window")
@@ -449,9 +455,9 @@ def test_the_frame_generated_code_is_handed():
 
 
 def test_the_frame_of_many_covariates_read_from_a_csv_draws_no_fragmentation_warning(tmp_path):
-    """A frame read from a CSV holds each column separately, and adding a column to one with more
-    than a hundred covariates makes pandas warn on every call. Generated code is handed this frame
-    once per feature, and the handover adds the label to it."""
+    """A frame read from a CSV holds each column in a separate block, and adding a column to one
+    with more than a hundred covariates makes pandas warn on every call. Generated code is handed
+    this frame once per feature, and the handover adds the label to it."""
     names = [f"track_{index}" for index in range(150)]
     path = tmp_path / "rows.csv"
     pd.DataFrame({"sequence": ["ACGT", "TTTT"], **{name: [0.5, 1.5] for name in names}}).to_csv(

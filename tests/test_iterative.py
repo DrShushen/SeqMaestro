@@ -1,8 +1,10 @@
-"""The iterative source: propose, fit, show the model its fit, propose again.
+"""The iterative source: the language model proposes features, is shown what a fit of the arm's
+model made of them, and proposes again.
 
 Everything here runs offline against `ScriptedClient`. The tests check the loop itself: what each
-round is shown, what happens to a repeated feature, and the two equivalences that make the source
-comparable with the one-round source it should reduce to.
+round is shown (round one is blind, since there is no fit to show yet), what happens to a repeated
+feature, and the two equivalences that make the source comparable with the one-round source, to
+which a single round should reduce it.
 """
 
 from __future__ import annotations
@@ -82,8 +84,8 @@ def iterative(client, rounds=2, pool=None, model="l1_logistic"):
 
 
 def test_the_first_round_is_blind_and_later_rounds_are_not():
-    """The proposal cache key relies on this, and it makes round one the one-round source's
-    request."""
+    """Round one is shown no fit, so its request is the one-round source's, which the proposal
+    cache key relies on."""
     client = by_round(reply(("gc", "G")), reply(("at", "A")))
     iterative(client, rounds=2).fit(sequences(), labels())
 
@@ -93,7 +95,7 @@ def test_the_first_round_is_blind_and_later_rounds_are_not():
 
 
 def test_the_feedback_is_the_model_own_report():
-    """`Model.feedback` decides what a round is told, and the featuriser passes it on unread."""
+    """`Model.feedback` decides what a round is told, and the featuriser passes it on unchanged."""
     client = by_round(reply(("gc", "G")), reply(("at", "A")))
     iterative(client, rounds=2, model="xgboost").fit(sequences(), labels())
 
@@ -112,8 +114,8 @@ def test_a_symbolic_model_shows_the_proposer_its_equation_in_the_features_names(
 
 
 def test_a_rounds_fit_takes_the_weights_the_arms_model_is_fitted_with():
-    """On a design with per-row weights, the fit a round reports on is weighted as the arm's model
-    is. An unweighted fit would show the language model what another design leans on."""
+    """On a dataset with per-row weights, the fit a round reports on is weighted as the arm's model
+    is. An unweighted fit would show the language model what a different model relies on."""
     fitted_with = []
 
     class Recording:
@@ -144,7 +146,7 @@ def test_a_later_round_sees_what_the_model_could_not_use():
 
 
 # --------------------------------------------------------------------------------------------
-# Repeated features, which a model asked twice will produce
+# Repeated features, which a language model asked twice will produce
 # --------------------------------------------------------------------------------------------
 
 
@@ -176,7 +178,7 @@ def test_the_round_report_says_what_each_round_actually_added():
 
 def test_one_round_over_a_generated_pool_is_the_one_round_source():
     """With one round and a pool that the blind proposal duplicates, the iterative source reduces to
-    the one-round source, as in `ebm/llm_generated`."""
+    the one-round source of an arm such as `ebm/llm_generated`."""
     one_shot = GeneratedFeaturiser(proposer_for(by_round(reply(("gc", "G")))))
     one_shot.fit(sequences(), labels())
 
@@ -227,8 +229,8 @@ def test_a_fixed_pool_is_selected_too():
 
 
 def test_a_round_that_produces_nothing_usable_does_not_kill_the_arm():
-    """A model can return a constant or code that will not compile. The round is then empty and the
-    arm carries on."""
+    """A language model can return a constant feature or code that does not compile. The round is
+    then empty and the arm continues."""
     constant = json.dumps([{"name": "always_one", "description": "d", "rationale": "r",
                             "code": f"def always_one(X):\n    return X['{SEQUENCE}'].map(lambda s: 1)"}])
     featuriser = iterative(by_round(reply(("gc", "G")), constant), rounds=2)
@@ -275,9 +277,10 @@ def counting(name, symbol):
 
 
 def test_the_fit_report_counts_the_written_features_of_every_round_and_nothing_else():
-    """An agent checks these counts for an arm whose features mostly failed. They cover the blind
-    proposal the pool holds, each informed round, and a round that kept nothing, and leave out the
-    k-mer columns beside them. The pool's proposal is round one, and is not asked for twice."""
+    """The agent checks these counts when most of an arm's features failed. They cover the blind
+    proposal the pool holds, each informed round and a round that kept nothing, whereas the k-mer
+    columns beside them are left out. The pool's proposal is round one, so it is not requested
+    twice."""
     client = by_round(json.dumps([counting("gc", "G"), constant("flat_one")]),
                       json.dumps([counting("gc", "G"), counting("at", "A"), constant("flat_two")]),
                       json.dumps([constant("flat_three")]))
@@ -306,8 +309,9 @@ def test_the_fit_report_counts_the_written_features_of_every_round_and_nothing_e
 
 
 def test_a_time_limit_that_cannot_be_set_stops_the_arm(monkeypatch):
-    """A round that kept nothing lets the arm go on. A time limit that cannot be set says nothing
-    about the round's features, so it is the arm's failure and no empty round."""
+    """A round that kept nothing lets the arm go on. A time limit that cannot be set, by contrast,
+    says nothing about the round's features, so it fails the arm instead of leaving an empty
+    round."""
     from seqmaestro.proposer.checks import TimeLimitUnavailable
 
     def refuse(self, inputs, y=None, sample_weight=None):

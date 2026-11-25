@@ -1,18 +1,18 @@
 """The contents of a reduced model that a report draws, exported as plain data.
 
 A shape function, a set of weights, a tree's splits and an equation's Shapley values exist only
-inside the fitted model, so drawing any of them means reading the model. The figures are drawn from
+inside the fitted model, so drawing any of them means loading the model. The figures are drawn from
 JSON in another environment (`seqmaestro.report.figures`, under `SeqMaestro_LocalUtils`), so this
-module reads the model and writes out what a figure needs. Nothing here draws.
+module loads the model and writes out what a figure needs. Nothing here draws.
 
-**The model read is the saved one, and a check confirms it.** A reduced cell saves its model
+**The model exported is the saved one, and a check confirms it.** A reduced cell saves its model
 (`fitted.pkl`, or `model.pkl` for the least-squares model of an IGSR arm), the reveal scored the
 test predictions from that file, and the report quotes that score. `check_reproduces` compares the
 loaded model's predictions for the validation rows with the scores the cell recorded when it was
 fitted, so a figure of a different model (other columns, other rows, another pickle) fails there.
-DEFT's trees are read on DEFT's side (`experiments/adapters/deft_cart.py tree`), which checks that
-each fitting row's leaf carries the tree's own prediction for that row and returns the validation
-predictions to be compared with the cell's.
+DEFT's trees are loaded on DEFT's side (`experiments/adapters/deft_cart.py tree`), which checks
+that each fitting row's leaf holds the prediction the tree makes for that row, and returns the
+validation predictions to be compared with the cell's.
 """
 
 from __future__ import annotations
@@ -86,8 +86,8 @@ def ebm_shapes(model, X_fit: np.ndarray, columns: list[str]) -> dict[str, Any]:
     its feature.
 
     `term_scores_` pads each curve with a leading `missing` bin and a trailing `unknown` bin. Both
-    sit outside the range any row occupies, so they are dropped: drawn, they would put a step at
-    each end of a curve no sequence can reach.
+    sit outside the range any row occupies, so they are dropped: if they were drawn, they would put
+    a step at each end of the curve that no sequence can reach.
     """
     inner = model.estimator
     importances = dict(zip([str(n) for n in inner.term_names_],
@@ -103,8 +103,9 @@ def ebm_shapes(model, X_fit: np.ndarray, columns: list[str]) -> dict[str, Any]:
         low, high = (float(bound) for bound in inner.feature_bounds_[feature])
         boundaries = np.concatenate([[low], cuts, [high]])
         if len(boundaries) != len(scores) + 1:
-            # A binary or near-constant column can carry fewer cut points than bins. The bins are
-            # then spaced evenly over the observed range, so the curve still has an axis to sit on.
+            # A binary or near-constant column can have fewer cut points than bins. The bins are
+            # then spaced evenly over the observed range, so the curve can still be drawn against
+            # the feature's values.
             boundaries = np.linspace(low, high, len(scores) + 1)
         terms.append({"name": str(name), "importance": importances.get(str(name), 0.0),
                       "boundaries": boundaries.tolist(), "scores": scores.tolist(),
@@ -115,12 +116,12 @@ def ebm_shapes(model, X_fit: np.ndarray, columns: list[str]) -> dict[str, Any]:
 
 
 def pysr_equation(model) -> dict[str, Any]:
-    """A symbolic model's equation, written out, and for each feature it names, strongest first, its
-    values and Shapley values on the fitting rows the fit explained, in the model's scale (`SCALE`);
-    and the front the equation was chosen from.
+    """A symbolic model's written-out equation, the front it was chosen from, and, for each feature
+    it names (strongest first), its values and Shapley values on the fitting rows the fit
+    explained, in the model's scale (`SCALE`).
 
     The Shapley values are the ones the fit kept and ranked the features by, so the figure shows the
-    numbers behind the reduction and not a second computation.
+    numbers behind the reduction instead of computing them a second time.
     """
     names, values, shapley = model.shapley_sample()
     importances = model.importances()
@@ -163,7 +164,7 @@ def l1_weights(model, columns: list[str], marginal: dict[str, float | None]) -> 
 
 def read(model, columns: list[str], values: Callable[[], np.ndarray],
          marginal: Mapping[str, float | None]) -> dict[str, Any]:
-    """The insides of a model loaded in this process, read as its class calls for.
+    """The insides of a model loaded in this process, exported as its class requires.
 
     `columns` are the columns it was fitted on. `values` computes them on its fitting rows, and is
     called only for a class whose drawing shows them. `marginal` is each feature's marginal effect,

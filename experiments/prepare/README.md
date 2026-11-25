@@ -1,86 +1,77 @@
-# Preparation: build and check datasets
+# Preparing a dataset
 
-The scripts here read raw or upstream data, write `data/`, and run before any experiment. The
-contracts every stage follows are in [`../README.md`](../README.md). This file says which scripts
-every dataset uses, which files belong to one dataset and where they are kept, and how the example
-dataset is built.
+The scripts in this folder build and check datasets. They read the delivered data, write under `data/`, and run whenever the data changes, before any [run](../../docs/glossary.md#run). This page lists the scripts, says which files belong to one dataset and where they are kept, and shows how the example dataset is built.
 
-## The scripts every dataset uses
+[Stage 1: the prepared dataset](../../docs/developer/dataset.md) explains what preparation hands over to the later stages, and [running experiments](../README.md) gives the rules that every script follows, including those for preparation.
 
-| | for | what it does |
+## Scripts
+
+| Script | Use | What it does |
 |---|---|---|
-| `finalise_dataset.py` | any dataset | **the last step for every dataset.** Counts, checks and measures a prepared split and writes its `dataset.json`, the file every later stage reads. See [`../../docs/dataset.md`](../../docs/dataset.md) |
-| `write_group_map.py` | any grouped split | the record a grouped split is checked against: which group each sequence belongs to, keyed so it can be joined to the split files. Run it before finalising, where the script that made the split did not write the map |
-| `design_power.py` | any dataset | what a split of a given size could detect, for planning one. A finalised dataset already records it |
-| `check_sequence_provenance.py` | a dataset with genomic coordinates | does the strand convention and genome build match what the dataset claims? Composition check offline, reference check against UCSC on request |
-| `predict_alphagenome_summaries.py` | any set of elements with genomic coordinates | AlphaGenome's predictions for each element, every track summarised over the element (mean and maximum) at the track's resolution, with both strands of a stranded track kept. In native context (the 16,384 bp of the genome around the element) or scaffold context (the element in shuffled flanks), by the default model or, per element, by the fold model whose training excluded its region. **Runs in `SeqMaestro_Method_alphagenome`** and calls AlphaGenome's API |
-| `build_example_dataset.py` | the example dataset | builds the example from a stand-in delivery to a grouped split, as the worked example of a builder (below) |
+| [`finalise_dataset.py`](finalise_dataset.py) | Every dataset, as its last step | Counts, checks and measures a prepared split, and writes its `dataset.json`, the record every later stage takes the dataset from |
+| [`write_group_map.py`](write_group_map.py) | A grouped split | Writes the group map that the split is checked against: the group of each sequence. Run it before finalising, where the script that made the split did not write the map |
+| [`design_power.py`](design_power.py) | Planning a split | Says what a split of a given size could detect. A finalised dataset records the same figures |
+| [`check_sequence_provenance.py`](check_sequence_provenance.py) | A dataset with genomic coordinates | Checks that the strand convention and the genome build are what the dataset claims: offline from the base composition, and against UCSC on request |
+| [`predict_alphagenome_summaries.py`](predict_alphagenome_summaries.py) | Elements with genomic coordinates | Summarises AlphaGenome's predicted tracks over each element, for use as [covariates](../../docs/glossary.md#covariate). It runs in `SeqMaestro_Method_alphagenome` and calls AlphaGenome's API |
+| [`fetch_motif_collection.py`](fetch_motif_collection.py) | A run that scans for known motifs | Fetches a published motif collection ([JASPAR](https://jaspar.elixir.no/)'s or CisBP-RNA's) into `data/motif_collections/<name>/`, where the run's config names it ([motifs](../../docs/developer/motifs.md)) |
+| [`build_example_dataset.py`](build_example_dataset.py) | The example dataset | Builds the example from a stand-in delivery to a grouped split ([below](#the-example-dataset)) |
 
-`check_sequence_provenance.py` is the one to reach for whenever a dataset arrives with genomic
-coordinates and an assumed orientation. Nothing downstream can detect a globally reverse-complemented
-dataset, and every feature about it will still look interpretable.
+Each script's docstring says how to run it and what it decides.
 
-**Nothing here runs in the grid.** These scripts are run once when the data changes, and every
-dataset ends the same way: a declaration of what was decided, under `declarations/`, and
-`finalise_dataset.py`, which writes `dataset.json` beside the splits. If a number from one of these
-scripts is worth quoting, quote it from `dataset.json`, not from a script or from here.
+**Check the orientation of every dataset that comes with genomic coordinates.** Run `check_sequence_provenance.py` whenever a dataset arrives with genomic coordinates and an assumed orientation. A later stage cannot detect a dataset that was reverse complemented as a whole, and every feature found on it would still look interpretable.
 
-**No script here computes a baseline.** How far base composition alone separates the classes is
-measured once, the same way for every dataset, by the composition baseline at the start of Stage 2.
-A builder may measure a variable the window keeps out (a length, a masked fraction) when that is
-the reason for a design decision, and records it as a confound in its build manifest.
+**Every dataset ends with the same two steps**, however it was built: a [declaration](../../docs/glossary.md#declaration) of what was decided, under `declarations/`, and `finalise_dataset.py`, which writes `dataset.json` beside the splits. A number from preparation is quoted from `dataset.json`, never from a script's output or from this page.
 
-## The files of one dataset, and where they are kept
+**Preparation does not compute a baseline.** How far base composition alone separates the classes is measured once, in the same way for every dataset, by the composition [baseline](../../docs/glossary.md#baseline) at the start of Stage 2. A builder may measure a variable that the window leaves out (a length, a masked fraction) where that measurement is the reason for a design decision. It then records the measurement as the reason for that decision, in its build manifest (the record a builder writes beside the data, such as the example's `build_manifest.json`).
 
-A dataset has files in five places beside its data:
+## Files of one dataset
 
-| | where |
-|---|---|
-| the script that builds it from the delivery, and the script that splits it where that is a second one | `build_<dataset>.py` and `prepare_<dataset>_split.py`, in this folder |
-| the declaration of what was decided | `declarations/<dataset>__<splits>.yaml` |
-| the description the language models are told | `../datasets/<task>.json` |
-| the run config | `../configs/<name>.yaml` |
-| the tests of its builder, where it has any | `tests/test_local_<dataset>.py` |
+Each dataset has files in these places:
 
-**All of them stay on the machine that holds the dataset. Git ignores them, as it ignores `data/`.**
-A builder encodes the quirks of one delivery, and a description can hold a fact that a run
-withholds from its models, so neither is of use without the data and neither belongs in a
-repository that other people clone. The repository therefore holds the scripts above, the shared
-configs and one example, and updating it with `git pull` leaves the files of your datasets alone.
+```
+data/<dataset>/
+    README.md                        what the dataset is, for a person
+    raw/                             the delivered data, as received
+    <splits>/
+        train.csv, val.csv, test.csv
+        groups.csv                   the group of each sequence, where the split is grouped
+        dataset.json                 written by finalise_dataset.py
+experiments/prepare/
+    build_<dataset>.py               the builder, which builds the dataset from the delivery
+    prepare_<dataset>_split.py       the script that splits it, where that is a second script
+    declarations/<dataset>__<splits>.yaml    the declaration of what was decided
+experiments/datasets/<task>.json     the task description that the language models are told
+experiments/configs/<name>.yaml      the run's config
+tests/test_local_<dataset>.py        the tests of the builder, where it has any
+```
 
-Git keeps no history of these files, so copy them with the dataset when it moves to another
-machine. A dataset rebuilt from its builder and finalised from its declaration gets the same
-description, which is why the declaration is kept apart from `data/`.
+**Git ignores all of these files, so they stay on the machine that holds the dataset.** A builder encodes the quirks of one delivery, and a [task description](../../docs/glossary.md#task-description) can hold a fact that a run withholds from its models, so neither is of use without the data, and neither belongs in a repository that other people clone. The repository therefore holds the scripts above, the shared configs and the example dataset, and updating it with `git pull` leaves the files of your datasets alone. Git keeps no history of these files, so copy them with the dataset when it moves to another machine.
 
-Facts that constrain how a result on a dataset may be read (a class balance that was imposed, a
-confound the window removes, rows that are not independent) go in the dataset's README,
-`data/<dataset>/README.md`, which whoever writes the report reads first.
+The declaration is kept under `declarations/`, apart from `data/`, so that it survives when the data is rebuilt: a dataset rebuilt by its builder and finalised from its declaration gets the same `dataset.json`.
+
+Facts that limit how a result on the dataset may be interpreted (a class balance that was imposed, a confound that the window removes, rows that are not independent) go in the dataset's README, which whoever writes the report reads before writing.
 
 ## The example dataset
 
-One dataset is in the repository whole, so that each of those files can be seen filled in, and so
-that a run can be tried before there is real data. It is synthetic: 60 nucleotides around a made-up
-binding site, labelled by whether the factor was found bound, with random bases and one motif
-planted at the centre of most bound sites. Nothing in it is biology.
+The repository holds every file of one dataset, so that each of those files can be seen filled in, and so that a run can be tried before there is real data. The dataset is synthetic and holds no biology: 60 nucleotides around a made-up binding site, labelled by whether a factor was found bound there, with random bases and one motif planted at the centre of most bound sites.
 
 ```bash
-eval "$(./install.sh --interpreters)"     # CORE and the other environments' pythons
+eval "$(./install.sh --interpreters)"     # CORE and the other environments' Python interpreters
 $CORE experiments/prepare/build_example_dataset.py
 $CORE experiments/prepare/finalise_dataset.py --splits data/example/splits \
     --declared experiments/prepare/declarations/example__splits.yaml
 ```
 
-The first command writes `data/example/`, and the second writes `dataset.json` beside its splits
-and prints the summary a Stage 1 checkpoint presents.
+`build_example_dataset.py` writes `data/example/`. `finalise_dataset.py` then writes `dataset.json` beside its splits, and prints the summary that the [checkpoint](../../docs/glossary.md#checkpoint) at the end of Stage 1 presents to the user.
 
-| file | what it shows |
+| File | What it shows |
 |---|---|
-| `build_example_dataset.py` | the steps of a builder, one function each: reading the delivery, cutting one window around an anchor, a filter that counts what it drops from each class and refuses to drop many, a split grouped on what makes two rows dependent, the group map, and the dataset's README |
-| `declarations/example__splits.yaml` | a declaration with every field answered |
-| `../datasets/example.json` | a description: what is predicted, how the label was obtained, and what the positions mean |
-| `../configs/example.yaml` | a run config that states only what belongs to the dataset |
-| `../configs/example_quick.yaml` | a config that extends another and cuts it down: every stage in a few minutes, with no language model |
-| `data/example/README.md`, which the builder writes | the sections a dataset's README has |
+| [`build_example_dataset.py`](build_example_dataset.py) | The steps of a builder, one function each: reading the delivery, cutting one window around an anchor, a filter that counts what it drops from each class and refuses to drop many, a split grouped on what makes two rows dependent, the group map, and the dataset's README |
+| [`declarations/example__splits.yaml`](declarations/example__splits.yaml) | A declaration for a binary target, in which each answer is written as a real dataset's would be |
+| [`../datasets/example.json`](../datasets/example.json) | A task description: what is predicted, how the label was obtained, and what the positions mean |
+| [`../configs/example.yaml`](../configs/example.yaml) | A run config that states only what belongs to the dataset |
+| [`../configs/example_quick.yaml`](../configs/example_quick.yaml) | A config that extends another and makes it smaller: every stage in a few minutes, with no language model |
+| [`../configs/example_motifs.yaml`](../configs/example_motifs.yaml) | A config that extends both the quick run and `_motifs.yaml` (the shared config of the motif sources), and states what `_motifs.yaml` leaves to the dataset: the motif collection and the strands |
+| `data/example/README.md`, which the builder writes | The sections of a dataset's README |
 
-[`../configs/README.md`](../configs/README.md) shows how to run it, in full or in a few minutes
-without a language model. `tests/test_example_dataset.py` holds these files to each other.
+[Run configs](../configs/README.md) shows how to run the example, in full or in a few minutes without a language model. [`test_example_dataset.py`](../../tests/test_example_dataset.py) checks that these files agree with each other.

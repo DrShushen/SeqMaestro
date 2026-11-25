@@ -30,6 +30,12 @@ class LLMConfig:
     # Azure-only (the OpenAI and Claude configs omit these):
     endpoint: Optional[str] = None
     api_version: Optional[str] = None
+    # The reasoning effort every call states, where the config gives one (`completion_settings`).
+    reasoning_effort: Optional[str] = None
+    # Retries after a failed call (`retry_settings`) and the seconds a reply is waited for
+    # (`completion_settings`), where the config gives them.
+    num_retries: Optional[int] = None
+    request_timeout: Optional[int] = None
 
 
 @dataclass

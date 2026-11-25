@@ -1,19 +1,29 @@
 """What a reduced arm leaves behind, written once for every arm whichever side fitted it.
 
     reduction/<model>/<pool>/
-        reduction.json    where it came from, every step, the survivors, the top-N control
+        reduction.json    the source cell and seed; every step's features, importances, and
+                          validation headline and its companion (AUROC and AUPRC, or R-squared
+                          and Spearman's rho); the order in which features left; the survivors and
+                          their importances; the top-N columns; the column check; the settings
         steps.npz         validation scores at every step, and the validation labels
-        full/  reduced/  top_n/
-            run.json, metrics.json, predictions.npz    a standard cell, validation only
-            fitted.pkl                                 our arms' model and its columns
+        full/             the model refitted on every feature the cell used: the first step
+        reduced/          the model the elimination arrives at, on N features
+        top_n/            the N features the full model ranked highest, fitted once
+            run.json, metrics.json, predictions.npz    in each of the three: a standard cell,
+                                                       on validation only
+            fitted.pkl                                 a Core arm's model and its columns
             model.dill                                 or the vendored tree, which its adapter loads
             model.pkl                                  or an IGSR arm's least-squares model
-        elimination.json, elimination.npz              a DEFT arm alone: what its side handed back
+        elimination.json, elimination.npz              DEFT arms only: the elimination as their
+                                                       side returned it
+    reduction/summary.csv  one row per reduced arm: its model, pool and seed, the features it
+                           started from and ended on, its steps, and the validation headline of the
+                           three models (val_<metric>_<model>)
 
-Each of the three models is saved as a standard cell, so the reveal scores it like any other. The
-saved model predicts the test split, which is scored with the threshold chosen here on validation,
-the seed the arm was reduced at, and the bootstrap count its Stage 2 cell used. `reduction.json` is
-written last and whole, so an arm that has one is finished.
+Each of the three models is saved as a standard cell, so the reveal scores it like any other: the
+saved model predicts the held-out split, which is scored with the threshold chosen here on
+validation, the seed the arm was reduced at, and the bootstrap count its Stage 2 cell used.
+`reduction.json` is written last and whole, so an arm that has one is finished.
 """
 
 from __future__ import annotations
@@ -56,7 +66,8 @@ def _step_scores(y: np.ndarray, scores: np.ndarray, target_kind: str) -> dict[st
 
 
 def provenance(source: Source, run_dir: str | Path) -> dict[str, Any]:
-    """What every record made from a Stage 2 cell says about where, when and from what."""
+    """What every record made from a Stage 2 cell says about where, when and from what it was
+    made."""
     return {
         "seqmaestro_version": __version__,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -73,7 +84,7 @@ def refit_run(source: Source, run_dir: str | Path, columns: list[str], n_fit_row
               target_kind: str, **about: Any) -> dict[str, Any]:
     """The `run.json` of a model refitted from a Stage 2 cell, on its fitting rows, over `columns`.
 
-    It carries the source cell's seed and bootstrap count and the target's kind, which the reveal
+    It holds the source cell's seed and bootstrap count and the target's kind, which the reveal
     scores it with, and whatever `about` says of its stage, its role and how its model is saved.
     """
     return {**provenance(source, run_dir), "n_bootstrap": source.run["n_bootstrap"],
@@ -86,10 +97,10 @@ def refit_run(source: Source, run_dir: str | Path, columns: list[str], n_fit_row
 
 def write_cell(cell: str | Path, run: dict[str, Any], y_val, scores, filled: int | None = None
                ) -> None:
-    """A standard cell for a model fitted after Stage 2: its `run.json`, and its validation block
-    and arrays, scored with the seed and bootstrap count `run` records. The caller saves the model.
-    The reveal scores such a cell as it scores any other. `filled` is how many validation rows took
-    the model's constant prediction, for a model that can be undefined on a row."""
+    """Write a standard cell for a model fitted after Stage 2: its `run.json`, and its validation
+    block and arrays, scored with the seed and bootstrap count `run` records. The caller saves the
+    model, and the reveal scores such a cell as it scores any other. `filled` is how many validation
+    rows took the model's constant prediction, for a model that can be undefined on a row."""
     y_val, scores = np.asarray(y_val), np.asarray(scores, dtype=float)
     metrics = score_validation(y_val, scores, target_kind=run["target_kind"], seed=run["seed"],
                                n_bootstrap=run["n_bootstrap"])
@@ -105,8 +116,8 @@ def write(arm_dir: str | Path, reduction: Reduction, *, source: Source, run_dir:
 
     `save_model(role, cell_dir)` writes that role's fitted model into its cell and returns what the
     cell's `run.json` should say about it. For our arms it saves `fitted.pkl` and describes the
-    model. The vendored tree's side has already written its tree, so there it says how the reveal
-    reaches the tree.
+    model, whereas the vendored tree's side has already written its tree, so there it says how the
+    reveal reaches the tree.
     """
     arm_dir, run_dir = Path(arm_dir), Path(run_dir)
     y_val = np.asarray(y_val)
@@ -153,8 +164,8 @@ def is_reduced(arm_dir: str | Path) -> bool:
 
 def unfinish(arm_dir: str | Path) -> None:
     """Take a reduced arm's record away, before the arm is reduced again. Without this, a second
-    reduction that died part way would leave the models of two reductions under a record that says
-    the arm is whole."""
+    reduction that failed part way would leave the models of two reductions under a record that
+    says the arm is whole."""
     (Path(arm_dir) / REDUCTION_FILE).unlink(missing_ok=True)
 
 

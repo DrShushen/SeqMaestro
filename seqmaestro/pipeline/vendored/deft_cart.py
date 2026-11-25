@@ -1,6 +1,6 @@
-"""The Core side of `experiments/adapters/deft_cart.py`: what the later stages ask of DEFT.
+"""The Core side of `experiments/adapters/deft_cart.py`: what the later stages need from DEFT.
 
-A DEFT arm's features are functions its saved tree carries, so they are evaluated in DEFT's
+A DEFT arm's features are functions its saved tree holds, so they are evaluated in DEFT's
 environment and never here. This module prepares what the adapter reads (the rows in the form the
 arm's tree saw its own, numbered, with labels only on the rows it fits on), runs the adapter under
 DEFT's interpreter, and reads back what it wrote. It never imports `deft`.
@@ -54,9 +54,14 @@ def reduce_arm(source_cell: Path, fit_rows: pd.DataFrame, y_fit: np.ndarray, val
                out_dir: Path) -> Reduction:
     """Eliminate a DEFT arm on DEFT's side. The trees are written to `out_dir/<role>/model.dill`.
 
-    The fitting rows carry their labels and, when the design has them, their weights under the
-    dataset's column names, and the validation rows carry neither. `weight_column` is the one the
-    Stage 2 cell recorded.
+    The adapter builds every tree from the configuration Hydra recorded for the Stage 2 cell's fit,
+    with the CART finder. Each tree therefore has the settings and splitting criterion of the arm's
+    tree, with every override of the run applied, and a leaf must hold the configured fraction of
+    the fitting rows. A cell without that record is refused.
+
+    The fitting rows are handed with their labels and, when the design has them, their weights,
+    under the dataset's column names, whereas the validation rows are handed without either.
+    `weight_column` is the column the Stage 2 cell recorded.
     """
     sequence_column, target_column = columns.sequence, columns.target
     fit = input_frame(source_cell, columns.inputs(fit_rows), sequence_column)
@@ -101,7 +106,8 @@ def reduce_arm(source_cell: Path, fit_rows: pd.DataFrame, y_fit: np.ndarray, val
     )
 
 
-#: The file a DEFT arm's pool over D is left in, beside its panel's other files.
+#: The file a DEFT arm's pool over D (the training and validation rows) is left in, beside its
+#: panel's other files.
 POOL_FILE = "pool.npz"
 
 
@@ -125,9 +131,10 @@ def read_pool(path: Path, n_rows: int) -> Pool:
 class DeftFits:
     """A DEFT arm's panel fits, made on DEFT's side by `deft_cart.py` and read back here.
 
-    The pool is evaluated there, over D and later over the test rows. Step 0 is decided here and
-    handed back in `prepare.npz`. The trees are fitted there, on the pool the adapter evaluated. The
-    fitting rows define the naive population, as they defined the root of the Stage 2 tree.
+    The pool is evaluated there, over D and later over the held-out rows, whereas step 0 is decided
+    here and handed to the adapter in `prepare.npz`. The trees are fitted there, on the pool the
+    adapter evaluated. The fitting rows define the naive population, as they defined the root of
+    the Stage 2 tree.
     """
 
     #: A tree is a deterministic function of its rows, weights and seed.

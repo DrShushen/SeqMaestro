@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""Run a dataset through the whole pipeline, start to finish, unattended: every arm and analysis,
-the reduction and the reliability panel, the reveal, and the report's inputs.
+"""Run a config through the whole pipeline, unattended: the baseline, every arm and analysis, the
+reduction and the reliability panel, the reveal, and the report's inputs.
 
     experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml
 

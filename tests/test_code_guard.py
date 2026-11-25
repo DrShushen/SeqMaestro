@@ -1,15 +1,15 @@
 """Guardrails on executing model-generated Python (`seqmaestro/proposer/guard.py`).
 
-This file is a port of `methods/deft/tests/test_code_guard.py`. Our proposer cannot import DEFT's
-code (see `tests/test_boundaries.py`), and a guard written from scratch can reopen a hole that
-DEFT's guard closed. Tests are specifications, so copying them creates no import between the two
-sides and nothing that would stop DEFT becoming a standalone library. It does mean our guard must
-reject the same attacks before it executes any model-written function. Keep the two files
-diffable: when one gains a case, add it to the other.
+This file is a port of `methods/deft/tests/test_code_guard.py`. The proposer cannot import DEFT's
+code (see `tests/test_boundaries.py`), and a guard written from scratch could reopen a hole that
+DEFT's guard closed. Tests are specifications, so copying them neither creates an import between
+the two sides nor stops DEFT from becoming a standalone library. It does mean that the proposer's
+guard must reject the same attacks before it executes any function a language model wrote. Keep
+the two files diffable: when one gains a case, add it to the other.
 
-Both directions matter. Escapes must be rejected, and real features must still compile and run,
-because an allowlist that rejects valid features would shrink the candidate pool without any error.
-All tests run offline.
+The tests cover both directions. Escapes must be rejected, whereas real features must still compile
+and run, because an allowlist that rejected valid features would discard candidate features without
+any error. All tests run offline.
 """
 
 from __future__ import annotations
@@ -70,9 +70,9 @@ def test_rejects(label, code):
         compile_strict(code)
 
 
-def test_the_specific_escape_that_walked_through_the_old_guard():
+def test_an_escape_that_a_substring_scan_lets_through_is_refused():
     """`__import__("os").system(...)` contains neither "exec" nor "eval" as a substring, so a
-    substring scan for those words (the guard upstream DEFT used) lets it through."""
+    substring scan for those words (the guard upstream DEFT uses) lets it through."""
     code = 'def f(X):\n    return __import__("os").system("echo pwned")'
     assert "exec" not in code and "eval" not in code, "the old scan would have allowed this"
 
@@ -101,13 +101,13 @@ def test_the_guard_holds_even_if_the_static_check_were_bypassed():
 
 
 # --------------------------------------------------------------------------------------------
-# Real features still work, so the guard cannot silently shrink the candidate pool
+# Real features still work, so the guard cannot silently discard candidate features
 # --------------------------------------------------------------------------------------------
 
 
 def test_the_real_feature_the_model_actually_produced():
-    """A feature a model wrote during a real proposer run. If this fails, the guard is too tight
-    and is starving the proposer's candidate pool."""
+    """A feature that a language model wrote in a real run of the proposer. If this test fails, the
+    guard is too strict and rejects valid candidate features."""
     code = (
         "def compute_upstream_gc_fraction_0_49(X):\n"
         '    seqs = X["raw_sequence"].astype(str).str.upper().str.slice(0, 50)\n'
@@ -165,9 +165,9 @@ def test_accepts_and_runs(label, code):
     assert len(values) == 8
 
 
-def test_code_mentioning_eval_in_a_comment_is_no_longer_rejected():
+def test_code_mentioning_eval_in_a_comment_is_accepted():
     """A substring scan also has false positives: it would reject this code because a comment and
-    a variable name contain "eval". The guard parses the code, so it accepts it."""
+    a variable name contain "eval", whereas the guard parses the code, so it accepts it."""
     code = (
         "def f(X):\n"
         "    # we evaluate GC content here; do not eval() anything\n"
@@ -197,7 +197,7 @@ def test_the_feature_function_is_chosen_over_a_helper():
 
 
 def test_the_contract_is_a_single_argument_named_X():
-    """Selection is by that contract, not by definition order."""
+    """The function is chosen by that contract, whatever the order of definition."""
     code = (
         "def feature(X):\n"
         "    return X['raw_sequence'].str.count('G')\n"
@@ -213,7 +213,7 @@ def test_the_contract_is_a_single_argument_named_X():
 
 
 def test_disabling_the_guard_allows_unrestricted_code():
-    """`enabled=False` turns the guard off entirely. It is an intended escape hatch."""
+    """`enabled=False` turns the guard off entirely, which is a supported escape hatch."""
     fn = compile_feature_function("import os\ndef f(X):\n    return os.name", policy=OFF)
 
     assert isinstance(fn(frame()), str)
@@ -226,13 +226,13 @@ def test_extra_allowed_modules_widen_rather_than_replace():
 
     widened = CodeGuardPolicy(extra_allowed_modules=("statistics",))
     assert compile_feature_function(code, policy=widened)(frame()) == 1.5
-    # numpy must still be there, i.e. the base list was extended and not overwritten.
+    # numpy must still be there, i.e. the base list was extended instead of overwritten.
     assert "numpy" in widened.modules
 
 
 def test_syntax_errors_are_not_reported_as_unsafe():
-    """A model writing `def upstream_-15nt_GC(X):` has made a parse error, so it gets a plain
-    `ValueError` and not `UnsafeCodeError`."""
+    """A model that writes `def upstream_-15nt_GC(X):` has made a parse error, so the error raised
+    is a plain `ValueError` instead of `UnsafeCodeError`."""
     with pytest.raises(ValueError) as excinfo:
         compile_strict("def upstream_-15nt_GC(X):\n    return 1")
     assert not isinstance(excinfo.value, UnsafeCodeError)

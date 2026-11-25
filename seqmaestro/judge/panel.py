@@ -1,22 +1,14 @@
-"""Assembling the blinded panel of features to be judged.
+"""Assembling the panel of features the judge rates.
 
-Three jobs, all cheap and all easy to get subtly wrong, which is why they live here instead of
-inline in a script:
-
-**Selection.** The top *N* by importance of each source, which is one cell of an arm, because
-judging every feature is unaffordable, and the tail of a vocabulary running to thousands of features
-is not what any arm claims to have discovered.
-
-**Blinding.** Each entry gets an opaque identifier. Its arm, seed and label condition are kept on
-the entry beside the feature, and the prompt is built without them (`seqmaestro.judge.rubric`), so
-no prompt mentions them.
-
-**Ordering.** Shuffled with a seed, so an arm's features are not adjacent and a drifting judge
-cannot systematically favour whoever went first.
+The panel holds the top *N* features by importance of each source (one cell of an arm), each under
+an identifier that reveals nothing, with its arm, seed and label condition kept on the entry beside
+the feature and out of every prompt (`seqmaestro.judge.rubric`). The entries are shuffled with a
+seed before the identifiers are assigned, so that an identifier reveals nothing either.
+`docs/developer/analyses/judge.md` gives the reasons for each step.
 
 Permuted-label features, when they are judged, need no separate mechanism. They enter the panel as
-ordinary entries, indistinguishable to the judge, and are separated again only when the scores are
-summarised.
+ordinary entries, which the judge cannot tell from the rest, and are separated again only when the
+scores are summarised.
 """
 
 from __future__ import annotations
@@ -64,7 +56,7 @@ def build_panel(
     top_n: int | None = DEFAULT_TOP_N,
     seed: int = 0,
 ) -> list[PanelEntry]:
-    """Select, blind and shuffle. `top_n=None` judges everything, which is rarely affordable."""
+    """Select, hide the arms and shuffle. `top_n=None` judges everything, which is rarely affordable."""
     entries = []
     for source in sources:
         chosen = source.records if top_n is None else top_features(source.records, top_n)
@@ -89,10 +81,10 @@ def build_panel(
 
 
 def panel_key(panel: list[PanelEntry]) -> dict:
-    """What each blinded id stands for: the arm, the label condition and the seed the feature
-    came from, its name and its importance. Written beside the scores.
+    """What each identifier stands for: the arm, the label condition and the seed the feature
+    came from, its name and its importance. It is written beside the scores.
 
-    The judge is shown an item under its id and nothing of this. The scores file names each item's
+    The judge is shown each item under its id and none of this. The scores file names each item's
     arm and label condition as well, since the summary is taken by arm, so the key adds the seed
     and the importance, and holds every item whether or not it was answered.
     """

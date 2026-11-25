@@ -2,7 +2,8 @@
 
 The main risk is a model that accepts `class_weight`, records it in its manifest, and fits
 unweighted anyway. A results table would not show that failure, so each model is checked by its
-behaviour on data where weighting has to change the answer, and not by the configuration it reports.
+behaviour on data where weighting has to change the answer, instead of by the configuration it
+reports.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ def test_balanced_matches_sklearns_definition():
     # n_samples / (n_classes * count): 100/(2*90) and 100/(2*10).
     assert weights[y == 0] == pytest.approx(100 / 180)
     assert weights[y == 1] == pytest.approx(100 / 20)
-    # Each class carries the same total weight, which is the property the rest of the code relies on.
+    # Each class has the same total weight, which is the property the rest of the code relies on.
     assert weights[y == 0].sum() == pytest.approx(weights[y == 1].sum())
 
 
@@ -51,7 +52,8 @@ def test_unknown_class_weight_is_refused():
 
 
 def _imbalanced(n: int = 400, seed: int = 0):
-    """One informative column, 10% positives, and enough noise that a model has to choose."""
+    """One informative column, one uninformative column and 10% positives, with enough noise that a
+    model has to choose between the classes."""
     rng = np.random.default_rng(seed)
     y = np.array([1] * (n // 10) + [0] * (n - n // 10))
     signal = rng.normal(loc=y * 1.2, scale=1.0)
@@ -63,8 +65,8 @@ def _imbalanced(n: int = 400, seed: int = 0):
 def test_every_model_actually_applies_the_weights(name):
     """Weighting must change the fitted model as well as its manifest.
 
-    The comparison uses mean predicted probability. Upweighting the minority class raises the
-    predicted probability in all three model families, while accuracy can move either way.
+    The comparison uses the mean predicted probability, because upweighting the minority class
+    raises it in all three model families, whereas accuracy can move either way.
     """
     X, y = _imbalanced()
     unweighted = make_model(name, target_kind="binary", seed=0, class_weight="none").fit(X, y).predict(X)
@@ -115,7 +117,7 @@ def test_per_row_weights_are_validated(bad, message):
 @pytest.mark.parametrize("name", ["l1_logistic", "ebm", "xgboost"])
 def test_every_model_applies_per_row_weights(name):
     """Weighting only half of the positives must change the fit, and the result must differ from
-    the class-weighted fit, because no `class_weight` mapping can express that weighting."""
+    the class-weighted fit, because a `class_weight` mapping cannot express that weighting."""
     X, y = _imbalanced(seed=1)
     half = np.zeros(len(y), dtype=bool)
     half[: len(y) // 2] = True
@@ -138,9 +140,10 @@ def test_per_row_weights_are_recorded_in_the_manifest(name):
 
 
 def test_per_row_weights_are_rescaled_to_mean_one():
-    """Total weight sets how much the data counts against a regularisation penalty. Weights that
-    balance strata are typically tiny, so without rescaling they would multiply the effective
-    regularisation. The rescaling must leave the ratios between weights unchanged."""
+    """The total weight sets how much the data counts against a regularisation penalty. Weights that
+    balance strata are typically tiny, so without rescaling they would make the effective
+    regularisation many times stronger. The rescaling must leave the ratios between weights
+    unchanged."""
     y = np.array([0] * 8 + [1] * 2)
     given = np.array([0.01] * 8 + [0.04] * 2)
     out = resolve_fit_weights(y, None, given)

@@ -1,23 +1,23 @@
 """A small prepared dataset with a planted signal, finalised the way Stage 1 finalises a real one.
 
-Used by the tests that need a run's worth of data, such as the reveal and the composition baseline.
-The positive class carries a GC-rich motif at a fixed position, so a positional arm has something
-to find and composition also shifts with the class.
+The tests that need a run's worth of data use it, such as those of the reveal and the composition
+baseline. The positive rows hold a GC-rich motif at a fixed position, so a positional arm has
+something to find, and the base composition also shifts with the class.
 
-`planted_dataset(..., covariates=True)` adds two covariates. `signal` runs higher in the positive
-class and `noise` does not, and the motif is planted in only some of the positives, so the
-covariate carries signal the sequence does not.
+`planted_dataset(..., covariates=True)` adds two covariates: `signal` runs higher in the positive
+class, whereas `noise` is unrelated to it. The motif is then planted in only some of the positives,
+so `signal` holds information that the sequence does not.
 
-`planted_dataset(..., variable=True)` draws each sequence's length, longer in the positive class on
-purpose, keeps the motif at the same offset from the start, and declares a positional window over
-the first `LENGTH` bases that pads the shorter sequences.
+`planted_dataset(..., variable=True)` draws each sequence's length from its class's range, which is
+longer for the positive class. The motif stays at the same offset from the start, and the
+declaration has a positional window over the first `LENGTH` bases, which pads the shorter sequences.
 
 `planted_dataset(..., continuous=True)` makes the target a number instead of a label: the rows that
 would be positive get `SHIFT` added to unit Gaussian noise, so the motif (and, with covariates,
-`signal`) predicts it. It composes with the two variants above.
+`signal`) predicts it. It can be combined with either variant above.
 
-The column names match no real dataset. The library has no default for either column, and a
-realistic name here would let such a default come back without any test failing.
+The column names match no real dataset, because the library has no default for either column, and
+a realistic name here would let the tests pass even if such a default were added.
 """
 
 from __future__ import annotations
@@ -37,20 +37,21 @@ SIZES = {"train": 160, "val": 60, "test": 60}
 #: The covariates of the variant that has them, with what each measures.
 COVARIATES = {"signal": "a measurement that runs higher in the motif class",
               "noise": "a measurement unrelated to the class"}
-#: With covariates, the share of positives that carry the motif.
+#: With covariates, the share of positives that have the motif.
 MOTIF_SHARE = 0.6
 #: With variable lengths, the range each class's lengths are drawn from, inclusive.
 LENGTHS = {1: (16, 40), 0: (12, 30)}
-#: With a continuous target, how far the rows carrying the signal sit above the rest, in units of
-#: the noise's standard deviation.
+#: With a continuous target, how far the rows with the planted signal sit above the rest, in units
+#: of the noise's standard deviation.
 SHIFT = 1.5
 
 
 def planted_frame(n: int, rng: np.random.Generator, covariates: bool = False,
                   variable: bool = False, continuous: bool = False) -> pd.DataFrame:
-    """`n` random sequences, about half of them positive. Without covariates every positive carries
-    the motif. With them, `MOTIF_SHARE` of the positives do, and `signal` is shifted up in all.
-    With `variable`, each sequence's length is drawn from its class's range in `LENGTHS`."""
+    """`n` random sequences, about half of them positive. Without covariates every positive holds
+    the motif, whereas with them only `MOTIF_SHARE` of the positives do, and `signal` is shifted up
+    in all of them. With `variable`, each sequence's length is drawn from its class's range in
+    `LENGTHS`."""
     rows, labels = [], []
     for _ in range(n):
         if variable:
@@ -86,7 +87,7 @@ def planted_dataset(root: Path, seed: int = 3, covariates: bool = False,
     for split, frame in frames.items():
         frame.to_csv(directory / f"{split}.csv", index=False)
         # One group per row, because the sequences are drawn independently and nothing relates two
-        # of them. Writing the group map records that explicitly, so the grouping is not unknown.
+        # of them. Writing the group map records this, so that every row's group is known.
         groups += [{"sequence": sequence, "group": f"{split}_{row}"}
                    for row, sequence in enumerate(frame[SEQUENCE])]
     pd.DataFrame(groups).drop_duplicates("sequence").to_csv(directory / GROUP_FILE, index=False)
@@ -126,6 +127,9 @@ def planted_dataset(root: Path, seed: int = 3, covariates: bool = False,
     })
     return load_dataset(directory)
 
+
+#: The `language_model` section of a test's run config, as the shared config states it.
+LANGUAGE_MODEL = {"reasoning_effort": "minimal", "retries": 5, "timeout_seconds": 120}
 
 #: The `analyses` section of a test's run config, as the shared config states it.
 ANALYSES = {

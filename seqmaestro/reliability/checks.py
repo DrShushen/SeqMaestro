@@ -1,23 +1,24 @@
-"""The two sanity runs: labels that carry nothing, and labels that carry something known.
+"""The two sanity checks: labels with no signal, and labels with a known planted signal.
 
-**Global null.** The labels are replaced by a random permutation of themselves. Tier 2 is rerun
-under them on every arm. The rerun is cheap and directly tests the permutation calibration on that
+**Global null.** The labels are replaced by a random permutation of themselves, and Tier 2 is rerun
+under them on every arm. The rerun is quick and directly tests the permutation calibration on that
 arm's candidates: a correct null gives uniform p-values and about alpha * p features called at any
-raw cutoff alpha. The check arm also reruns Tier 1 under them. That costs a second round of
-selections and tests machinery every arm shares (the half-samples and the bound), so it runs on one
-arm per run.
+raw cutoff alpha. Tier 1 is rerun under the permuted labels on the check arm alone, because that
+needs a second round of selections and tests what every arm shares (the half-samples and the
+bound).
 
 **Planted signal.** A target is drawn from a linear predictor on a few real columns of the check
 arm's candidates, at a moderate strength: strong enough that the procedure should find them, but
 not so strong that any procedure would. For a binary target the labels are drawn through the
-logistic link, and for a continuous one the target is the predictor plus unit Gaussian noise, so
-that at a predictor's spread of 1.5 its R-squared is about 0.69. The target is drawn on the real X,
-so the planted features keep the candidates' correlation structure and their near-duplicates are
+logistic link, whereas a continuous target is the predictor plus unit Gaussian noise, so at a
+predictor standard deviation of 1.5 its R-squared is about 0.69. The target is drawn on the real
+X, so the planted features keep the candidates' correlation structure and their near-duplicates are
 genuinely associated too. The check therefore measures recovery and says nothing about the false
-discovery rate. The model is saved as a recipe, so the same features, coefficients and
-standardisation generate labels for D and for the test split. On D they feed Tier 1 and the
-in-sample Tier 2, the only place with enough rows to call the planted features and not merely rank
-them. On the test split they feed Tier 2 at the reveal.
+discovery rate. The model is saved as a recipe, so that the same features, coefficients and
+standardisation generate labels for D (the training and validation rows) and for the test split.
+On D the labels feed Tier 1 and the in-sample Tier 2, which is the only place with enough rows to
+call the planted features rather than merely rank them, and on the test split they feed Tier 2 at
+the reveal.
 """
 
 from __future__ import annotations
@@ -27,11 +28,12 @@ import numpy as np
 from seqmaestro.target import CONTINUOUS
 
 #: A planted feature is drawn from the columns whose commonest value covers less than this share of
-#: D, so that it varies enough to carry a signal; from all of them when too few do.
+#: D, so that it varies enough for a signal to be planted on it, or from all the columns when too
+#: few qualify.
 PLANTED_MAX_MODAL_SHARE = 0.9
 
-#: Selection frequencies the summaries count at: the stability threshold a report quotes, and a
-#: stricter one.
+#: The selection frequencies at which the summaries count features: the stability threshold a
+#: report quotes, and a stricter one.
 PI_LEVELS = (0.7, 0.9)
 
 #: A planted feature counts as recovered when its rank among the candidates is at most this.
@@ -41,10 +43,10 @@ TOP_RANKS = 10
 def planted_recipe(X: np.ndarray, names: list[str], modal_share: np.ndarray, *, seed: int,
                    n_planted: int, signal_sd: float, target_kind: str) -> dict:
     """A linear predictor on `n_planted` real columns of the candidates, as a reusable recipe for a
-    `target_kind` target.
+    target of kind `target_kind`.
 
-    Coefficients alternate +1 and -1 on the standardised columns, and the linear predictor is scaled
-    so its standard deviation on D is `signal_sd`.
+    The coefficients alternate between +1 and -1 on the standardised columns, and the linear
+    predictor is scaled so that its standard deviation on D is `signal_sd`.
     """
     rng = np.random.default_rng(seed)
     eligible = np.flatnonzero(modal_share < PLANTED_MAX_MODAL_SHARE)
@@ -80,12 +82,14 @@ def permuted(y: np.ndarray, *, seed: int) -> np.ndarray:
 
 
 def _called(called: dict, level: float, method: str) -> int:
-    """`called` keys survive a JSON round trip as strings; read either."""
+    """A count from `called`, whose keys come back from a JSON round trip as strings, so either form
+    of key is accepted."""
     return int(called[level if level in called else str(level)][method])
 
 
 def null_tier2(p_value: np.ndarray, called: dict) -> dict:
-    """Tier 2 under permuted labels: how many are called, and how far the p-values are from uniform."""
+    """Tier 2 under permuted labels: how many features are called, and how far the p-values are from
+    uniform."""
     p_value = np.asarray(p_value)
     grid = np.linspace(0, 1, 21)[1:]
     return {
@@ -102,8 +106,8 @@ def null_tier2(p_value: np.ndarray, called: dict) -> dict:
 
 
 def null_tier1(q_hat: float, pi_hat: np.ndarray) -> dict:
-    """Tier 1 under permuted labels: the procedure chooses what its model uses, at most N, and
-    nothing should be stable."""
+    """Tier 1 under permuted labels, where the selection still chooses what its model uses (at most
+    N features) and nothing should be stable."""
     pi_hat = np.asarray(pi_hat)
     return {"q_hat": q_hat,
             "max_pi_hat": float(pi_hat.max()),

@@ -363,15 +363,38 @@ CONTINUING_TURN = "Continue with the task."
 
 
 def completion_settings(llm: Any, api_key: str) -> Dict[str, Any]:
-    """What a call tells LiteLLM beside the model string: the key, and for the two Azure kinds
-    where the model is served."""
+    """What a call tells LiteLLM beside the model string: the key, for the two Azure kinds where
+    the model is served, and the reasoning effort and the seconds a reply is waited for where the
+    config states them."""
     if llm.kind == "azure_ai":
-        return dict(api_base=llm.endpoint, api_key=api_key)
-    if llm.kind == "azure":
-        return dict(api_base=llm.endpoint, api_version=llm.api_version, api_key=api_key)
-    if llm.kind in ("openai", ANTHROPIC):
-        return dict(api_key=api_key)
-    raise ValueError(f"Invalid LLM kind: {llm.kind}")
+        settings = dict(api_base=llm.endpoint, api_key=api_key)
+    elif llm.kind == "azure":
+        settings = dict(api_base=llm.endpoint, api_version=llm.api_version, api_key=api_key)
+    elif llm.kind in ("openai", ANTHROPIC):
+        settings = dict(api_key=api_key)
+    else:
+        raise ValueError(f"Invalid LLM kind: {llm.kind}")
+    effort = getattr(llm, "reasoning_effort", None)
+    if effort:
+        # A deployment's name is in no model map, and LiteLLM drops a setting it cannot tell the
+        # model takes, so it is told to pass this one on.
+        settings.update(reasoning_effort=effort, allowed_openai_params=["reasoning_effort"])
+    timeout = getattr(llm, "request_timeout", None)
+    if timeout is not None:
+        settings.update(timeout=timeout)
+    return settings
+
+
+def retry_settings(llm: Any) -> Optional[RetryConfig]:
+    """How the agent retries a failed call where the config states a number of retries: that many
+    after the first attempt, with the agent's own back-off. None leaves the agent's default
+    (`RetryConfig`). LiteLLM is not asked to retry as well, so that its retries and the agent's do
+    not multiply."""
+    retries = getattr(llm, "num_retries", None)
+    if retries is None:
+        return None
+    # `RetryConfig.max_retries` counts every attempt, the first included.
+    return RetryConfig(max_retries=retries + 1)
 
 
 def with_user_turns(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:

@@ -1,16 +1,17 @@
-"""Linear models. The L1-regularised ones are the canonical sparse baseline: logistic for a binary
-target, and least squares for a continuous one. `LeastSquares`, plain or with the ridge or lasso
-penalty IGSR can fit, is the model IGSR fits over its terms, with which the later stages refit an
-IGSR arm.
+"""Linear models. The L1-regularised ones are the standard sparse models: logistic regression for a
+binary target, and least squares for a continuous one. `LeastSquares`, unpenalised or with the ridge
+or lasso penalty IGSR can use, is the model IGSR fits over its terms, and the later stages refit an
+IGSR arm with it.
 
 On the positional pool the sparse models' coefficients give one weight per base per position, in
-the shape of a position-weight matrix over the window, which makes these arms directly comparable
-to the motif literature. The selected features are the discovery output.
+the shape of a position weight matrix over the window, which makes these arms directly comparable
+with the motifs of the literature. The features with a non-zero coefficient are what these arms
+report as found.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
@@ -26,10 +27,8 @@ from seqmaestro.target import BINARY, CONTINUOUS, target_for
 class L1Logistic:
     """Sparse logistic regression. Smaller `C` selects fewer features.
 
-    `liblinear` (coordinate descent) instead of `saga` (stochastic gradient descent), because
-    `saga` is far slower on a wide k-mer matrix of unscaled integer counts, which coordinate
-    descent copes with and stochastic gradient descent does not. This model standardises its
-    columns (below), so that reason may not hold for it.
+    The solver is `liblinear` (coordinate descent) rather than `saga` (stochastic gradient descent),
+    which is far slower on a wide matrix such as the k-mer counts.
 
     `penalty="l1"` is deprecated in scikit-learn 1.8 and removed in 1.10, so this uses `l1_ratio`.
 
@@ -50,6 +49,9 @@ class L1Logistic:
     direction_kind = "l1_coefficient_sign"
     interpretable = True
     reproducible = True
+    #: What a run's config may change (`seqmaestro.models.settings`). `C` is the inverse of the
+    #: penalty's strength, so a larger one keeps more features.
+    settings: ClassVar[dict[str, type]] = {"C": float}
 
     def __init__(
         self, C: float = 0.1, seed: int = 0, max_iter: int = 2000,
@@ -92,9 +94,9 @@ class L1Logistic:
     def directions(self, X: pd.DataFrame | None = None) -> dict[str, str]:
         """The sign of each selected coefficient.
 
-        Exact and complete for this model, and it needs no rows, because the fit is monotone in
-        every feature. One sign describes everything the model does with a feature, since there is
-        no range over which the relationship could reverse. `non_monotone` is unreachable here.
+        The sign is exact and complete for this model and needs no rows, because the fit is
+        monotone in every feature: one sign describes everything the model does with a feature,
+        since the relationship cannot reverse over any range. `non_monotone` is unreachable here.
         """
         return _coefficient_directions(self.importances(), self.target_kind)
 
@@ -121,9 +123,9 @@ class L1Logistic:
 class L1Linear:
     """Sparse linear regression, for a continuous target. Larger `strength` selects fewer features.
 
-    The Lasso, fitted on columns centred and scaled on the fitting rows as `L1Logistic`'s are, so
-    each coefficient is per standard deviation of its feature and the penalty treats every column
-    alike.
+    It is the Lasso, fitted on columns centred and scaled on the fitting rows as `L1Logistic`'s
+    are, so each coefficient is per standard deviation of its feature and the penalty treats every
+    column alike.
 
     **The penalty is the universal one** (Donoho and Johnstone): sigma * sqrt(2 log p / n) on
     scikit-learn's scale, where sigma is the target's standard deviation on the fitting rows, p the
@@ -133,7 +135,8 @@ class L1Linear:
     of a target measured in large units and none of one measured in small units, and a fixed
     fraction of the penalty that zeroes every coefficient would keep hundreds of noise columns on a
     wide pool with few rows. Taking sigma as the target's whole spread, and not the residual's,
-    errs towards keeping fewer features. `strength` scales it; the arms use 1.
+    errs towards keeping fewer features. `strength` scales the penalty, and the arms use the
+    default of 1.
     """
 
     name = "l1_linear"
@@ -143,6 +146,9 @@ class L1Linear:
     direction_kind = "l1_coefficient_sign"
     interpretable = True
     reproducible = True
+    #: What a run's config may change (`seqmaestro.models.settings`). `strength` scales the penalty,
+    #: so a larger one keeps fewer features.
+    settings: ClassVar[dict[str, type]] = {"strength": float}
 
     def __init__(self, strength: float = 1.0, seed: int = 0, max_iter: int = 10_000) -> None:
         if strength <= 0:
@@ -209,17 +215,17 @@ LEAST_SQUARES_PENALTIES = (None, "l1", "l2")
 
 
 class LeastSquares:
-    """Least squares, for a continuous target: the fit IGSR makes over its terms, which the later
-    stages refit an IGSR arm with.
+    """Least squares, for a continuous target: the fit IGSR makes over its terms, and the model the
+    later stages refit an IGSR arm with.
 
-    It is not among the Stage 2 models (`MODELS`), since an IGSR arm's Stage 2 model is IGSR's own,
-    fitted in its environment. After Stage 2 the arm's model is this one over the arm's term values,
-    which IGSR's copy computes, configured as the arm's search fitted (its bundle records how):
-    ordinary least squares, or ridge (`penalty="l2"`) or lasso (`penalty="l1"`) at IGSR's `alpha`,
-    with or without an intercept. The fit is made on the values as they are, as IGSR makes it,
-    because a penalty depends on each column's scale; scikit-learn's estimators with their default
-    settings are the ones IGSR calls, so the predictions are IGSR's. Each coefficient is then
-    reported per standard deviation of its column on the fitting rows, as `L1Linear`'s are.
+    It is not among the Stage 2 models (`MODELS`), because an IGSR arm's Stage 2 model is IGSR's,
+    fitted in its environment. After Stage 2 the arm's model is this one over the arm's term
+    values, which IGSR's vendored copy computes, configured as the arm's search fitted (its bundle
+    records how): ordinary least squares, or ridge (`penalty="l2"`) or lasso (`penalty="l1"`) at
+    IGSR's `alpha`, with or without an intercept. The fit is made on the values as they are, as
+    IGSR makes it, because a penalty depends on each column's scale. scikit-learn's estimators with
+    their default settings are the ones IGSR calls, so the predictions are IGSR's. Each coefficient
+    is then reported per standard deviation of its column on the fitting rows, as `L1Linear`'s are.
     """
 
     name = "least_squares"
@@ -310,9 +316,9 @@ def _universal_penalty(y: np.ndarray, weights: np.ndarray | None, n_columns: int
 
 
 def _coefficient_directions(importances: dict[str, float], target_kind: str) -> dict[str, str]:
-    """Each selected coefficient's sign, in the words of the target's kind. Exact and complete for a
-    linear model, and it needs no rows: the fit is monotone in every feature, so no range exists
-    over which the relationship could reverse, and `non_monotone` is unreachable."""
+    """Each selected coefficient's sign, in the words of the target's kind. The sign is exact and
+    complete for a linear model and needs no rows: the fit is monotone in every feature, so the
+    relationship cannot reverse over any range, and `non_monotone` is unreachable."""
     words = target_for(target_kind).directions
     return {name: word for name, coefficient in importances.items()
             if (word := direction.from_sign(coefficient, words))}
@@ -324,9 +330,10 @@ def _signed_feedback(model, X: pd.DataFrame, y) -> dict[str, Any]:
     Direction is the part a proposer can act on. "This feature counts against the outcome" is a
     different instruction from "this feature is unused", and an absolute importance conflates them.
 
-    This says what `directions` says, in its own words, and does not call it. The feedback is
-    digested into the proposal cache key, so rewording it would discard every cached proposal of
-    the iterative source. Keep the two separate until there is a reason to pay that cost.
+    This gives the information `directions` gives, in different words, without calling it. The
+    feedback is part of what the proposal cache key hashes, so rewording it would discard every
+    cached proposal of the iterative source. Keep the two separate unless there is a reason to
+    discard those proposals.
     """
     summary = fit_summary(model, X, y)
     weights = model.importances()

@@ -2,9 +2,9 @@
 
 Every table, figure axis and sentence in a generated report takes its names from here, and so does
 the spreadsheet of a run's features (`seqmaestro.report.spreadsheet`), so the report and the
-spreadsheet a collaborator is handed use one vocabulary. Repository vocabulary must never
-reach the reader. Making this module the only route from an internal name to a label enforces that,
-where leaving each writer to remember the rename would not.
+spreadsheet a collaborator is handed use one vocabulary. Repository vocabulary must never reach the
+reader. Making this module the only route from an internal name to a label enforces that, whereas
+leaving each writer to remember the rename would not.
 
 **An unknown name raises.** Adding a model or feature source means deciding how a reader sees it,
 and falling back to its internal name would put repository vocabulary in front of the reader.
@@ -26,9 +26,12 @@ from seqmaestro.features import (
     LLM_GENERATED,
     LLM_ITERATIVE,
     LLM_JOINT,
+    MOTIF_DISCOVERED,
+    MOTIF_KNOWN,
     WRITTEN_MEMBERS,
     parse_pool,
 )
+from seqmaestro.report.markdown import series
 
 #: The models that consume the features, by the name a cell records, in the order a report lists
 #: them. Whether a model is interpreted as a statement about features, and which kinds of target it
@@ -48,10 +51,10 @@ MODELS = {
 }
 
 #: Where the features came from, one entry per member of a pool. A pool is named for a reader by
-#: its members' names together, so `positional+kmer` is "positions + motifs" and no pool needs an
-#: entry of its own. Which sources a language model writes is declared once, in
+#: its members' names together, so `positional+kmer` is "positions + k-mers" and no pool needs a
+#: separate entry. Which sources a language model writes is declared once, in
 #: `seqmaestro.features.WRITTEN_MEMBERS`. The joint source is written inside the model's fit, so
-#: what it is depends on the model, and its entry says so per model (`by_model`).
+#: what it is depends on the model, and its entry describes it per model (`by_model`).
 SOURCES = {
     "positional": {
         "short": "positions",
@@ -59,9 +62,22 @@ SOURCES = {
         "gloss": "one yes/no column per (position, base) pair over the window",
     },
     "kmer": {
-        "short": "motifs",
-        "long": "short-motif counts",
-        "gloss": "one column for every short substring the run kept, holding how often it occurs",
+        "short": "k-mers",
+        "long": "k-mer counts",
+        "gloss": "one column for every short substring (k-mer) the run kept, holding how often it occurs",
+    },
+    MOTIF_KNOWN: {
+        "short": "known motifs",
+        "long": "matches to the motifs of a published collection",
+        "gloss": "two columns for every motif of a published collection, such as JASPAR's: the "
+                 "strength of its best match in the sequence, and the number of places it matches",
+    },
+    MOTIF_DISCOVERED: {
+        "short": "discovered motifs",
+        "long": "matches to motifs discovered in the training sequences",
+        "gloss": "two columns for every motif a discovery tool (STREME) found separating the "
+                 "classes, or the two ends of the target, in the sequences the model was fitted "
+                 "on: the strength of its best match, and the number of places it matches",
     },
     LLM_GENERATED: {
         "short": "written",
@@ -170,7 +186,7 @@ class Configuration:
 
     @property
     def label(self) -> str:
-        """The short name a table row carries, e.g. `EBM · written`."""
+        """The short name that labels a table row, such as `EBM · written`."""
         return f"{self.model_short} · {self.source_short}"
 
     @property
@@ -180,6 +196,76 @@ class Configuration:
     @property
     def writes_features(self) -> bool:
         return any(key in WRITTEN_MEMBERS for key in self.source_keys)
+
+
+#: Each provider a run can call (`seqmaestro.llm.PROVIDERS`), as a reader knows it.
+PROVIDERS = {"azure": "Azure OpenAI", "azure_foundry": "Azure AI Foundry",
+             "openai": "the OpenAI API", "claude": "the Claude API"}
+
+#: What a part of a run used the language model for, by the part: an arm's written source (the
+#: joint source by the model that writes it, `written_role`), the judge, and the grouping of written
+#: features into ideas.
+CALLED_FOR = {
+    LLM_GENERATED: "wrote features in one round",
+    LLM_ITERATIVE: "wrote features over several rounds, each shown a fit of the model",
+    f"{LLM_JOINT}/{arms.DEFT_OR_CART}": "wrote candidate features at each split of the decision tree",
+    f"{LLM_JOINT}/{arms.IGSR}": "wrote the terms of IGSR's linear model",
+    "judge": "rated how meaningful the features look",
+    "recurrence": "grouped the written features into ideas, to count those found again",
+}
+
+
+def written_role(arm: str) -> str | None:
+    """What an arm's language model was called for, as a key of `CALLED_FOR`, or None for an arm
+    on no written source. A pool that holds the iterative source is named for it, because the
+    iterative source's first round is the one-round source's request."""
+    configuration = parse(arm)
+    members = configuration.source_keys
+    if LLM_ITERATIVE in members:
+        return LLM_ITERATIVE
+    if LLM_GENERATED in members:
+        return LLM_GENERATED
+    if LLM_JOINT in members:
+        return f"{LLM_JOINT}/{configuration.model_key}"
+    return None
+
+
+def language_model(record: dict) -> str:
+    """The model a record of the calls names (`seqmaestro.llm.describe_calls`), as a reader sees
+    it: its name and how it was reached. An Azure OpenAI deployment is named by the model family the
+    run declared for it, with the deployment's name beside it. A record that names no provider is a
+    stand-in for a model, as in a test, and is shown by its model string."""
+    name = str(record["model"]).split("/", 1)[-1]
+    provider = record.get("provider")
+    if provider is None:
+        return name
+    if provider not in PROVIDERS:
+        raise KeyError(f"No reader-facing name for the provider {provider!r}. Add one to "
+                       f"naming.PROVIDERS.")
+    if provider == "azure":
+        family = str(record["base_model"]).split("/", 1)[-1]
+        return f"{family} (the deployment {name}, on {PROVIDERS[provider]})"
+    if provider == "azure_foundry":
+        return f"{name} (a deployment on {PROVIDERS[provider]})"
+    return f"{name} (through {PROVIDERS[provider]})"
+
+
+def reasoning_effort(record: dict) -> str:
+    """The reasoning effort a record says each call stated, or "none stated" where the calls stated
+    none. Claude's calls state none, which leaves its extended thinking off."""
+    effort = record.get("reasoning_effort")
+    return "none stated" if effort is None else str(effort)
+
+
+def agent_did(stages: list[str]) -> str:
+    """What an agent did, from the stages it recorded (`seqmaestro.pipeline.agents.STAGES`)."""
+    numbered = [stage for stage in stages if stage != "report"]
+    done = []
+    if numbered:
+        done.append(f"carried out Stage{'s' if len(numbered) > 1 else ''} {series(numbered)}")
+    if "report" in stages:
+        done.append("wrote this report")
+    return ", and ".join(done)
 
 
 def slug(arm: str) -> str:
@@ -209,22 +295,25 @@ def label(arm: str) -> str:
 
 
 def key_table(run_arms, target_kind: str) -> list[dict[str, str]]:
-    """The abbreviation key every report carries once, near the front, for a run on a
-    `target_kind` target. The covariates are listed only where one of the run's arms (`run_arms`)
-    was given them, so a report on a dataset without any does not mention them."""
-    uses_covariates = any(COVARIATES in parse(arm).source_keys for arm in run_arms)
+    """The abbreviation key every report includes once, near the front, for a run on a
+    `target_kind` target: the models the run's arms (`run_arms`) fitted and the feature sources
+    their pools held, and nothing else. A report then does not name a model or source it has no
+    result for, such as the covariates of a dataset without any, or a source the run's config left
+    out."""
+    configurations = [parse(arm) for arm in run_arms]
+    fitted = {configuration.model_key for configuration in configurations}
     rows = []
     for key, entry in MODELS.items():
-        if target_kind not in arms.spec(key).target_kinds:
+        if key not in fitted or target_kind not in arms.spec(key).target_kinds:
             continue
         rows.append({"kind": "model", "short": entry["short"], "name": entry["long"],
                      "note": "" if model_interpretable(key)
                      else "reference only, not interpreted as a statement about features"})
     # A source whose meaning depends on the model is listed once for each model the run hands it.
-    handed = {(key, configuration.model_key) for configuration in map(parse, run_arms)
+    handed = {(key, configuration.model_key) for configuration in configurations
               for key in configuration.source_keys}
     for key, entry in SOURCES.items():
-        if key == COVARIATES and not uses_covariates:
+        if not any(source == key for source, _ in handed):
             continue
         models = sorted(model for source, model in handed
                         if source == key and model in entry.get("by_model", {}))

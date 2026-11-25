@@ -1,10 +1,10 @@
 """One arm, reduced in this process: its seed, its columns, its model, the elimination.
 
-Everything is rebuilt from what the Stage 2 cell recorded, and no setting is declared a second
-time. The seed is that of the real-label cell with the best validation headline. The rows are the
-ones that cell was fitted on, from its `train_fraction`, seed and weight column. The columns come
-from the featuriser the cell saved (the same values its model was fitted on) and are checked against
-the values it recorded. The model is rebuilt from the description the cell recorded
+Everything is rebuilt from what the Stage 2 cell recorded, so that each setting is declared in one
+place only. The seed is that of the real-label cell with the best validation headline, and the rows
+are the ones that cell was fitted on, from its `train_fraction`, seed and weight column. The columns
+come from the featuriser the cell saved (the same values its model was fitted on) and are checked
+against the values it recorded. The model is rebuilt from the description the cell recorded
 (`model_settings`), and refused if the rebuild does not describe itself the same way. The reduction
 therefore eliminates from the model the cell reported, and changes only its columns.
 """
@@ -24,7 +24,7 @@ from seqmaestro.harness import cell as cells
 from seqmaestro.harness.features import load_features
 from seqmaestro.harness.fitted import load_fitted
 from seqmaestro.harness.runner import evaluate_columns, subsample_training_rows
-from seqmaestro.models import make_model
+from seqmaestro.models import given_settings, make_model
 from seqmaestro.models.base import Model, filled_rows
 from seqmaestro.models.weights import resolve_fit_weights
 from seqmaestro.reduction import check, eliminate
@@ -37,7 +37,7 @@ ROLES = {
     "full": "the arm's model refitted on every feature its Stage 2 fit used: the first step",
     "reduced": "the model the elimination arrives at, on N features",
     "top_n": "the N features the full model ranked highest, fitted once: the control for whether "
-             "the recursion earned its cost",
+             "the recursion finds a better set than one ranking",
 }
 
 
@@ -46,13 +46,13 @@ _NOT_SETTINGS = frozenset({"per_row_weights", "max_bins", "alpha", "trees_kept",
 
 
 def best_seed(validation: dict[int, dict], headline: str) -> int:
-    """The seed with the highest validation `headline` (the kind of target's, `seqmaestro.target`);
-    ties go to the smaller seed.
+    """The seed with the highest validation `headline` (the headline metric of the kind of target,
+    `seqmaestro.target`). A tie goes to the smaller seed.
 
-    Validation is used because it is the only split read before the reveal. For an arm on the
-    iterative source it is also the split that steered its proposals, so its best seed is partly the
-    one that was steered best. The report template has a report of such an arm say so
-    (`docs/report/TEMPLATE.md`, Stage 3A).
+    Validation is used because it is the only split a model is scored on before the reveal. For an
+    arm on the iterative source, and for an IGSR arm, it is also the split that steered what the arm
+    wrote, so its best seed is partly the one that was steered best. The report template has a
+    report of such an arm say so (`process/report-template.md`, Stage 3A).
     """
     if not validation:
         raise ValueError("No seeds to choose from.")
@@ -63,15 +63,17 @@ def rebuild_model(description: dict[str, Any], seed: int, target_kind: str,
                   execution: dict[str, Any] | None = None) -> Model:
     """A fresh model configured as the cell's was, refused if it would not be the same model.
 
-    Stage 2 builds a model from a name, the target's kind, a seed and, for a binary target, a
-    class weight, so those are what is passed. The fresh model's description is then compared with
-    the cell's, because a setting the rebuild dropped would otherwise fit a different model under
-    the arm's name, and a cell fitted against another kind of target is refused the same way. The
-    comparison runs both ways, so a setting the model gained after the cell was fitted is refused
-    too. `execution` holds options that change how a fit runs and not what it fits, such as how many
-    cores it may use, and is left out of the comparison.
+    Stage 2 builds a model from a name, the target's kind, a seed, the settings the run's config
+    gives it and, for a binary target, a class weight, so those are what is passed, with the
+    settings as the cell's description records them (`seqmaestro.models.given_settings`). The fresh
+    model's description is then compared with the cell's, because a setting the rebuild dropped
+    would otherwise fit a different model under the arm's name, and a cell fitted against another
+    kind of target is refused the same way. The comparison runs both ways, so a setting the model
+    gained after the cell was fitted is refused too. `execution` holds options that change how a fit
+    runs and not what it fits, such as how many cores it may use, and is left out of the comparison.
     """
-    options: dict[str, Any] = {"seed": seed, **(execution or {})}
+    options: dict[str, Any] = {"seed": seed, **given_settings(description, target_kind),
+                               **(execution or {})}
     if "class_weight" in description:
         options["class_weight"] = description["class_weight"]
     model = make_model(description["model"], target_kind=target_kind, **options)
@@ -96,8 +98,8 @@ def _setting(description: dict[str, Any], key: str) -> str:
 class SelectedColumns(Featuriser):
     """A fitted featuriser narrowed to the columns a reduced model was fitted on.
 
-    A reduced model is saved with one, so what `load_fitted` returns turns rows into exactly that
-    model's inputs, which is how the reveal predicts it.
+    A reduced model is saved with one, so what `load_fitted` returns turns rows into that model's
+    inputs, which is how the reveal predicts it.
     """
 
     def __init__(self, featuriser: Featuriser, names: list[str]) -> None:
@@ -133,8 +135,9 @@ class Fitted:
     def importances(self) -> np.ndarray:
         """Absolute importance per column, zero where the model did not use it.
 
-        Absolute, because an L1 coefficient is signed and a large negative weight is as influential
-        as a large positive one. `rank_by_importance` in the harness does the same.
+        The importance is absolute, because an L1 coefficient is signed and a large negative weight
+        is as influential as a large positive one. `rank_by_importance` in the harness does the
+        same.
         """
         reported = self.model.importances()
         return np.array([abs(float(reported.get(name, 0.0))) for name in self.columns])
@@ -157,8 +160,8 @@ class NoFeatures:
 
     Tier 3 refits a model without each of its features, and without each cluster of them. Where one
     feature or one cluster is the whole model, the refit has nothing left to use, and all it can
-    still do is predict the average the fit saw. The test then asks whether the model beats that
-    constant. With balanced class weights the constant is one half.
+    still do is predict the average the fit saw. The test then checks whether the model beats that
+    constant, which is one half under balanced class weights.
     """
 
     name = "no_features"
@@ -199,8 +202,8 @@ def fit_step_with(build: Callable[[], Model], sample_weight: np.ndarray | None, 
                   target_kind: str, class_weight: str | None = None):
     """The elimination's `fit_step`: a fresh model from `build`, fitted with the rows' weights.
     Given no columns, it fits `NoFeatures`, weighted as the model it stands in for. A Tier 3 refit
-    of a model without its only feature or cluster asks for that, and so does the reduction of an
-    arm whose Stage 2 model used no feature."""
+    of a model without its only feature or cluster needs that, and so does the reduction of an arm
+    whose Stage 2 model used no feature."""
     def fit_step(X: np.ndarray, y: np.ndarray, names: list[str]) -> Fitted:
         model = build() if names else NoFeatures(target_kind, class_weight)
         model.fit(_frame(X, names), y, sample_weight=sample_weight)
@@ -277,7 +280,7 @@ class Reduction:
 
 def reduce_in_process(source: Source, train: pd.DataFrame, val: pd.DataFrame, *,
                       columns: Columns, n_target: int, on_step=None) -> Reduction:
-    """Eliminate one of our own arms to `n_target` features, and fit the top-N control."""
+    """Eliminate one of our arms to `n_target` features, and fit the top-N control."""
     featuriser = load_fitted(source.cell).featuriser
     names = source.names
     rows, y_fit, weights = source.fitting_rows(train, columns)
@@ -294,7 +297,7 @@ def reduce_columns(source: Source, X_fit: np.ndarray, y_fit: np.ndarray, X_val: 
                    fit_step, n_target: int, on_step=None) -> Reduction:
     """Eliminate an arm's recorded features to `n_target`, and fit the top-N control, on their
     values over the fitting and validation rows, however those were computed. The validation
-    values are checked against the ones the cell recorded first."""
+    values are first checked against the ones the cell recorded."""
     names = source.names
     checked = check.compare(X_val, names, source.cell)
     result = eliminate.run(fit_step, X_fit, y_fit, X_val, names, n_target, on_step=on_step)

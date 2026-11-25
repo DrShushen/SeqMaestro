@@ -1,27 +1,27 @@
-"""Recursive feature elimination, written once for every arm. **numpy only.**
+"""Recursive feature elimination, written once for every arm, in **numpy only**.
 
-The loop is the textbook one: fit, rank by the model's importance, drop the weakest, refit. The
-three decisions a textbook leaves open are made here, in one place, so every arm of every dataset is
-eliminated by the same rules.
+The loop is the textbook one (fit, rank by the model's importance, drop the weakest, refit), and
+the three decisions a textbook leaves open are made here, in one place, so that every arm of every
+dataset is eliminated by the same rules.
 
 **The schedule.** Dropping one feature at a time from thousands would take thousands of fits of a
-model that can be slow to fit. Dropping a fraction at each step instead costs a number of fits that
+model that can be slow to fit. Dropping a fraction at each step instead takes a number of fits that
 grows with the logarithm of the number of features, and the late steps, which drop one at a time,
-fit few columns and are cheap. So a quarter of the remaining features go at each step while more
-than `FINE_BELOW` are left, and one at a time after that, which keeps the part of the trajectory a
-reader studies at full resolution.
+fit few columns and are cheap. A quarter of the remaining features therefore go at each step while
+more than `FINE_BELOW` are left, and one at a time after that, which keeps the part of the
+trajectory a reader studies at full resolution.
 
 **Features the model does not use.** A feature with zero importance is unused: an L1 coefficient
-driven to zero, a term whose shape function is flat, a column no tree split on. All of them are
-dropped together as soon as they appear, though never below `n_target` columns, instead of a
+driven to zero, a term whose shape function is flat, a column that no tree split on. All of them
+are dropped together as soon as they appear, though never below `n_target` columns, instead of a
 quarter at a time. This is faster, and it avoids an arbitrary choice, since "the weakest quarter of
 the features the model ignores" is an arbitrary subset of them.
 
 **Ties.** Many arms have long ties at zero, so the tie-break decides real outcomes, and it is
 written down here instead of being left to `argsort`. Among features of equal importance, the first
-to go is the one that last carried any importance longest ago, then the one whose importance was
-smallest when it last had any, then the one later in the arm's record order. Every part is
-deterministic and none of it looks at a label.
+to go is the one that last had any importance longest ago, then the one whose importance was
+smallest when it last had any, then the one later in the arm's record order. Every part of the
+tie-break is deterministic and independent of the labels.
 
 **Why numpy only.** The vendored tree runs in its own environment and cannot import `seqmaestro`,
 but its arms must be eliminated by this same loop. `experiments/adapters/deft_cart.py` loads this
@@ -29,7 +29,7 @@ file by path and records its digest, and `tests/test_reduction.py` fails if it i
 numpy and the standard library. The reliability panel's selection step calls it too, starting from
 an arm's candidates instead of the features its model recorded.
 
-The caller scores the elimination on validation only. Nothing here sees any labels except those of
+The caller scores the elimination on validation only, and the code here sees only the labels of
 the fitting rows.
 """
 
@@ -58,7 +58,7 @@ def order_worst_first(active: np.ndarray, importance: np.ndarray, last_seen: np.
     """Indices of `active`, weakest first, under the tie-break the module docstring states."""
     keys = np.lexsort((
         -active,                     # last resort: the arm's record order, earlier kept
-        last_value[active],          # how much it carried when it last carried anything
+        last_value[active],          # how much importance it had when it last had any
         last_seen[active],           # how recently it was used at all
         importance,                  # what it is worth now
     ))
@@ -77,10 +77,10 @@ def run(
     """Eliminate down to `n_target`, returning the trajectory and the final model.
 
     `fit_step(X, y, columns) -> fitted` is the only thing that differs between arms. It is passed
-    in, not imported, so the tree arms, which cannot import this project's model package, use the
-    same loop. A fitted object has `importances()`, one non-negative number per column, and
-    `predict(X)`, its score for each row. Anything else a fit needs, such as per-row weights for the
-    fitting rows, the caller closes over.
+    in instead of imported, so that the tree arms, which cannot import this project's model
+    package, use the same loop. A fitted object has `importances()`, one non-negative number per
+    column, and `predict(X)`, its score for each row. The caller closes over anything else a fit
+    needs, such as per-row weights for the fitting rows.
 
     A set of features already no larger than `n_target` is fitted once and kept whole. The survivors
     are `final_columns`, and `final_used` names those the final model uses (`used_columns`).
@@ -151,7 +151,7 @@ def used_columns(columns: list[str], importance) -> list[str]:
 
     The elimination keeps `n_target` columns even when the model uses fewer. The columns it does not
     use then hold their places by the tie-break alone, which is the same on any rows that share the
-    record order, so a selection chose only the columns its final model uses.
+    record order, so only the columns its final model uses count as chosen by a selection.
     """
     return [str(name) for name, value in zip(columns, importance, strict=True) if value > 0]
 
@@ -160,7 +160,7 @@ def top_n(first_importance, n_target: int) -> np.ndarray:
     """The `n_target` columns the full model ranked highest, in record order.
 
     This is the one-shot alternative to the recursion (keep what the first fit ranked highest and
-    fit once), and so the control for whether the recursion earned its cost. The sort is stable, so
-    ties keep record order.
+    fit once), and so the control for whether the recursion is worth its extra fits. The sort is
+    stable, so ties keep record order.
     """
     return np.sort(np.argsort(-np.asarray(first_importance), kind="stable")[:n_target])

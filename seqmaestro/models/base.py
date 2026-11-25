@@ -1,13 +1,13 @@
 """What a model has to provide to be comparable with the others.
 
 A model fits one kind of target, predicts a score for each row, says which features it used and how
-much, says which way each of them points, describes itself for the run manifest, and reports on its
-fit to a proposer. Everything else (featurisation, thresholds, metrics, feature records, where the
-files go) is the job of `run_model` (`seqmaestro.harness.runner`) and is identical for every model,
-so the arms form one comparison instead of separate experiments.
+much, says which way each of them points, describes itself for the cell's `run.json`, and reports
+on its fit to a proposer. Everything else (featurisation, thresholds, metrics, feature records,
+where the files go) is the job of `run_model` (`seqmaestro.harness.runner`) and is identical for
+every model, so the arms form one comparison instead of separate experiments.
 
-Adding a model is implementing this protocol. It does not touch `run_model`, the record, the
-metrics or the stability estimator.
+To add a model, implement this protocol: `run_model`, the record, the metrics and the stability
+estimator need no change.
 """
 
 from __future__ import annotations
@@ -21,17 +21,18 @@ from seqmaestro.target import target_for
 
 
 def fit_summary(model, X: pd.DataFrame, y) -> dict[str, Any]:
-    """The part of `Model.feedback` every model shares: how it scored, and what it leaned on.
+    """The part of `Model.feedback` every model shares: how it scored and which features it relied
+    on.
 
-    `unused` is as informative as `most_used` and easier to overlook: a feature the model could not
-    use is one the next round should not spend a proposal restating.
+    `unused` is as informative as `most_used` and easier to overlook: the next round should not
+    spend a proposal restating a feature the model could not use.
     """
     scored = target_for(model.target_kind).feedback_metrics(np.asarray(y), np.asarray(model.predict(X)))
     importances = model.importances()
     ranked = sorted(importances.items(), key=lambda item: -abs(item[1]))
     return {
-        # The kind's headline and its companion: AUROC and AUPRC for a binary target, R-squared and
-        # Spearman's rho for a continuous one.
+        # The headline metric of the target's kind and its companion: AUROC and AUPRC for a binary
+        # target, R-squared and Spearman's rho for a continuous one.
         **{name: round(float(value), 4) for name, value in scored.items()},
         "n_features_offered": int(X.shape[1]),
         "n_features_used": len(importances),
@@ -44,8 +45,8 @@ def fit_summary(model, X: pd.DataFrame, y) -> dict[str, Any]:
 
 
 def fitted_values(X: pd.DataFrame, columns: list[str]) -> np.ndarray:
-    """`X` as one array of floats, once its columns are checked against `columns`, the columns a
-    model was fitted on, in their order.
+    """`X` as one array of floats, after its columns are checked against `columns` (the columns a
+    model was fitted on, in their order).
 
     A model predicts from this array instead of handing the frame to its library. scikit-learn,
     XGBoost and EBM each check a frame's columns and convert it to an array one column at a time,
@@ -82,32 +83,35 @@ FILLED_ROWS = "filled_rows"
 class Model(Protocol):
     """A model of one kind of target over a named feature matrix."""
 
-    #: Short label used in the results path and the manifest. A model of each kind can share one,
-    #: since an arm's kind is its dataset's.
+    #: Short label in the cell's `run.json`. An arm names its model by this label too, so it also
+    #: appears in the results path. A binary and a continuous model can share one, because an arm's
+    #: kind of target is its dataset's.
     name: str
     #: The kind of target it fits (`seqmaestro.target`).
     target_kind: str
-    #: What `importances()` returns, in the vocabulary of `seqmaestro.harness.features`. Never
-    #: comparable across models, so the harness ranks before comparing.
+    #: What `importances()` returns, in the vocabulary of `seqmaestro.harness.features`. It is
+    #: never comparable across models, so the harness ranks the importances before comparing them.
     importance_kind: str
-    #: What `directions()` reads, in the vocabulary of `seqmaestro.harness.direction`. The
-    #: underlying quantities are no more comparable across models than the importances are, but
-    #: the words they reduce to are, which is why the basis is named and a word reported.
+    #: What `directions()` derives its words from, in the vocabulary of
+    #: `seqmaestro.harness.direction`. The underlying quantities are no more comparable across
+    #: models than the importances are, whereas the words they reduce to are, so the basis is named
+    #: and a word is reported.
     direction_kind: str
     #: Whether the fitted model can be interpreted feature by feature (a coefficient, a shape
     #: function) and not only through its predictions. The reliability panel profiles only models
-    #: that can, since a profile of a black box's features would describe the profile and not the
-    #: model.
+    #: that can, because a profile of a black box's features would describe those columns and say
+    #: nothing about the model.
     interpretable: bool
     #: Whether refitting on the same rows, weights and seed returns the same model. The reliability
     #: panel reruns the reduction to check that its inputs are the reduction's, which only a
-    #: reproducible model can pass. PySR's multithreaded search is the one model that is not.
+    #: reproducible model can pass. PySR, whose search is multithreaded, is the only model that is
+    #: not reproducible.
     reproducible: bool
 
     # Three optional members, which only some models have:
     #
     # `environment`, a class attribute naming the conda environment a fit runs code in besides
-    # Core's (PySR's search). A stage that fits such a model records that environment beside the
+    # Core's (PySR's search). A stage that fits such a model records that environment with the
     # run, as it records Core's.
     #
     # `one_core`, a class attribute holding the constructor options that keep a fit on one core,
@@ -141,7 +145,7 @@ class Model(Protocol):
     def importances(self) -> dict[str, float]:
         """Feature name to importance, **for the features the model used** and no others.
 
-        Omitting the rest is what turns the result into a discovered-feature set. A model that
+        Omitting the rest makes the result the set of features the model found. A model that
         assigns every input a non-zero weight has selected nothing, and says so by returning
         everything.
         """
@@ -150,19 +154,20 @@ class Model(Protocol):
         """Feature name to which class the model uses it to argue for, or which way it moves a
         continuous target, for the features it used.
 
-        One of the words in `seqmaestro.harness.direction`, read off whatever machinery this model
-        has for the purpose: a coefficient's sign, a shape function's trend, or an attribution's
+        Each is one of the words in `seqmaestro.harness.direction`, derived from whatever this model
+        offers for the purpose: a coefficient's sign, a shape function's trend, or an attribution's
         dependence on the feature. A model with no basis for a direction returns fewer keys, or
         none. A feature the model uses in both directions is `non_monotone`, which is an answer and
         not a missing value.
 
-        **Given the frame explicitly**, for the same reason `feedback` is. Some models need rows to
-        answer, and none should reach for a frame kept from fitting. Which rows a direction is read
-        on is the caller's decision, and the harness reads it on the reference split so that every
-        arm's answer is measured on identical data.
+        **The frame is given explicitly**, for the same reason as in `feedback`. Some models need
+        rows to answer, and a model should never use a frame it kept from fitting. The caller
+        decides on which rows a direction is measured, and the harness measures it on the reference
+        split, so that every arm's answer is measured on the same data.
 
-        **No labels.** What a model does with a feature is a property of the model. What the feature
-        does in the data is a separate question with a separate answer, and the harness records both.
+        **The labels are not given.** What a model does with a feature is a property of the model,
+        whereas what the feature does in the data is a separate question with a separate answer
+        (`marginal_effect`), and the harness records both.
         """
 
     def describe(self) -> dict[str, Any]: ...
@@ -170,13 +175,13 @@ class Model(Protocol):
     def feedback(self, X: pd.DataFrame, y) -> dict[str, Any]:
         """What this model can tell a proposer about its fit, for an arm that proposes in rounds.
 
-        **Given the frame to report on explicitly**, so the model never reaches for one it kept.
-        Which rows a model may be judged on is the caller's decision and belongs at the call site,
-        where it can be read.
+        **The frame to report on is given explicitly**, so the model never uses one it kept. Which
+        rows a model may be judged on is the caller's decision and belongs at the call site, where
+        it can be read.
 
         `fit_summary` is what every model can say. A model extends it with what only it knows: a
         cover table beside the gain, how far each shape function swings, the sign of a coefficient.
-        The proposer treats the result as data, so a model may add a key without the prompt having
-        to learn about it.
+        The proposer treats the result as data, so a model may add a key without any change to the
+        prompt.
         """
         ...

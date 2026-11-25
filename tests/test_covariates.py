@@ -1,5 +1,6 @@
-"""Covariates through the in-process arms: the featuriser, the pool member, the config key, and one
-run on the planted dataset's covariate variant, fitted, reduced, profiled and revealed."""
+"""Covariates through the arms that run in this process: the featuriser, the pool member, the config
+key, and a run on the covariate variant of the planted dataset, in which the arms are fitted,
+reduced, profiled and revealed."""
 
 from __future__ import annotations
 
@@ -18,7 +19,8 @@ from seqmaestro.harness.features import load_features
 from seqmaestro.harness.fitted import load_fitted
 from seqmaestro.harness.heldout import TEST_SPLIT, reveal_record
 from seqmaestro.report import facts
-from tests.planted import ANALYSES, COVARIATES, planted_dataset
+from tests.planted import ANALYSES, COVARIATES, LANGUAGE_MODEL, planted_dataset
+from tests.small_motifs import pool_settings
 
 DESCRIBED = {"signal": "a signal over the window", "peaks": "peaks overlapping the window"}
 
@@ -77,11 +79,13 @@ def test_make_featuriser_asks_for_the_covariates_exactly_when_the_pool_holds_the
 
 @pytest.mark.parametrize("pool", [pool for pool in FIXED_POOLS if "covariates" in pool])
 def test_every_covariate_pool_names_its_features_legally_and_keeps_the_rows_index(pool):
-    sequences = pd.Series(["ACGT", "TGCA", "GGCC"], index=[17, 42, 5])
-    rows = Inputs(sequences, pd.DataFrame({"signal": [0.1, 0.9, 0.4]}, index=sequences.index))
-    X = make_featuriser(pool, k_range=(1, 2), kmer_normalise="counts", covariates=DESCRIBED).fit_transform(rows)
+    sequences = pd.Series(["ACGT", "TGCA", "GGCC", "AAAA"], index=[17, 42, 5, 9])
+    rows = Inputs(sequences, pd.DataFrame({"signal": [0.1, 0.9, 0.4, 0.2]}, index=sequences.index))
+    # Labels for the discovered motifs, the only source that uses them: two rows of each class.
+    labels = np.array([1, 0, 1, 0])
+    X = make_featuriser(pool, **pool_settings(pool), covariates=DESCRIBED).fit_transform(rows, labels)
     assert all(name.isidentifier() for name in X.columns)
-    assert list(X.index) == [17, 42, 5] and X.columns[-1] == "covariate_signal"
+    assert list(X.index) == [17, 42, 5, 9] and X.columns[-1] == "covariate_signal"
 
 
 def test_every_pool_keeps_its_name_and_gains_one_with_the_covariates():
@@ -109,8 +113,9 @@ def a_config(tmp_path: Path, dataset, arms: dict, **sections) -> Path:
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
         "sources": sources,
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms,
         **sections,
@@ -120,7 +125,8 @@ def a_config(tmp_path: Path, dataset, arms: dict, **sections) -> Path:
 
 def test_the_covariates_are_a_source_and_a_run_that_hands_them_to_no_pool_is_warned(runners, tmp_path):
     """A pool holds the covariates by naming them, so the config says which arms are handed them.
-    A dataset that declares covariates no pool holds is warned about, not refused."""
+    A run whose pools hold none of the dataset's declared covariates is warned about instead of
+    refused."""
     dataset = planted_dataset(tmp_path, covariates=True)
     config = runners.config.load(a_config(tmp_path, dataset, {
         "positional+covariates": {"models": ["l1_logistic"]}}))
@@ -189,7 +195,7 @@ def test_the_driver_hands_each_arm_its_pool(runners, tmp_path):
 
 
 # --------------------------------------------------------------------------------------------
-# One run, end to end
+# An end-to-end run
 # --------------------------------------------------------------------------------------------
 
 RELIABILITY = {"pairs": 3, "permutations": 200, "cluster_rho": 0.8, "max_modal_share": 0.99,
@@ -244,7 +250,8 @@ def test_covariate_arms_are_fitted_reduced_profiled_and_revealed(runners, tmp_pa
 
 
 def test_a_model_is_shown_the_covariates_by_name_only_where_its_pool_holds_them(tmp_path):
-    """What a blinded run's column names are checked over (`seqmaestro.llm.blinding_leaks`)."""
+    """In a blinded run, the columns a model is shown by name are the ones checked for withheld
+    words (`seqmaestro.llm.blinding_leaks`)."""
     dataset = planted_dataset(tmp_path, covariates=True)
     plain = {dataset.sequence_column: None, dataset.target_column: None}
     assert dataset.shown_columns(["llm_generated"]) == plain
@@ -254,9 +261,9 @@ def test_a_model_is_shown_the_covariates_by_name_only_where_its_pool_holds_them(
 def test_the_report_states_each_covariate_at_stage_1(tmp_path):
     dataset = planted_dataset(tmp_path, covariates=True)
     unblinded = {"blinded": False, "withheld": None}
-    stage1 = facts.stage1(SimpleNamespace(dataset=dataset, blinding=unblinded))
+    stage1 = facts.stage1(SimpleNamespace(dataset=dataset, blinding=unblinded, guidance=None))
     assert list(stage1["covariates"]) == ["signal", "noise"]
     assert stage1["covariates"]["signal"]["description"] == dataset.covariates["signal"]
     assert set(stage1["covariates"]["signal"]["training"]) >= {"min", "max", "mean", "sd"}
     assert facts.stage1(SimpleNamespace(dataset=planted_dataset(tmp_path / "plain"),
-                                        blinding=unblinded))["covariates"] == {}
+                                        blinding=unblinded, guidance=None))["covariates"] == {}

@@ -1,8 +1,8 @@
-"""What a call leaves when a cell of it fails and is later repaired.
+"""What a call (one process of a run) leaves when one of its cells fails and is later repaired.
 
-A failed cell is recorded in the call's failures file and the other cells go on. Once the cell is
-repaired and the call run again, the file goes, so a run whose every cell is whole carries no
-record saying otherwise.
+A failed cell is recorded in the call's failures file while the remaining cells still run. Once
+the cell is repaired and the call is run again, the file is removed, so a run whose cells are all
+complete has no record saying otherwise.
 """
 
 from __future__ import annotations

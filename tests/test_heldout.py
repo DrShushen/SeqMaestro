@@ -1,15 +1,16 @@
-"""The test split stays closed until one reveal, which scores a cell exactly as inline scoring would.
+"""The held-out split (the `test` split) stays closed until the reveal, which scores a cell with
+numbers identical to those of inline scoring (scoring at fit time, with the model and featuriser in
+memory).
 
-There are three kinds of check:
+The tests are of three kinds:
 
-- Static: no module names the test split but `seqmaestro.harness.heldout` and
-  `seqmaestro/dataset.py`, which finalises and checks a dataset, and every stage that fits refuses
-  a revealed run.
+- Static: only `seqmaestro.harness.heldout`, `seqmaestro/dataset.py` (which finalises and checks a
+  dataset) and `seqmaestro/cli/prepare.py` (which makes a split from a table) name the test split,
+  and every stage that fits refuses a revealed run.
 - The seal: `reveal.json` is written before the test file is read, the file is checked against the
   digest Stage 1 recorded, and a run is revealed only once.
-- The reveal: a cell scored at the reveal holds exactly the numbers that scoring with the model and
-  featuriser in memory gives, and `run_reveal.py` refuses a run whose cells are not all present
-  unless it is given a reason.
+- The reveal: a cell scored at the reveal holds the numbers that inline scoring gives, and
+  `run_reveal.py` refuses a run whose cells are not all present unless it is given a reason.
 """
 
 from __future__ import annotations
@@ -43,26 +44,27 @@ from seqmaestro.harness.heldout import (
 from seqmaestro.harness.metrics import choose_threshold, classification_metrics
 from seqmaestro.models import MODELS, make_model
 from seqmaestro.models.base import FILLED_ROWS
-from tests.planted import ANALYSES, SEQUENCE, TARGET, planted_dataset, run_cell
+from tests.planted import ANALYSES, LANGUAGE_MODEL, SEQUENCE, TARGET, planted_dataset, run_cell
 
 REPO = Path(__file__).resolve().parents[1]
 RUNNERS = REPO / "experiments" / "runners"
 
 # --------------------------------------------------------------------------------------------
-# Static: one reader
+# Static: one module reads the test split
 # --------------------------------------------------------------------------------------------
 
-#: Where code that must not read the test split lives.
+#: The directories whose code must not read the test split.
 GUARDED = ("seqmaestro", "experiments/runners", "experiments/analysis", "experiments/adapters")
-#: The reader itself, and the Stage 1 standard, which counts the split it describes.
-EXEMPT = {"seqmaestro/harness/heldout.py", "seqmaestro/dataset.py"}
+#: The reader itself, the Stage 1 standard, which measures every split it describes, and the
+#: command line's Stage 1, which makes the split from a table.
+EXEMPT = {"seqmaestro/harness/heldout.py", "seqmaestro/dataset.py", "seqmaestro/cli/prepare.py"}
 #: A string naming the test split: the split, its file, or a key or array built on its name.
 NAMES_THE_TEST_SPLIT = re.compile(r"^test$|^test[._]|test\.csv")
 
 
 def references(path: Path) -> list[str]:
-    """The string constants in a module that name the test split. Docstrings are prose, and are
-    allowed to talk about it."""
+    """The string constants in a module that name the test split. Docstrings are left out, since
+    prose may mention the split."""
     tree = ast.parse(path.read_text())
     prose = set()
     for node in ast.walk(tree):
@@ -81,7 +83,7 @@ def guarded_modules() -> list[Path]:
 
 
 def test_only_the_heldout_module_names_the_test_split():
-    """Code that reads test results after the reveal takes the names from `heldout`, so every
+    """Code that reads test results after the reveal imports the names from `heldout`, so every
     dependency on the test split is an import of that module."""
     modules = guarded_modules()
     assert len(modules) > 40, "too few modules found; the scan is looking in the wrong place"
@@ -91,7 +93,7 @@ def test_only_the_heldout_module_names_the_test_split():
 
 
 def test_the_scan_catches_a_module_that_reads_the_test_split(tmp_path):
-    """A test of the scan itself: a loop over the three split names is caught, and prose about
+    """A test of the scan itself: a loop over the three split names is caught, whereas prose about
     them is not."""
     module = tmp_path / "reads.py"
     module.write_text('import pandas as pd\n'
@@ -110,16 +112,17 @@ def test_nothing_outside_stage_1_takes_the_list_of_splits():
                 assert "SPLITS" not in {alias.name for alias in node.names}, module
 
 
-#: The `run_*.py` scripts that are not a stage that fits or selects: the reveal itself, and the
+#: The `run_*.py` scripts that are not a stage that fits or selects: the reveal itself and the
 #: driver, whose preflight refuses a revealed run before it starts any stage.
 NOT_PRE_REVEAL = {"run_reveal.py", "run_experiment.py"}
 
 
 def test_every_stage_before_the_reveal_refuses_a_revealed_run():
-    """Every stage but the reveal fits or selects something, so the module behind each of their
-    scripts must refuse."""
+    """Every stage before the reveal fits or selects something, so the module behind each stage's
+    script must refuse a revealed run."""
     scripts = sorted(path for path in RUNNERS.glob("run_*.py") if path.name not in NOT_PRE_REVEAL)
-    assert {"run_baseline.py", "run_arm.py", "run_reduction.py", "run_reliability.py"} == \
+    assert {"run_baseline.py", "run_motifs.py", "run_arm.py", "run_reduction.py",
+            "run_reliability.py"} == \
            {path.name for path in scripts}, "the scan found other scripts than the stages'"
     for script in scripts:
         imported = [node.module for node in ast.walk(ast.parse(script.read_text()))
@@ -194,7 +197,7 @@ def test_a_partial_reveal_needs_a_reason_and_records_it(dataset, tmp_path):
 
 def a_cell(dataset, out: Path, model_name: str = "l1_logistic", seed: int = 5,
            n_bootstrap: int = 25):
-    """One cell fitted through the harness. Returns the model and featuriser it held in memory."""
+    """Fit one cell through the harness, and return the model and featuriser it held in memory."""
     train, val = pd.read_csv(dataset.train_path), pd.read_csv(dataset.val_path)
     model, featuriser = make_model(model_name, target_kind="binary", seed=seed), make_featuriser("positional")
     run_cell(model, featuriser, train, val, columns=dataset.columns,
@@ -252,8 +255,8 @@ def test_a_cell_is_scored_once(dataset, tmp_path):
 
 
 def test_a_cell_that_did_not_record_its_scoring_is_refused(dataset, tmp_path):
-    """Without the bootstrap count the test block's intervals could not match the validation
-    block's, and nothing would say they had been drawn differently."""
+    """Without the bootstrap count, the test block's intervals could not match the validation
+    block's, and nothing would show that they had been drawn differently."""
     a_cell(dataset, tmp_path / "cell")
     run = json.loads((tmp_path / "cell" / "run.json").read_text())
     del run["n_bootstrap"]
@@ -275,12 +278,12 @@ def test_test_numbers_are_refused_to_a_reader_before_the_reveal(dataset, tmp_pat
 
 
 # --------------------------------------------------------------------------------------------
-# The reveal stage, end to end, on our own arms and the baseline
+# The reveal stage end to end, on the baseline and arms of SeqMaestro's own models
 # --------------------------------------------------------------------------------------------
 
 
 def a_run(tmp_path: Path, dataset, runners) -> Path:
-    """A run directory holding its resolved config, as the driver leaves one."""
+    """Make a run directory that holds its resolved config, as the driver leaves one."""
     source = tmp_path / "planted.yaml"
     source.write_text(yaml.safe_dump({
         "name": "planted",
@@ -290,7 +293,8 @@ def a_run(tmp_path: Path, dataset, runners) -> Path:
                  "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": ["l1_logistic"]}},
     }))
@@ -376,7 +380,8 @@ def test_a_cell_the_config_does_not_account_for_is_recorded_and_left_closed(runn
     run_dir = a_run(tmp_path, dataset, runners)
     run_baseline(runners, run_dir, dataset)
     run_arm(runners, run_dir, dataset)
-    # A cell of an arm the run's config no longer names, as a changed config leaves one behind.
+    # A cell of an arm the run's config does not name, such as one left behind when the config is
+    # edited after a fit.
     recorded = run_dir / "config.yaml"
     narrower = recorded.read_text()
     document = yaml.safe_load(narrower)

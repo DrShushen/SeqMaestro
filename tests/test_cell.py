@@ -1,9 +1,9 @@
-"""A cell's files and the one way they are written (`seqmaestro.harness.cell`), the whole-file
-writes under it (`seqmaestro.files`), and how a cell says where its model lives
+"""A cell's files and the module that alone writes them (`seqmaestro.harness.cell`), the whole-file
+writes it relies on (`seqmaestro.files`), and how a cell states where its model lives
 (`seqmaestro.pipeline.sides`).
 
-A cell that has `metrics.json` is finished: a resumed run skips it and the reveal scores it. So the
-marker must be the last file written, and no file may ever exist half written.
+A cell that has `metrics.json` is finished, so a resumed run skips it and the reveal scores it. The
+marker must therefore be the last file written, and a file must never exist half written.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def test_a_stage_2_cell_also_holds_its_features_and_what_its_arm_reports(tmp_pat
 
 
 def test_the_marker_is_the_last_file_written(tmp_path, monkeypatch):
-    """A cell whose writing is cut short has no marker, whichever file the cut fell on."""
+    """A cell whose writing stops partway has no marker, whichever file it stopped at."""
     written = []
     write_bytes = files.write_bytes
 
@@ -133,8 +133,8 @@ def test_a_core_cell_is_saved_only_once_its_model_file_is_there(tmp_path):
 ])
 def test_a_vendored_cell_is_saved_only_once_the_model_its_record_names_is_there(tmp_path, side,
                                                                               stage2, later):
-    """A Stage 2 cell keeps its model in the bundle its method handed back, and a cell fitted
-    later keeps it in the cell. The reveal asks before it opens the test split."""
+    """A Stage 2 cell keeps its model in the bundle its method handed back, whereas a cell fitted
+    later keeps it in the cell itself. The reveal checks this before it opens the held-out split."""
     assert not side.is_saved(tmp_path, stage2) and not side.is_saved(tmp_path, later)
     (tmp_path / stage2["fitted_model"]).parent.mkdir(parents=True, exist_ok=True)
     (tmp_path / stage2["fitted_model"]).write_bytes(b"")

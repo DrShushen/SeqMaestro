@@ -1,9 +1,9 @@
 """The composition baseline: its featuriser, the standardised L1 fit it uses, and its stage.
 
-The baseline is a reference line, so these tests check that it is always built the same way: from
-the base fractions of the window, with a standardised L1 fit whose answer does not depend on the
-units of its columns, as one cell per seed on the rows the arms fit on, and written where no arm
-analysis would count it as an arm.
+Because every arm is compared with the baseline, these tests check that it is always built the same
+way: from the base fractions of the window, by an L1 fit on standardised columns (so that its answer
+does not depend on the units of a column), as one cell per seed on the rows the arms fit on, and in
+a place where an analysis of the arms would not count it as an arm.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import yaml
 from seqmaestro.features import CompositionFeaturiser
 from seqmaestro.harness.features import load_features
 from seqmaestro.models import L1Logistic
-from tests.planted import ANALYSES, SEQUENCE, TARGET, planted_dataset, planted_frame
+from tests.planted import ANALYSES, LANGUAGE_MODEL, SEQUENCE, TARGET, planted_dataset, planted_frame
 
 # --------------------------------------------------------------------------------------------
 # The featuriser
@@ -36,8 +36,8 @@ def test_each_column_is_the_fraction_of_the_sequence_one_symbol_makes_up():
 
 
 def test_the_alphabet_is_the_training_rows_and_nothing_is_assumed():
-    """Each symbol in the training rows becomes a column. A symbol the training rows lack raises
-    at transform time, so it cannot be silently left out of the fractions."""
+    """Each symbol in the training rows becomes a column. A symbol absent from the training rows
+    raises an error at transform time, so it cannot be silently left out of the fractions."""
     featuriser = CompositionFeaturiser().fit(pd.Series(["ACGN", "ACGT"]))
     assert featuriser.alphabet == ["A", "C", "G", "N", "T"]
 
@@ -68,8 +68,8 @@ def columns():
 
 def test_standardising_makes_the_fit_blind_to_the_units_of_a_column(columns):
     """On raw columns, a column's scale decides how hard the penalty presses on it, so the same data
-    in other units would select differently. On standardised columns, rescaling a column leaves the
-    selection, the coefficients and the predictions unchanged."""
+    in other units would lead to a different selection. On standardised columns, by contrast,
+    rescaling a column leaves the selection, the coefficients and the predictions unchanged."""
     X, y = columns
     rescaled = X.assign(fraction_G=X["fraction_G"] * 1000.0)
     one = L1Logistic(C=0.05).fit(X, y)
@@ -99,7 +99,8 @@ def a_config(tmp_path, seeds, arms: dict, **sections):
                  "n_bootstrap": 5, "permutation_scope": "seed", "class_weight": "balanced",
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": arms, **sections}))
     return source
@@ -156,8 +157,8 @@ def test_the_driver_runs_the_baseline_first_and_expects_its_cells(runners, tmp_p
 
 
 def test_the_baseline_is_fixed_whatever_the_run(runners):
-    """The seed and class weight come from the run, because the baseline shares them with the arms.
-    Its own settings, such as `C`, are fixed."""
+    """The seed and the class weight come from the run, because the baseline shares them with the
+    arms, whereas the settings of the baseline alone, such as `C`, are fixed."""
     model = runners.baseline.baseline_model(seed=7, target_kind="binary", class_weight="balanced")
     assert (model.C, model.seed) == (1.0, 7)
     assert model.describe()["model"] == "l1_logistic"

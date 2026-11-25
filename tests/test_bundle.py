@@ -1,8 +1,10 @@
 """The handover contract for arms that run in another environment.
 
-These tests write bundles the way an adapter does: by hand, with json and numpy, and never through
-`save_features`, because an adapter has no access to SeqMaestro's writers. A test that used the
-writers would only prove that the readers can read their own output, and nothing about the contract.
+Such an arm's adapter hands back its results as a bundle (a directory of files), which SeqMaestro
+reads and checks. These tests write bundles the way an adapter does: by hand, with json and numpy,
+and never through `save_features`, because an adapter has no access to SeqMaestro's writers. A test
+that used the writers would prove only that the readers can read the writers' output, which says
+nothing about the contract.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from seqmaestro.harness.bundle import (
 )
 from seqmaestro.harness.runner import ingest_bundle
 
-#: Matches no real dataset's column name, for the reason given in `tests/test_runner.py`.
+#: A column name that matches no real dataset, for the reason given in `tests/test_runner.py`.
 TARGET = "outcome"
 
 
@@ -98,8 +100,9 @@ def test_reordered_rows_are_refused(tmp_path, case):
 
 
 def test_a_continuous_target_a_unit_in_the_last_place_away_is_the_same_row(tmp_path):
-    """An adapter reads the split from CSV, and pandas' parser can return a continuous value a unit in
-    the last place away. That is the same row. A row out of order still differs, and is refused."""
+    """An adapter reads the split from CSV, and pandas' parser can return a continuous value one unit
+    in the last place away from the value SeqMaestro holds. Such a value belongs to the same row,
+    whereas a row out of order still differs and is refused."""
     y = np.random.default_rng(0).normal(5.0, 1.0, 40)
     nudged = y.copy()
     nudged[::7] = np.nextafter(nudged[::7], np.inf)
@@ -117,9 +120,9 @@ def test_wrong_number_of_rows_is_refused(tmp_path, case):
 
 
 def test_a_bundle_carrying_test_predictions_is_refused(tmp_path, case):
-    """An adapter is never given the test split, so a bundle holding test predictions means the
-    adapter saw it. Every number the reveal later produced for that cell would then be one
-    already seen."""
+    """An adapter is never given the held-out split, so a bundle holding predictions on it means
+    that the adapter saw it. Every number the reveal later produced for that cell would then be
+    computed on rows the adapter had already seen."""
     path = write_bundle(tmp_path / "b", *case)
     np.savez_compressed(path / "predictions.npz", val_true=case.y_val, val_score=case.p_val,
                         **dict.fromkeys(WITHHELD_KEYS, case.p_val))
@@ -129,7 +132,7 @@ def test_a_bundle_carrying_test_predictions_is_refused(tmp_path, case):
 
 @pytest.mark.parametrize("fitted_model", [None, "run/elsewhere.bin"])
 def test_a_bundle_without_its_fitted_model_is_refused(tmp_path, case, fitted_model):
-    """The reveal scores the test split with the bundle's fitted model, so a cell without one
+    """The reveal scores the held-out split with the bundle's fitted model, so a cell without one
     could never be scored."""
     path = write_bundle(tmp_path / "b", *case)
     arm = json.loads((path / "arm.json").read_text())
@@ -177,8 +180,8 @@ def test_feature_values_must_cover_the_reference_split(tmp_path, case):
 
 
 def test_selecting_nothing_is_allowed_and_distinct_from_failing(tmp_path, case):
-    """An arm that found no features has produced a result, so an empty list is accepted. An arm
-    that omits the `features` key has a broken adapter, so it is refused."""
+    """An arm that found no features has still produced a result, so an empty list is accepted,
+    whereas a bundle without the `features` key comes from a broken adapter and is refused."""
     path = write_bundle(tmp_path / "b", *case, features=[], values=np.zeros((40, 0)),
                         effect_values=np.zeros((80, 0)))
     assert read_bundle(path, "binary", y_val=case.y_val).records == []
@@ -189,8 +192,8 @@ def test_selecting_nothing_is_allowed_and_distinct_from_failing(tmp_path, case):
 
 
 def test_ingest_produces_the_same_run_directory_as_an_in_process_arm(tmp_path, case):
-    """An ingested bundle yields the same cell files as an in-process arm, so downstream code
-    cannot tell which path produced a result."""
+    """An ingested bundle yields the same cell files as an arm fitted in this process, so the code
+    that uses a cell cannot tell which path produced it."""
     write_bundle(tmp_path / "b", *case)
     val = pd.DataFrame({TARGET: case.y_val})
 

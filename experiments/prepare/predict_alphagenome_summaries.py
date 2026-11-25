@@ -2,15 +2,15 @@
 """AlphaGenome's predictions for a set of genomic elements, each track summarised over the element.
 
 Runs in `SeqMaestro_Method_alphagenome`, which holds AlphaGenome's client, and calls its API once per
-element. The API key is read from the environment variable `--key-variable` names:
+element. It takes the API key from the environment variable that `--key-variable` names:
 
     eval "$(./install.sh --interpreters)"    # AG, where the environment is built
     set -a && source .env && set +a
-    $AG experiments/prepare/predict_alphagenome_summaries.py \
-        --elements data/<dataset>/elements.csv --id-column <id> --sequence-column sequence \
-        --chrom-column chrom --start-column start --end-column end --organism mouse \
-        --outputs DNASE ATAC CHIP_TF CHIP_HISTONE CAGE --context native --model held_out \
-        --folds data/<dataset>/alphagenome/sequences_mouse.bed.gz \
+    $AG experiments/prepare/predict_alphagenome_summaries.py \\
+        --elements data/<dataset>/elements.csv --id-column <id> --sequence-column sequence \\
+        --chrom-column chrom --start-column start --end-column end --organism mouse \\
+        --outputs DNASE ATAC CHIP_TF CHIP_HISTONE CAGE --context native --model held_out \\
+        --folds data/<dataset>/alphagenome/sequences_mouse.bed.gz \\
         --key-variable AG_KEY --out-dir data/<dataset>/alphagenome/native_held_out
 
 The start and end columns must be one-based with an inclusive end, so that they span as many bases
@@ -19,9 +19,9 @@ BED file's coordinates are zero-based with an exclusive end, and need one added 
 
 **What AlphaGenome is given (`--context`).** Its shortest input is `WINDOW` bp, so each element is
 placed inside a longer input. `native` gives it the `WINDOW` bp of the reference genome centred on
-the element, which includes the element's genomic neighbourhood. `scaffold` gives it the element's
-sequence centred in flanks cut from shuffles of the element that keep the element's dinucleotide
-counts, so the only genomic sequence the model sees is the element.
+the element, which includes the element's genomic neighbourhood. `scaffold`, by contrast, gives it
+the element's sequence centred in flanks cut from shuffles of the element that keep the element's
+dinucleotide counts, so the only genomic sequence the model sees is the element.
 
 **Which model predicts (`--model`).** `all_folds` is AlphaGenome's default model, distilled from
 models trained on the whole genome, the elements' loci included. `held_out` predicts each element
@@ -29,8 +29,8 @@ with the fold model whose training excluded the region the element's native wind
 regions and their folds come from AlphaGenome's training setup (`--folds`, the BED file that
 `alphagenome.data.fold_intervals` loads), and the client states which folds each model held out.
 An element whose window overlaps regions of folds held out by different models is refused, because
-every model trained on part of that window. An element whose window overlaps no region was in no
-model's training data, and is predicted by the first fold model. Both contexts choose the model
+every model trained on part of that window. An element whose window overlaps no region was not in
+any model's training data, and is predicted by the first fold model. Both contexts choose the model
 from the native window, so an element gets the same model in either context.
 
 **Each track is summarised over the element at that track's resolution**: its mean and its maximum
@@ -151,7 +151,7 @@ def native_window(start: int, end: int) -> tuple[int, int]:
 
 
 def span_mismatches(elements: pd.DataFrame, columns: dict[str, str]) -> list[str]:
-    """The elements whose coordinates, read as one-based with an inclusive end, span a different
+    """The elements whose coordinates, taken as one-based with an inclusive end, span a different
     number of bases than their sequence holds. Zero-based coordinates with an exclusive end span one
     base more, and would put the base before each element into every summary of it."""
     spans = elements[columns["end"]] - elements[columns["start"]] + 1
@@ -191,8 +191,8 @@ def summarise(output, requested: list[str], offset: int, length: int) -> tuple[d
                                                strict=True):
             values[f"{name}|{track}|{strand}|mean"] = float(mean)
             values[f"{name}|{track}|{strand}|max"] = float(peak)
-        # Lists, because JSON returns tuples from `partial.jsonl` as lists, and a resumed run
-        # compares fresh records with loaded ones.
+        # Lists, because tuples written to `partial.jsonl` come back from JSON as lists, and a
+        # resumed run compares fresh records with loaded ones.
         tracks[name] = [list(key) for key in keys]
     return values, tracks
 

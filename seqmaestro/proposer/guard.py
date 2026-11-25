@@ -1,47 +1,47 @@
-"""Guardrails on executing language-model-generated Python.
+"""Guardrails on running the Python that a language model writes.
 
-The proposer has a model write feature functions and then runs them, so `exec()` of untrusted code
-is the mechanism of the method. The prompts also embed rows of the user's own dataset, which makes
-a crafted CSV a prompt-injection path to code execution on the host, and SeqMaestro is built to
-take datasets from other people.
+The proposer has a language model write feature functions and then runs them, so `exec()` of
+untrusted code is the mechanism of the method. The prompts also embed rows of the dataset, so a
+crafted CSV is a prompt-injection path to code execution on the host, which matters because
+SeqMaestro is built to take datasets from other people.
 
 **This is a port of DEFT's `src/deft/code_guard.py`**, and its tests are ported alongside it as
-`tests/test_code_guard.py`, where they are the acceptance bar. Tests are specifications, so
-copying them creates no import edge. Writing this module from scratch against a fresh set of tests
-is how the hole that DEFT's guard closed would come back. Upstream DEFT guards `exec` with:
+`tests/test_code_guard.py`, where they define what the guard must accept and reject. Tests are
+specifications, so copying them adds no import of DEFT's code. Writing this module from scratch
+against a fresh set of tests is how the hole that DEFT's guard closed would come back. Upstream
+DEFT guards `exec` with:
 
     if "exec" in code_str or "eval" in code_str:
         raise ValueError("Unsafe code detected")
 
-`__import__("os").system(...)` walks straight through that, as do `open`, `compile` and `getattr`,
-while valid code that mentions `eval` in a comment is rejected.
+`__import__("os").system(...)` passes that check, as do `open`, `compile` and `getattr`, whereas
+valid code that mentions `eval` in a comment is rejected.
 
-## Scope
+**The scope is a guardrail**, not a security boundary. Without it, nothing stands in the way of an
+accident or of casual misbehaviour, and with it, either takes real effort. An allowlist does not
+stop a determined adversary with a CPython `exec` and enough patience. Only process or container
+isolation would, and SeqMaestro does not implement it.
 
-A **guardrail**, not a security boundary. It raises the cost of an accident or of casual
-misbehaviour from zero to substantial. An allowlist does not stop a determined adversary with a
-CPython `exec` and enough patience. Only process or container isolation does that, and it is not
-implemented here.
-
-Three layers:
+The guard has three layers:
 
 1. **Static check.** The source is parsed and inspected before anything runs: no imports outside
-   the allowlist, no dunder attribute access, no reference to `open` / `eval` / `exec` / `compile` /
-   `getattr` and friends, and nothing at module level except imports and function definitions.
+   the allowlist, no access to dunder attributes (names that start and end with two underscores,
+   such as `__class__`), no reference to `open`, `eval`, `exec`, `compile`, `getattr` or the other
+   names of `BLOCKED_NAMES`, and nothing at module level except imports and function definitions.
 2. **Restricted namespace.** Execution gets a minimal `__builtins__` and a guarded `__import__`, so
-   the blocked names are not reachable even if the static check were somehow evaded.
+   the blocked names are not reachable even if the static check were evaded.
 3. **What runs is what was checked.** The validated AST is compiled directly, without re-parsing
    the source string, so the two cannot drift apart.
 
 **A bare `except:` is compiled as `except Exception:`**, as DEFT's guard compiles it. A generated
 function's time limit (`seqmaestro.proposer.checks.time_limit`) stops it with an exception that
-`except Exception` does not catch, and a bare `except:` would catch that exception and let the
-function run on. For code handling its own errors, the two clauses do the same.
+`except Exception` does not catch, whereas a bare `except:` would catch that exception and let the
+function run on. For code that handles its errors, the two clauses behave alike.
 
-**The contract is one function taking a single argument named `X`**, a frame carrying the sequence
-column. This is DEFT's contract, kept because the half of the ported tests that checks accepted code
-is written against it. Changing the contract would retire the half of the acceptance bar that
-checks the guard is not so tight it starves the candidate pool.
+**The contract is one function taking a single argument named `X`**, a frame holding the sequence
+column and any covariates. This is DEFT's contract, kept because the half of the ported tests that
+checks accepted code is written against it. Changing the contract would make obsolete the half of
+those tests that checks the guard is not so strict that it rejects valid candidates.
 """
 
 from __future__ import annotations
@@ -60,23 +60,23 @@ logger = logging.getLogger(__name__)
 class UnsafeCodeError(ValueError):
     """Generated code was rejected before it ran.
 
-    A subclass of ValueError so a caller can treat it the same as code that fails to compile: log
-    it and drop the feature. Rejections then show up as a falling usable-feature yield, which the
-    proposer records, so an over-tight allowlist is visible instead of silently starving the
-    candidate pool.
+    It subclasses ValueError, so that a caller can treat it like code that fails to compile: log it
+    and drop the feature. Rejections then show up as a fall in the share of proposed features that
+    are usable, which the proposer records, so an allowlist that is too strict is visible instead
+    of silently rejecting valid candidates.
     """
 
 
 # Modules a sequence feature may legitimately use.
 #
-# `re` earns its place because regex motifs (`[AG]GGTCA`) are a natural way to express a binding
-# site. `collections` and `itertools` are here because `Counter` is the obvious tool for k-mer
-# composition and `product` for k-mer enumeration, and a model writing sequence features reaches
-# for both.
+# `re` is allowed because regular-expression motifs (`[AG]GGTCA`) are a natural way to express a
+# binding site. `collections` and `itertools` are allowed because `Counter` is the obvious tool for
+# k-mer composition and `product` for k-mer enumeration, and a language model writing sequence
+# features uses both.
 #
-# Left out: `scipy`, whose uses here (entropy, periodicity) can be written in numpy, and Biopython,
-# which the model has no way to know is installed. Add either when the yield metric shows features
-# reaching for them.
+# `scipy` is left out, because its uses here (entropy, periodicity) can be written in numpy, and so
+# is Biopython, which the language model has no way to know is installed. Add either when rejected
+# features show that the language model needs it.
 DEFAULT_ALLOWED_MODULES: tuple[str, ...] = (
     "numpy",
     "pandas",
@@ -86,12 +86,13 @@ DEFAULT_ALLOWED_MODULES: tuple[str, ...] = (
     "itertools",
 )
 
-# Also bound into the namespace under these names, because a model usually writes `np.` and `pd.`
-# without importing them. Pre-binding raises the yield.
+# Also bound into the namespace under these names, because a language model usually writes `np.`
+# and `pd.` without importing them, so binding them in advance raises the share of usable features.
 MODULE_ALIASES: dict[str, str] = {"np": "numpy", "pd": "pandas"}
 
 # Names that must not appear at all. Blocking `getattr` and `setattr` is essential: their attribute
-# name is a runtime string, so they are the route that would slip past the static dunder check.
+# name is a runtime string, so they are the route that would get past the static check on dunder
+# attributes.
 BLOCKED_NAMES = frozenset(
     {
         "__import__",
@@ -120,7 +121,7 @@ _SAFE_BUILTIN_NAMES = (
     "format", "frozenset", "int", "isinstance", "issubclass", "iter", "len", "list",
     "map", "max", "min", "next", "pow", "range", "repr", "reversed", "round", "set",
     "slice", "sorted", "str", "sum", "tuple", "zip",
-    # So a feature can catch its own edge cases instead of raising and being discarded.
+    # So that a feature can handle edge cases instead of raising and being discarded.
     "Exception", "IndexError", "KeyError", "TypeError", "ValueError", "ZeroDivisionError",
 )
 
@@ -129,9 +130,9 @@ _SAFE_BUILTIN_NAMES = (
 class CodeGuardPolicy:
     """What generated code is allowed to do.
 
-    The defaults are the strict policy. `enabled=False` is a supported escape hatch, but it
-    restores unrestricted `exec` of model-written code, so a run that uses it should say so in its
-    manifest.
+    The defaults are the strict policy. `enabled=False` is supported, but it restores unrestricted
+    `exec` of model-written code, so a run that uses it should say so in the record of its
+    settings.
     """
 
     enabled: bool = True
@@ -143,7 +144,7 @@ class CodeGuardPolicy:
         return tuple(dict.fromkeys((*self.allowed_modules, *self.extra_allowed_modules)))
 
     def describe(self) -> dict[str, Any]:
-        """For the run manifest: what the code that produced these features was permitted to do."""
+        """For the record of a fit: what the code that produced these features was permitted to do."""
         return {"enabled": self.enabled, "allowed_modules": list(self.modules)}
 
 
@@ -168,7 +169,8 @@ def _check_import(node: ast.AST, allowed: Sequence[str]) -> None:
 
 
 def validate_source(module: ast.Module, policy: CodeGuardPolicy) -> list:
-    """Reject anything a feature function has no business doing. Returns its function defs."""
+    """Reject anything a feature function has no reason to do, and return its function
+    definitions."""
     allowed = policy.modules
 
     for node in module.body:
@@ -227,7 +229,7 @@ def _build_namespace(policy: CodeGuardPolicy) -> dict[str, Any]:
     for module_name in policy.modules:
         try:
             namespace[module_name] = importlib.import_module(module_name)
-        except ImportError:  # pragma: no cover - an allowlisted module that is not installed
+        except ImportError:  # pragma: no cover (an allowlisted module that is not installed)
             logger.warning("Allowlisted module %r is not importable; skipping.", module_name)
     for alias, module_name in MODULE_ALIASES.items():
         if module_name in namespace:
@@ -248,9 +250,9 @@ class _NameBareExcept(ast.NodeTransformer):
 def _select_feature_function(namespace: dict[str, Any], functions: list) -> Callable:
     """Pick the feature function out of what was defined.
 
-    The contract in the prompt is a single function taking one argument named `X`, so prefer that.
-    Taking the first callable in the namespace instead, as upstream DEFT does, picks a helper
-    whenever the model defines one before the feature.
+    The contract in the prompt is a single function taking one argument named `X`, so a function of
+    that form is preferred. Taking the first callable in the namespace instead, as upstream DEFT
+    does, picks a helper whenever the language model defines one before the feature.
     """
     taking_x = [fn.name for fn in functions if len(fn.args.args) == 1 and fn.args.args[0].arg == "X"]
     chosen = (taking_x or [fn.name for fn in functions])[-1]
@@ -261,8 +263,8 @@ def compile_feature_function(code_str: str, policy: CodeGuardPolicy | None = Non
     """Validate and compile generated source into a callable.
 
     Raises `UnsafeCodeError` if the code is rejected, or `ValueError` if it does not compile. The
-    two are kept apart because `def upstream_-15nt_GC(X):` is a model writing a bad identifier, not
-    an attack, and counting it as one would misreport a run's rejections.
+    two are kept apart because `def upstream_-15nt_GC(X):` is a language model writing an illegal
+    identifier, not an attack, and counting it as one would misreport a run's rejections.
     """
     policy = policy if policy is not None else CodeGuardPolicy()
 

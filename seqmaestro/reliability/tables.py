@@ -1,12 +1,12 @@
-"""The three tables a panel comes down to, and the per-arm summary a report is written from.
+"""The three tables that summarise a panel, and the per-arm summary a report is written from.
 
     profile_features.csv   one row per candidate feature, with all three tiers on it
     profile_clusters.csv   one row per cluster of near-duplicates
     profile_curves.csv     every threshold curve of Tiers 1 and 2, stacked with a `kind` column
 
-They are assembled after the reveal, from the files the tiers wrote. A report reads its numbers from
-these tables and not from the arrays behind them, so a number in the prose cannot drift from the one
-in a table.
+They are assembled after the reveal, from the files the tiers wrote. A report takes its numbers
+from these tables rather than from the arrays behind them, so that a number in the prose cannot
+drift from the one in a table.
 """
 
 from __future__ import annotations
@@ -35,21 +35,21 @@ FEATURES_FILE = "profile_features.csv"
 CLUSTERS_FILE = "profile_clusters.csv"
 CURVES_FILE = "profile_curves.csv"
 
-#: A feature left out of the reduced model with pi-hat at or above this is an alternative worth
-#: naming.
+#: A feature that the reduced model leaves out but whose pi-hat is at or above this is an
+#: alternative worth naming.
 ALTERNATIVE_PI = 0.7
 
 #: A reported feature with pi-hat below this is one the procedure would often not have chosen.
 UNSTABLE_PI = 0.5
 
-#: The column Tier 2's statistic takes in the features table, by the kind of target.
+#: The features table's column for Tier 2's statistic, by kind of target.
 STATISTIC_COLUMN = {BINARY: "abs_auc_minus_half", CONTINUOUS: "abs_rho"}
 
 
 def tier2_columns(target_kind: str) -> dict[str, str]:
-    """Tier 2's per-feature arrays, as the features table names its columns: the association of the
-    kind (`auc` or `rho`) and its statistic, then the p-values, and the feature's mean and non-zero
-    rate on the test split."""
+    """Tier 2's per-feature arrays, mapped to the features table's column names: the association of
+    the target's kind (`auc` or `rho`) and its statistic, then the p-values, then the feature's mean
+    and non-zero rate on the test split."""
     association, _ = tier2.ASSOCIATION[target_kind]
     return {association: association, "statistic": STATISTIC_COLUMN[target_kind],
             "p_value": "p_permutation", "q_bh": "q_bh", "q_by": "q_by", "p_holm": "p_holm",
@@ -58,8 +58,8 @@ def tier2_columns(target_kind: str) -> dict[str, str]:
 
 
 def loco_columns(target_kind: str) -> dict[str, str]:
-    """Tier 3's per-refit results, as the features table names its columns: the change in the kind's
-    loss and headline, then the tests."""
+    """Tier 3's per-refit results, mapped to the features table's column names: the change in the
+    loss and the headline metric of the target's kind, then the tests."""
     loss, _ = tier3.LOSS[target_kind]
     headline = target_for(target_kind).headline
     return {f"mean_delta_{loss}": f"loco_mean_delta_{loss}", "ci_low": "loco_ci_low",
@@ -69,7 +69,8 @@ def loco_columns(target_kind: str) -> dict[str, str]:
 
 
 def _called(called: dict, level: float, method: str) -> int:
-    """`called` keys survive a JSON round trip as strings; read either."""
+    """A count from `called`, whose keys come back from a JSON round trip as strings, so either form
+    of key is accepted."""
     return int(called[level if level in called else str(level)][method])
 
 
@@ -144,7 +145,8 @@ def _representatives(names, kept_index, prepared, pi_hat) -> dict[int, str]:
 
 
 def clusters_table(features: pd.DataFrame, target_kind: str) -> pd.DataFrame:
-    """One row per cluster: how stable it is, what is in it, and what it is worth on its own."""
+    """One row per cluster: how stable it is, what it holds, and how strongly its members are
+    associated with the target on their own."""
     association, centre = tier2.ASSOCIATION[target_kind]
     kept = features[~features["filtered_out"]]
     rows = []

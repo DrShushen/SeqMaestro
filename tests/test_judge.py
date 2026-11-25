@@ -1,8 +1,9 @@
-"""The judge's protocol: selection, blinding, ordering, repeats, parsing, aggregation.
+"""The judge's protocol: selection, blinding (keeping each feature's arm and label condition from
+the judge), ordering, repeats, parsing and aggregation.
 
-None of these tests needs a credential or a network call, because the scoring backend sits behind
-an interface and a scripted engine stands in for it. The LLM's answers cannot be tested, but the
-code around them can, and that code is where a silent bias would live.
+These tests need neither a credential nor a network call, because the scoring backend sits behind
+an interface and a scripted engine stands in for it. The language model's answers cannot be tested,
+but the code around them can, and that code is where a silent bias would arise.
 """
 
 from __future__ import annotations
@@ -49,9 +50,9 @@ def records(prefix, n, importances=None):
 
 
 def sources(n=5):
-    """Three panel sources whose feature names carry no trace of their arm, so the blinding tests
-    check the code and not the fixture. Real feature names can reveal their arm: see
-    `test_blinding_hides_provenance_but_cannot_hide_a_feature_s_own_name`."""
+    """Three panel sources whose feature names give no hint of their arm, so the blinding tests
+    check the code and not the fixture's names. Real feature names can reveal their arm (see
+    `test_blinding_hides_provenance_but_cannot_hide_a_feature_s_own_name`)."""
     return [
         PanelSource(arm="deft", labels="real", records=records("alpha", n), target_kind="binary", seed=42),
         PanelSource(arm="l1_logistic", labels="real", records=records("beta", n), target_kind="binary",
@@ -72,8 +73,8 @@ def test_top_n_bounds_the_panel_per_arm():
 
 
 def test_selection_takes_the_most_important():
-    """The panel holds each source's most important features, because those are what an arm
-    claims to have found. The tail of a large fixed vocabulary is not."""
+    """The panel holds each source's most important features, because those are what an arm claims
+    to have found, whereas the tail of a large fixed vocabulary is not."""
     panel = build_panel(
         [PanelSource("a", "real", records("x", 6, importances=[0.1, 9.0, 0.2, 8.0, 0.3, 7.0]), "binary")],
         top_n=3,
@@ -89,8 +90,7 @@ def test_top_n_none_judges_everything():
 
 
 def test_no_prompt_mentions_the_arm_or_the_label_condition():
-    """No prompt names the arm or the label condition. The renderer reads only the feature
-    record's fields, so the blinding holds by construction."""
+    """The renderer reads only the feature record's fields, so the blinding holds by construction."""
     for entry in build_panel(sources(), top_n=5):
         prompt = render(entry, CONTEXT).user + render(entry, CONTEXT).system
         lowered = prompt.lower()
@@ -99,8 +99,8 @@ def test_no_prompt_mentions_the_arm_or_the_label_condition():
 
 
 def test_identifiers_do_not_encode_the_arm():
-    """Item ids are assigned after the panel is shuffled. Assigned before it, each arm's features
-    would hold one contiguous block of ids, which would reveal the arm."""
+    """Item ids are assigned after the panel is shuffled. Were they assigned before, each arm's
+    features would hold one contiguous block of ids, which would reveal the arm."""
     panel = build_panel(sources(n=8), top_n=8, seed=3)
     positions = [i for i, e in enumerate(panel) if e.arm == "deft" and e.labels == "real"]
     assert max(positions) - min(positions) > len(positions), "one arm sits in a contiguous run"
@@ -162,19 +162,19 @@ def test_context_notes_are_optional_and_included_when_set():
 
 
 def test_the_context_is_recorded_with_the_scores():
-    """A score is only comparable to another asked with the same wording, so the summary records
-    the task context."""
+    """A score can be compared only with another given under the same wording, so the summary
+    records the task context."""
     items = score_panel(build_panel(sources(), top_n=1), ScriptedEngine('{"score": 3}'), CONTEXT, repeats=1)
     assert summarise(items, CONTEXT)["task_context"]["task"] == CONTEXT.task
 
 
 def test_blinding_hides_provenance_but_cannot_hide_a_feature_s_own_name():
-    """A known limit of the blinding, asserted so it is not mistaken for a guarantee.
+    """A known limit of the blinding, pinned down so that it is not mistaken for a guarantee.
 
-    Provenance fields never enter a prompt. A feature's name is part of what is judged, so it must
-    be shown, and real names follow each arm's naming style (`kmer_GGTCA` against
-    `gc_fraction_upstream_site_proximal_9nt`). A judge could infer the arm from the name, and only
-    paraphrasing every feature would prevent that.
+    Provenance fields never enter a prompt, whereas a feature's name is part of what is judged and
+    must be shown. Real names follow each arm's naming style (`kmer_GGTCA` against
+    `gc_fraction_upstream_site_proximal_9nt`), so a judge could infer the arm from the name, and
+    only paraphrasing every feature would prevent that.
     """
     telling = [FeatureRecord(name="kmer_GGTCA", description="count of GGTCA", kind="kmer")]
     entry = build_panel([PanelSource("l1_logistic", "real", telling, "binary")], top_n=1)[0]
@@ -185,7 +185,7 @@ def test_blinding_hides_provenance_but_cannot_hide_a_feature_s_own_name():
 
 
 def test_the_scale_is_anchored_in_the_prompt():
-    """Every point of the scale has its meaning written in the prompt. An unanchored 1-5 scale
+    """Every point of the scale has its meaning written in the prompt. An unanchored scale of 1 to 5
     drifts between calls, so its scores cannot be compared across arms."""
     prompt = render(build_panel(sources(), top_n=1)[0], CONTEXT).user
     for value in range(MIN_SCORE, MAX_SCORE + 1):
@@ -212,9 +212,9 @@ def test_scores_are_recovered_from_realistic_replies(reply, expected):
 @pytest.mark.parametrize("reply", ["", "   ", "I cannot answer that.", '{"score": 9}', "9",
                                    "I would say 3 out of 5.", "On a 1-5 scale, 4."])
 def test_an_unusable_reply_is_a_refusal_not_a_score(reply):
-    """An unusable reply gets no score and an error. Imputing a middling score would pull every
-    arm towards the mean and hide how often parsing failed, and a number picked out of a sentence
-    can be the scale's and not the rating."""
+    """An unusable reply gets an error and no score. Imputing a middling score would pull every arm
+    towards the mean and hide how often parsing failed. A number picked out of a sentence is refused
+    too, because it can be part of the scale ("out of 5") instead of the rating."""
     judgement = parse_reply("F0001", reply)
     assert judgement.score is None
     assert judgement.error
@@ -244,8 +244,8 @@ def test_repeats_must_be_positive():
 
 
 def test_spread_across_repeats_is_measured():
-    """The spread of scores across repeats is recorded, because it describes the judge itself,
-    and the judge is the instrument this axis characterises."""
+    """The spread of scores across repeats is recorded because it describes the judge itself, which
+    is an instrument to be characterised (see `seqmaestro.judge`)."""
     scores = iter(["3", "5", "4"] * 100)
     engine = ScriptedEngine(lambda r: f'{{"score": {next(scores)}}}')
     items = score_panel(build_panel(sources(), top_n=1), engine, CONTEXT, repeats=3)
@@ -278,9 +278,9 @@ def test_the_summary_reports_the_gap_above_the_noise_floor():
 
 
 def test_a_judge_that_cannot_discriminate_shows_a_zero_gap():
-    """A judge that gives every feature the same score shows a zero gap for every arm. This is
-    the failure the axis exists to detect: a judge that scores how a feature reads and ignores
-    whether real labels produced it."""
+    """A judge that gives every feature the same score shows a zero gap for every arm. This is the
+    failure the control gap exists to detect: a judge that scores how a feature is worded and
+    ignores whether real labels produced it."""
     items = score_panel(build_panel(sources(), top_n=5), ScriptedEngine('{"score": 4}'), CONTEXT, repeats=2)
     report = summarise(items)
     assert all(arm["control_gap"] == pytest.approx(0.0) for arm in report["arms"].values())
@@ -334,8 +334,8 @@ def scored_items(n_scored, n_unscored, repeats=3):
 
 
 def test_a_judge_that_answered_nothing_is_reported_as_failed():
-    """Every call failed, as in an outage. The run is reported as failed, so the stage cannot
-    exit 0 as if it had passed."""
+    """Every call failed, as in an outage. The judge's output is then reported as unusable, so the
+    stage cannot exit 0 as if it had passed."""
     items = scored_items(n_scored=0, n_unscored=8)
 
     reason = _verdict(items, _report(control_features=0, calls=0, failures=24))
@@ -351,16 +351,16 @@ def test_a_mostly_unanswered_panel_is_reported_as_failed():
 
 
 def test_a_handful_of_dropped_calls_is_tolerated():
-    """A run passes when at least `min_answered` of the panel was scored, so one unanswered
-    feature in twenty is tolerated."""
+    """The judge's output passes when at least the share `min_answered` of the panel was scored, so
+    one unanswered feature in twenty is tolerated."""
     items = scored_items(n_scored=19, n_unscored=1)
 
     assert _verdict(items, _report()) is None
 
 
 def test_an_empty_control_pool_fails_even_when_everything_was_scored():
-    """An empty control pool makes the run unusable even when every feature was scored, because
-    the control is the noise floor that every arm's mean is read against."""
+    """An empty control pool makes the judge's output unusable even when every feature was scored,
+    because the control is the noise floor that every arm's mean is compared with."""
     items = scored_items(n_scored=10, n_unscored=0)
 
     reason = _verdict(items, _report(control_features=0))
@@ -377,9 +377,9 @@ def test_an_absent_control_is_fine_when_none_was_asked_for():
     """Judging permuted features is off by default, so an empty control pool passes when no
     control was asked for.
 
-    The proposer builds its features from the task description and not from the labels, so it
-    proposes nearly the same set under permuted labels. The "control" would then be the judge
-    scoring one panel twice.
+    The proposer takes its features from the task description, and the labelled example rows are a
+    small part of its input, so it proposes nearly the same set under permuted labels. The
+    "control" would then be the judge scoring one panel twice.
     """
     items = scored_items(n_scored=10, n_unscored=0)
 
@@ -424,9 +424,9 @@ def test_the_direction_is_shown_only_when_it_is_asked_for():
 
 
 def test_the_judge_is_shown_the_sign_and_never_the_size():
-    """An effect size would let the judge separate the real features from the permuted-label
-    controls, which every arm's mean is read against. So a strong feature and a barely-there one
-    must produce the same sentence."""
+    """An effect size would let the judge tell the real features from the permuted-label controls,
+    which every arm's mean is compared with, so a strong feature and a barely-there one must
+    produce the same sentence."""
     strong = render(a_panel_entry(0.97), CONTEXT, include_direction=True).user
     weak = render(a_panel_entry(0.01), CONTEXT, include_direction=True).user
 
@@ -457,9 +457,9 @@ def test_the_flag_reaches_the_prompt_through_the_scoring_loop():
 
 
 def test_what_the_judge_would_be_shown_can_be_asked_without_rendering():
-    """`direction_shown` lets a caller count how much of a panel carries a direction. Without
-    that count, `grid.judge_direction` over records with no marginal effect would be on and would
-    silently show nothing."""
+    """`direction_shown` lets a caller count how many of a panel's features would be shown with a
+    direction. Without that count, `grid.judge_direction` could be on over records with no marginal
+    effect and silently show nothing."""
     assert direction_shown(FeatureRecord("f", "d", "test", marginal_effect=0.4), "binary") is not None
     assert direction_shown(FeatureRecord("f", "d", "test", marginal_effect=None), "binary") is None
 
@@ -475,8 +475,8 @@ def test_the_count_and_the_prompt_cannot_disagree():
 
 
 def test_the_judge_reads_each_cell_once_and_not_the_bundle_inside_it(tmp_path):
-    """A vendored arm's cell keeps the bundle its method handed back, which has a `features.json`
-    of its own. Only the cell's is a source."""
+    """A vendored arm's cell keeps the bundle its method handed back, and the bundle has a
+    `features.json` of its own. Only the cell's `features.json` is a panel source."""
     from seqmaestro.features.base import FeatureRecord
     from seqmaestro.harness.features import save_features
     from seqmaestro.pipeline.analyses.judge import collect_sources

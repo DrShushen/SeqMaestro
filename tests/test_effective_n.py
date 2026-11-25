@@ -33,7 +33,7 @@ def test_zero_total_weight_is_worth_nothing():
 
 
 def test_one_dominant_row_is_worth_about_one_row():
-    # One row carries almost all the weight, so the design is worth about one row, not 1000.
+    # One row has almost all the weight, so the design is worth about one row, not 1000.
     weights = np.concatenate([[1.0], np.full(999, 1e-6)])
     assert effective_sample_size(weights) < 2.0
 
@@ -76,8 +76,9 @@ def test_a_class_with_no_weight_leaves_nothing_to_contrast():
 def test_mantel_haenszel_beats_equal_stratum_weighting():
     """Why `mh` is the default stratum weighting, shown on two strata, one informative and one not.
 
-    `equal` gives the 1-vs-1 stratum the same say as the 200-vs-200 one. `mh` weights each stratum
-    by the harmonic mean of its class counts, so the informative stratum dominates.
+    `equal` gives the 1-vs-1 stratum the same say as the 200-vs-200 one, whereas `mh` weights each
+    stratum by the harmonic mean of its class counts, so the informative stratum outweighs the
+    other.
     """
     sizes = [(200, 200), (1, 1)]
     for scheme in ("equal", "mh"):

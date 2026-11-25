@@ -480,6 +480,18 @@ def test_the_configuration_composes_and_the_language_model_is_named():
     # One config for each provider SeqMaestro's .env can name. A kind is LiteLLM's route.
     assert compose_config(["llm=seqmaestro_openai"]).llm.kind == "openai"
     assert compose_config(["llm=seqmaestro_claude"]).llm.kind == "anthropic"
+    foundry = compose_config(["llm=seqmaestro_azure_foundry"]).llm
+    assert foundry.kind == "azure_ai" and foundry.reasoning_effort == "none"
+    # How a call is made is SeqMaestro's to state, so each config has the keys and states nothing:
+    # the effort where the provider takes one, the retries and the wait for every provider.
+    for name in ("azure", "openai", "claude", "azure_foundry"):
+        llm = compose_config([f"llm=seqmaestro_{name}"]).llm
+        assert llm.num_retries is None and llm.request_timeout is None, name
+        if name in ("azure", "openai"):
+            assert llm.reasoning_effort is None, name
+    stated = compose_config(["llm=seqmaestro_openai", "llm.reasoning_effort=minimal",
+                             "llm.num_retries=5", "llm.request_timeout=120"]).llm
+    assert (stated.reasoning_effort, stated.num_retries, stated.request_timeout) == ("minimal", 5, 120)
     assert set(cfg.experiment.function_terms) >= {"max_undefined_share", "repair_rounds", "n_examples",
                                                   "max_example_length", "timeout_seconds"}
 

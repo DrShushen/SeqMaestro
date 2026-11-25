@@ -1,115 +1,50 @@
-# Run configs: what one experiment *is*, in one file
+# Run configs
 
-One file per dataset variant, read by `../runners/run_experiment.py`. It is the whole statement of
-a run: which data, which grid, which arms. Nothing else configures the stages of a run, and no
-stage has a value of its own to fall back on for a setting the config states.
+> This page tracks [`config.py`](../../seqmaestro/pipeline/config.py), [`arms.py`](../../seqmaestro/arms.py) and the shared configs in `experiments/configs/`. Change it in the same commit as any of them.
+
+A run [config](../../docs/glossary.md#config) is a YAML file that states one [run](../../docs/glossary.md#run) in full: the dataset, the [seeds](../../docs/glossary.md#seed) and [label conditions](../../docs/glossary.md#label-condition), the [arms](../../docs/glossary.md#arm), how the [language model](../../docs/glossary.md#language-model) is called, and the settings of each [stage](../../docs/glossary.md#stage). Each variant of a dataset has a config of its own, which the [driver](../../docs/glossary.md#driver) runs:
 
 ```bash
-eval "$(./install.sh --interpreters)"     # CORE and the other environments' pythons
+eval "$(./install.sh --interpreters)"     # CORE and the other environments' Python interpreters
 $CORE experiments/runners/run_experiment.py --config experiments/configs/example.yaml
 ```
 
-`_shared.yaml` and `_shared_continuous.yaml` are in git: they are the grid and the arms every
-dataset runs, versioned with the code that runs them. A dataset's config stays on the machine that
-holds the dataset, with its other files, and git ignores it
-([`../prepare/README.md`](../prepare/README.md)). The dataset configs in the repository are those
-of the example dataset: `example.yaml`, and `example_quick.yaml`, which cuts it down to a run of a
-few minutes (below).
+Every setting of a run is stated in its config. A stage has no value of its own to fall back on, because settings kept anywhere else would cause two problems:
 
-The **resolved** config is copied into each run directory as `config.yaml`, with the version of its
-shape, and every stage of the run takes its settings from that copy. Re-running the driver against
-a directory whose recorded config differs is refused, so two configs never mix in one run.
-`--allow-config-change` continues such a run all the same, for a change that does not affect the
-cells already finished, and keeps the earlier config beside the new one as
-`config_superseded_<n>.yaml`.
+- Settings passed as environment variables, or as flags typed again for each stage, could be found only by reading the driver. One left unset would take a default defined somewhere else.
+- A finished run would keep no record of its settings, so a resumed run could not tell a finished [cell](../../docs/glossary.md#cell) from one computed under other settings.
 
-## Why a file and not flags
+When a run starts, the driver records its resolved config in the run's directory as `config.yaml`. The resolved config is the config with the files it extends merged in ([Sharing settings through `extends`](#sharing-settings-through-extends)), any `--set` applied, and every implied value stated (such as the dataset's columns). It therefore describes the run on its own. Every stage takes its settings from that copy. The driver refuses to continue a run under a config that differs from it, so that two configs never mix in one run. [Running experiments](../README.md#starting-a-run) says how a deliberate change is allowed.
 
-Settings carried loose, as environment variables or as flags retyped per stage, have three costs.
-They are invisible unless you read the driver. One left unset takes a default defined somewhere
-else. And nothing records what a finished run was configured with, so a resume cannot tell a
-finished cell from one computed under different settings.
+## Shared configs and dataset configs
 
-## The sections
+The shared configs are in git, so that the grid and the arms every dataset runs are versioned with the code that runs them:
 
-| | |
-|---|---|
-| `version` | The version of the config's shape: its sections, their keys and what each means. A file may leave it out. The copy a run records always states it, and a stage refuses a run that recorded another version than the code reads |
-| `name` | **Required.** Names the run directory and every notification |
-| `description` | Why this variant exists, when a dataset has more than one. Free text |
-| `dataset` | **Required**: `task`, `splits` and `blinded` (see below) |
-| `grid` | **Required in full**: `seeds`, `labels`, `train_fraction` (the share of the training rows each seed fits on), `n_bootstrap`, `permutation_scope`, `class_weight` (for a binary target only, below), `permutation_repeats`, `judge` (whether the significance judge runs; `_shared.yaml` leaves it out), `judge_direction`, and `generated_features` (below) |
-| `analyses` | **Required in full**: `top_n`, the features of a cell each Stage 2 analysis takes, by the model's importance; `judge` (`repeats`, `show_code`, `labels`, `min_answered`, `seed`), how the judge rates where `grid.judge` has it run; and `recurrence` (`kinds`, `items_per_group`, `draws`, `across_arms`, `seed`), how the recurrence analysis groups. `_shared.yaml` states them. Each decides what a table of the run holds, so an analysis takes them from the run's recorded config and has no flag for any |
-| `arms` | **Required.** Each pool of sources, the models fitted on it, and what Stage 3 leaves out of each (see Arms, below) |
-| `sources` | How each source the pools hold is computed: `kmer`, `llm_generated` and `llm_generated_iterative`. Required for every source some pool holds, and refused for one no pool holds. `llm_generated` is also required while a pool holds `llm_generated_iterative`, which writes with its settings |
-| `models` | The settings of the models that take any, `deft_or_cart` and `igsr`: their methods' `config_overrides` |
-| `reduction` | Stage 3A: `n_features`, required. Every arm is reduced but those its entry leaves out under `not_reduced`. `_shared.yaml` sets it, and without the section there is no reduction stage |
-| `reliability` | Stage 3B, which needs `reduction`: `pairs`, `permutations`, `cluster_rho`, `max_modal_share`, `planted_count`, `planted_signal_sd`, `check_arm` and `seed`, all required. The panel profiles every reduced arm but a black-box model's and those its entry leaves out under `not_profiled`, and `check_arm` names one of them as `model/pool`. `_shared.yaml` sets it. See [`../../docs/reliability.md`](../../docs/reliability.md) |
+- [`_shared.yaml`](_shared.yaml) holds what every dataset's run has in common: the grid, the arms, how the language model is called, and the settings of the [feature sources](../../docs/glossary.md#feature-source), the models, the analyses, the [reduction](../../docs/glossary.md#reduction) and the [reliability panel](../../docs/glossary.md#reliability-panel). Comments beside the settings say what each does and why it has its value. The file cannot run on its own, because it names no dataset.
+- [`_shared_continuous.yaml`](_shared_continuous.yaml) holds what a continuous target changes ([Sharing settings through `extends`](#sharing-settings-through-extends)).
+- [`_motifs.yaml`](_motifs.yaml) is the fragment that adds the motif sources to a run ([Motifs](#motifs)).
 
-**`dataset` names the prepared split and its description, with nothing defaulted**: `splits`, a
-directory Stage 1 finalised, and `task`, which selects the description in `../datasets/`. A default
-here would silently apply one dataset's answer to another. For `task`, that would mean a language
-model is told the wrong thing and answers confidently.
+Git ignores a dataset's own configs, which stay with the dataset's other files on the machine that holds it ([preparing a dataset](../prepare/README.md)). The repository holds the configs of the example dataset in their place ([Exercising the pipeline cheaply](#exercising-the-pipeline-cheaply)):
 
-**`dataset.blinded` says whether the run withholds a fact from the language models**, the fact its
-description holds in `judge_only` (see [`../datasets/README.md`](../datasets/README.md)). It is
-stated in every config, so whether a run was blinded shows in its config and its report without
-opening the description. Before a run starts, the driver refuses a flag that disagrees with the
-description: `true` where the description withholds nothing, or `false` where it has `judge_only`.
-It also refuses a blinded run whose models would be shown a withheld word in a column name or in a
-covariate's description. `run_arm.py` makes both checks too, whenever an arm it is to fit calls a
-language model, so a stage started by hand is covered.
+- [`example.yaml`](example.yaml) runs the shared grid and arms on the example dataset.
+- [`example_quick.yaml`](example_quick.yaml) reduces that run to a few minutes, with no language model.
+- [`example_motifs.yaml`](example_motifs.yaml) adds the motif sources to the quick run.
 
-**The columns belong to the dataset, not the config.** Which column is the sequence, which the
-label, which the per-row weight and which the covariates are read from the split's `dataset.json`
-when the config is loaded, so they are stated once, and no stage takes a column as a flag. A
-config may restate a column, but only to agree with the dataset, and a
-config that disagrees with its dataset is refused. (The copy recorded beside a run restates them, so
-the run describes itself.) A config naming a split that was never finalised, or whose `dataset.json`
-records a failed check, is refused too. See [`../../docs/dataset.md`](../../docs/dataset.md).
+## Sections of a config
 
-**`grid` is required in full** for a related reason. A grid that fills in its own bootstrap count
-is a grid whose intervals mean something different from the run it is being read beside, with
-nothing in either to say so.
+`example.yaml` shows the sections that a dataset's config states itself (`name`, `description` and `dataset`), whereas `_shared.yaml` shows the others. The loader (`load`, in [`config.py`](../../seqmaestro/pipeline/config.py)) checks each section and keeps it in the field of the same name of `ExperimentConfig`. The field's type, such as `Grid` for `grid`, lists the section's keys. The comments of `_shared.yaml` say what each of its keys does, whereas the page of each stage in the [developer guide](../../docs/developer/index.md) explains how the stage uses its settings.
 
-**`grid.generated_features` is the one policy for features a language model writes**, in every arm
-that runs a language model's code:
-- `repair_rounds`, how many times a round's failed candidates go back to the model with their
-  failures;
-- `max_undefined_share`, the largest share of rows a kept feature may be undefined on;
-- `max_example_length`, how much of one sequence an example in a prompt shows;
-- `max_seconds`, the longest one feature may run on the rows it is checked on, in whole seconds.
-  Past it the feature has failed, and goes back to the model like any other failure. On more rows
-  it is given proportionally longer.
+## Sharing settings through `extends`
 
-`_shared.yaml` states it. Each arm's stage takes it from the run's config: the proposer as its
-settings, and DEFT's generative finder and IGSR as config overrides. IGSR applies the time limit to
-each term on each split. DEFT's limit is 60 seconds, fixed in its code, so `max_seconds` does not
-reach it.
+A dataset's config extends `_shared.yaml` and states only what belongs to that dataset. A dataset with a continuous target extends `_shared_continuous.yaml` instead, which extends `_shared.yaml` in its turn and changes only what the kind of target changes: it removes the class weighting and adds [IGSR](https://arxiv.org/abs/2605.29184), with its arm and its settings. The two kinds of target therefore share every other setting. `l1` in the shared arms names the sparse linear model of the dataset's kind, so the arms need no second list.
 
-**An unknown key is refused**, as in `../datasets/`: a misspelled one is a setting silently missing
-from the run, and the run completes without it. The same holds for a pool or a model name, so a typo
-cannot quietly skip an arm. Model names, pools, class weights and permutation scopes are checked
-against the library's vocabularies, so a config cannot name a model that does not exist, and each
-model is checked against its pool and the dataset (see Arms, below).
+The loader merges a config into the files it extends (`resolve`, in [`config.py`](../../seqmaestro/pipeline/config.py)):
 
-## Sharing, via `extends`
-
-`_shared.yaml` holds the grid and the arm settings every dataset uses. Each dataset config extends
-it and states only what is its own. `_shared.yaml` is not runnable alone, because it names no
-dataset.
-
-**A dataset with a continuous target extends `_shared_continuous.yaml`**, which extends
-`_shared.yaml` and changes only what the kind of target changes: no `class_weight`, and IGSR, which
-fits a continuous target only, with its settings. `l1` in the shared arms is the sparse linear model
-of the dataset's kind, so the arms need no second list. `extends` chains, so the two kinds share
-every other setting. The dataset's `dataset.json` states its kind, and a config whose settings do
-not fit it is refused: a binary model or a class weighting on a continuous target, a missing class
-weighting on a binary one, or IGSR on a binary target. The tree needs nothing more: DEFT grows a
-regression tree for a continuous target, by variance reduction, with prompts written for it.
-
-Merging is recursive. A list **replaces** the inherited list instead of being appended to it, and
-`null` **removes** a key, so a config can drop an arm as easily as retune it:
+- `extends` names a file by its path relative to the extending file, or a list of such files. Each file named is resolved first, so `extends` chains.
+- The files of a list are merged in their order, and the extending file last, so a later file's setting replaces an earlier one's.
+- Mappings are merged key by key, at every depth. A list replaces the inherited list whole, so that an extending file can shorten one.
+- `null` removes a key, so a config can drop an arm as easily as change one.
+- `extends` is consumed as the config is resolved, so the copy recorded beside a run is complete on its own.
 
 ```yaml
 extends: _shared.yaml
@@ -120,13 +55,33 @@ sources:
 arms:
   positional+kmer: null            # this dataset does not run the pool
   positional:
-    models: [l1, ebm, deft_or_cart]  # replaces the shared list wholesale
+    models: [l1, ebm, deft_or_cart]  # replaces the shared list whole
 ```
+
+A fragment is a file that adds a group of sources and arms, which a dataset may take or leave. [`_motifs.yaml`](_motifs.yaml) is one: a dataset's config takes the motif sources by extending it beside the shared config of its kind of target ([Motifs](#motifs)).
+
+## Checks on a config
+
+The loader refuses a config that cannot run as written, before any work is done, and names the file and the key at fault:
+
+- **Every key is known.** An unknown key is refused, because a misspelt key is a setting silently missing from the run, which would complete without it. The names of models and pools, and every other value chosen from a fixed list (such as a class weighting), are checked against the library's own lists. A typo therefore cannot quietly skip an arm or name a model that does not exist.
+- **Nothing is defaulted.** `grid`, `language_model` and `analyses` are required in full, and so are `reduction` and `reliability` in a run that has them, because their settings decide what a run's numbers mean. A grid that filled in its own bootstrap count, for example, would give intervals that mean something different from those of the run it is compared with, with nothing in either run to show it.
+- **Facts about the data come from the dataset.** `dataset` names the split that [Stage 1](../../docs/developer/dataset.md) prepared (`splits`) and its [task description](../../docs/glossary.md#task-description) (`task`, which selects a file in [`../datasets/`](../datasets/README.md)). A default for either would apply one dataset's answer to another. For the task description, that would mean a language model is told the wrong thing and answers confidently all the same. The columns and the kind of target come from the split's `dataset.json`, so a stage takes no column as a flag. A config may restate them (as the copy a run records does, so that the run describes itself), but only to agree with the dataset. A split that was never finalised, or whose `dataset.json` records a failed check, is refused.
+- **Every setting is used.** Settings for a source that no [pool](../../docs/glossary.md#pool) holds, or for a model that no arm fits, are refused, since a setting that nothing uses is a mistake the run would not show.
+- **The settings fit the kind of target.** A class weighting on a continuous target, which has no classes to weight, is refused. So are a binary model on a continuous target, a binary target without a class weighting, and IGSR on a binary target.
+- **Each arm can be fitted.** The pools, their models and what Stage 3 leaves out of each are checked as [Arms](#arms) describes. Each model's settings are checked as [Source and model settings](#source-and-model-settings) describes.
+- **Stage 3 has what it needs.** A run without a `reduction` section has no Stage 3A. `reliability` (Stage 3B) profiles the reduced models, so it needs `reduction`. Its `check_arm`, the arm on which the panel runs its global-null and planted-signal checks ([the reliability panel](../../docs/developer/reliability.md)), must be an arm the panel profiles.
+- **The version matches.** A config may state the `version` of its shape (its sections, their keys and what each means), whereas the copy a run records always states it. A stage refuses a run that recorded another version, because it could not tell which of that run's settings now mean something else.
+
+Before it starts anything, the driver makes the checks that need more than the config ([`driver.py`](../../seqmaestro/pipeline/driver.py)):
+
+- **Blinding.** `dataset.blinded` says whether the run withholds a fact from the language models that write features ([blinding](../../docs/glossary.md#blinding)). It must agree with the task description, which holds any withheld fact in `judge_only`. A blinded run is refused where a withheld word shows in a column name, in the description of a [covariate](../../docs/glossary.md#covariate) or in the [guidance](../../docs/glossary.md#guidance) on the form of the features. `run_arm.py` makes the same checks whenever an arm it is to fit calls a language model, so a stage started by hand is covered too ([dataset descriptions](../datasets/README.md)).
+- **What DEFT and IGSR are told.** `config_overrides`, the overrides of [DEFT](https://arxiv.org/abs/2604.12060)'s or IGSR's own configuration that a config may give, are refused where they restate a setting of the grid, name the language model or say how it is called. So is guidance that cannot reach DEFT's prompts ([Source and model settings](#source-and-model-settings)).
+- **What the stages need.** For the stages it is about to start, the driver checks for the language model's credentials, the interpreter of each environment a stage runs in, and any motif collection the run scans with.
 
 ## Arms
 
-An **arm** is one model fitted on one pool of sources. `arms` lists each pool by its name, with the
-models fitted on it, so each model of an entry is one arm:
+An arm is one model fitted on one pool of feature sources. The `arms` section maps each pool to the models fitted on it, so each model of an entry is one arm:
 
 ```yaml
 arms:
@@ -135,189 +90,129 @@ arms:
   kmer+llm_generated_iterative:
     models: [l1, ebm, xgboost]
     not_profiled:
-      ebm: "EBM over the k-mers: each of the panel's 100 selections refits it about 40 times"
+      ebm: "Each of the panel's 100 selections refits an EBM over the whole k-mer pool"
 ```
 
-An arm's cells are `results/<model>/<pool>/<labels>/seed_<n>`, and its reduction and its panel are
-kept under the same two names. The driver runs each arm as one stage, with one process per labels
-and seed, and offers the arms the machine in the order the config lists them. A config that
-extends another cannot reorder the pools it inherits: an inherited pool keeps its place, and a
-pool the config adds comes last.
+The loader checks every entry against what the code declares an arm can be:
 
-**A source** is one way of producing candidate features:
+- **Sources.** [`features/__init__.py`](../../seqmaestro/features/__init__.py) lists the sources a pool may hold, in a fixed order (`POOL_MEMBERS`). A pool's name joins its sources with `+` in that order. A pool written in another order is refused, so that one set of sources has one name. A pool holds at most one [written source](../../docs/glossary.md#written-source), so that each arm stands for one way of writing features.
+- **Models.** [`arms.py`](../../seqmaestro/arms.py) declares each model: the kinds of target it fits, whether it takes per-row weights, and which sources it can be handed, with the reason for each combination it refuses. `l1` names the sparse linear model of the dataset's kind of target (`l1_logistic` for a binary target, `l1_linear` for a continuous one). The recorded config and the cells name the model it resolved to. A model named twice in one entry is refused.
 
-| source | the features | produced |
-|---|---|---|
-| `positional` | one indicator per position and base, over the sequence or the dataset's positional window | from the sequence, enumerated |
-| `kmer` | a count of every k-mer with a length in `sources.kmer.k_range` | from the sequence, enumerated |
-| `llm_generated` | functions of the sequence a language model writes, in one round of calls | by the proposer |
-| `llm_generated_iterative` | the same, written over several rounds, each shown a fit of the arm's model | by the proposer |
-| `llm_generated_joint` | functions a language model writes while the model is fitted, by a procedure only that model runs: DEFT's candidates at each node of its tree, and IGSR's terms | inside the model's fit |
-| `covariates` | the measurements the dataset supplies with each sequence, unchanged | by the dataset |
+**The order of the pools.** The driver offers the machine to the arms in the order the config lists them. A config therefore lists its cheap arms first, so that an early abort still leaves them finished. A config that extends another cannot reorder the pools it inherits: an inherited pool keeps its place, and a pool the config adds comes last.
 
-**A pool** joins its sources with `+` in the order of the table, so `positional+kmer` hands a model
-both vocabularies, and `positional+covariates` the positions and the covariates. A pool written in
-another order is refused, so that one set of sources has one name. A pool holds at most one written
-source, so that each arm stands for one way of writing features.
+**Covariates.** An arm is handed the dataset's covariates only where its pool holds `covariates`, as `positional+covariates` does, so running a pool with and without them shows what the measurements add. A pool that holds them on a dataset that declares none is refused. A config that hands a dataset's covariates to no pool goes ahead with a warning, which `--estimate` prints and a launch writes in the run's `logs/driver.log`.
 
-**A model** is one of:
-- `l1`, the sparse linear model for the dataset's kind of target: `l1_logistic` for a binary target
-  and `l1_linear` for a continuous one, which may also be written by name. The recorded config and
-  the cells name the model `l1` resolved to.
-- `ebm`, `xgboost`, and `pysr`, one equation found by PySR's symbolic search. PySR's search runs in
-  `SeqMaestro_Method_pysr`, on the threads its process is given (`seqmaestro/execution.py`), so the
-  driver checks that interpreter before every stage that fits a PySR model: its arms, the reduction
-  and the panel.
-- `deft_or_cart`, DEFT's decision tree. It is plain CART on a pool without `llm_generated_joint`, and
-  DEFT on a pool with it, where a language model writes further candidates at each node. Both share
-  the tree, its splitting and stopping rules, and the naive candidates DEFT derives from the sequence.
-- `igsr`, influence-guided symbolic regression: a linear model over terms a language model writes as
-  functions of the whole sequence, each kept by its influence on the fit. It fits a continuous target
-  only.
+**Written sources.** A proposal is made for one arm, label condition and seed, so a difference between two models on one written pool includes the difference between their proposals ([Stage 2](../../docs/developer/suite.md)). The report says so wherever it compares them.
 
-`seqmaestro/arms.py` declares which sources each model can be handed. A combination it does not
-allow is refused when the config is loaded, with the reason, before anything is spent:
+**Sequences of different lengths.** On such a dataset, a pool that holds `positional` takes its positions in the positional window that the dataset declares. A config with such a pool is refused where the dataset declares no window ([Stage 1](../../docs/developer/dataset.md#variable-lengths-and-the-positional-window)). The k-mer, motif and written sources compute on the whole sequence, so they need no window. `sources.kmer.normalise: per_length` keeps a k-mer count from growing with the sequence's length.
 
-| model | sources it can be handed | sources its pool must hold |
-|---|---|---|
-| `l1`, `ebm`, `xgboost`, `pysr` | `positional`, `kmer`, `llm_generated`, `llm_generated_iterative`, `covariates` | |
-| `deft_or_cart` | `positional`, `kmer`, `llm_generated_joint`, `covariates` | `positional`, from which DEFT derives its candidates |
-| `igsr` | `llm_generated_joint`, `covariates` | `llm_generated_joint`, the terms its model is fitted on |
+**Stage 3 takes every arm unless its entry leaves the arm out with a reason:**
 
-The tree takes `kmer` or `llm_generated_joint`, and not both: DEFT's prompts show every column it is
-handed, and thousands of k-mer counts would swamp them. On `kmer`, CART searches a threshold for
-each count at every node, so it costs several times what it costs on the positions alone.
+- `not_reduced` maps a model of the entry to the reason the reduction leaves it out, which leaves it out of the reliability panel too.
+- `not_profiled` maps a model to the reason the panel alone leaves it out.
+- The panel leaves out a black-box model (one that can be interpreted only through its predictions, such as [XGBoost](https://xgboost.readthedocs.io/en/stable/)) by itself, so `not_profiled` naming one is refused. A model named under both keys is refused too.
 
-The loader also refuses a model that does not fit the dataset's kind of target or cannot take its
-per-row weights (IGSR fits without them), `covariates` on a dataset that declares none, and a model
-named twice in one entry. A dataset with covariates whose config hands them to no pool gets a
-warning, which the driver prints, and the run goes ahead.
+The reduction and the panel print every arm they leave out with its reason. The report lists those arms too.
 
-**Stage 3 takes every arm unless its entry leaves the arm out, with a reason.** `not_reduced` maps a
-model of the entry to why the reduction leaves it out, which leaves it out of the panel too, and
-`not_profiled` to why the panel leaves it out. The panel leaves out a black-box model by itself
-(`xgboost`, whose fit cannot be interpreted feature by feature), so `not_profiled` naming one is
-refused. The reduction and the panel print every arm they leave out with its reason, and the report
-lists them.
+**The composition baseline takes its settings from the grid and its code.** The [baseline](../../docs/glossary.md#baseline) runs first in every run, at the grid's seeds and with its class weighting. Its other settings are fixed in its code, so that it means the same thing for every dataset ([the composition baseline](../../docs/developer/baseline.md)). `--only baseline` runs it alone.
 
-**`sources` says how each source is computed**, once for every pool that holds it:
-- `kmer`: `k_range`, as `[min, max]`, and `normalise`. `counts` counts each k-mer in total, and
-  `per_length` per k-mer position in the sequence, so that a count does not carry the sequence's
-  length.
-- `llm_generated`: `proposal_rounds`, the calls per proposal, each told the names proposed before it;
-  `n_per_round`, the features asked for per call; and `n_examples`, the labelled rows shown. The
-  iterative source writes with the same settings, so its first round makes the one-round request.
-- `llm_generated_iterative`: `feedback_rounds`, the rounds after the blind first one.
+## Source and model settings
 
-A source some pool holds must be stated, and a source no pool holds is refused, since a setting that
-nothing uses is a mistake the run would not show. A config that extends `_shared.yaml` and drops
-every pool holding a source sets that source to `null`. `llm_generated` stays while any pool holds
-`llm_generated_iterative`, whose proposals are made with its settings.
+**`sources` states how each source is computed.** Its settings for a source serve every pool that holds the source. `SOURCE_SETTINGS`, in [`config.py`](../../seqmaestro/pipeline/config.py), lists the keys of each source. The comments of `_shared.yaml` and `_motifs.yaml` say what each one does. Each source that some pool holds must be stated in full. Since a source that no pool holds is refused, a config that extends `_shared.yaml` and drops every pool holding a source sets that source to `null`. `llm_generated` stays while a pool holds `llm_generated_iterative`, whose proposals are made with its settings.
 
-**Each arm's proposal is made for that arm.** The proposer's cache is keyed by the arm, so no two
-arms share a proposal, not even two models on one pool, and the iterative source's blind first round
-is a proposal for its arm too. A difference between two models
-on one written pool therefore includes the difference between their proposals, and the report says
-so where it compares them. A proposal is made per arm, labels and seed, and the language-model
-slots of the driver's budget bound how many are made at once.
+**`models` holds the settings a run changes for its models:**
 
-**A vocabulary beside a written source** is handed to the model with the proposal:
-`kmer+llm_generated` fits the model on the k-mers and the proposal together, and the proposer is
-asked as it would be without them. In the iterative source, each informed round is shown which of
-all the pool's columns the fit leaned on, the k-mers included, and the language model can answer
-with features that build on them.
+- **A Core model** (the sparse linear model, the [EBM](https://interpret.ml/docs/ebm.html), XGBoost or [PySR](https://github.com/MilesCranmer/PySR), which are fitted in SeqMaestro's own environment) takes the few settings its class lists as `settings`, in [`sparse.py`](../../seqmaestro/models/sparse.py), [`additive.py`](../../seqmaestro/models/additive.py), [`boosting.py`](../../seqmaestro/models/boosting.py) and [`symbolic.py`](../../seqmaestro/models/symbolic.py). A comment beside the list says what each setting changes, and each takes a positive number. The class fixes the model's other options, so that an arm's model is the same in every run that leaves these few alone. The loader builds the model once with the config's values, so a value the model refuses (such as an equation of fewer than seven nodes) is refused as the config loads. The dry run prints every setting of each Core model the run fits, with the config's value or the model's default.
+- **DEFT and IGSR** take `config_overrides`: a list of `key=value` overrides of the method's own configuration, which the arm's stage passes verbatim to the method's adapter. `deft_or_cart` is DEFT's decision tree, which is plain CART on a pool without `llm_generated_joint` and DEFT on a pool with it. Its overrides reach the tree in both cases, so CART and DEFT share the tree's settings. CART calls no language model, so it ignores any override that configures one. [Stage 2](../../docs/developer/suite.md) says in what order a method takes its settings.
 
-**`covariates` in a pool hands the model each covariate as a column**, and shows the arm's proposer
-what each one measures, so it may write features that use them. An arm whose pool does not hold them
-is given rows without them, so neither its model nor its proposer sees them. A tree whose pool holds
-them hands DEFT each covariate as a column, with the dataset's description of what it measures, and
-DEFT's naive candidates split on its values as CART's would.
+**A setting that several models share is stated once in the grid.** The driver refuses `config_overrides` that restate one, because two places that set one value will eventually disagree:
 
-**On a dataset whose sequences differ in length**, every pool holding `positional` takes its
-positions in the positional window the dataset declares, and the tree computes its positional
-candidates in the same window by the same rule. A config with such a pool on such a dataset without
-a window is refused. The written sources compute on the whole sequence at whatever length it comes,
-and `kmer` counts the whole sequence, so neither needs a window. `sources.kmer.normalise:
-per_length` keeps a count from carrying the sequence's length.
+- `grid.class_weight` is an argument of each Core model, whereas DEFT's tree takes it as the override `tree.class_weight`.
+- `grid.generated_features` is the policy for every feature a language model writes, in every arm that runs such code. The [proposer](../../docs/glossary.md#proposer) takes it as its settings, whereas DEFT's generative finder and IGSR take it as overrides. Its `guidance` reaches DEFT and IGSR through their adapters, which add it to the prompts they build from the task description. A task with a hand-written DEFT prompt config ([`deft_conf`](../adapters/deft_conf/README.md)) cannot take guidance on DEFT's arms that write features, so the driver refuses that combination. DEFT stops a feature its language model writes after 60 seconds, a limit fixed in DEFT's code, so `max_seconds` does not reach it.
 
-**`class_weight` is stated once, in the grid, and translated per model**: an argument of the models
-fitted in Core, and a `tree.class_weight` config override for the tree. It is required for a binary
-target and refused for a continuous one, which has no classes to weight. A model whose
-`config_overrides` also sets it is refused, because two places that set one value will eventually
-disagree.
+## The language model
 
-**`models.<model>.config_overrides`** is passed to DEFT, or to IGSR, verbatim as repeated
-`--config-override key=value`: each method's configuration, with its budget.
-`deft_or_cart`'s reach the tree under both of its finders, so CART and DEFT share their tree's
-settings, and CART, which calls no language model, ignores the rest. The grid's
-`generated_features` is the policy of every arm that writes features, so it is translated into each
-method's settings, and `config_overrides` restating one is refused. A model no arm fits may not be
-given settings.
+A config never names a language model. The file `.env` names the provider and the model (`SEQMAESTRO_LLM_PROVIDER`, with the provider's key and model, as [`.env.example`](../../.env.example) shows), once for every part of a run that calls one: the proposer, the [judge](../../docs/glossary.md#judge), the [recurrence analysis](../../docs/glossary.md#recurrence-analysis), DEFT and IGSR. Every arm is therefore compared under one model ([configuring the language model](../../docs/user/language-model.md)).
 
-**No config names a language model.** Which provider and model a run calls is set in `.env`
-(`SEQMAESTRO_LLM_PROVIDER`, with the provider's key and model: `.env.example`), once for the
-proposer, the judge, the recurrence analysis, DEFT and IGSR, so that every arm is compared at one
-model. Each arm's stage passes it to DEFT or IGSR as the cell starts, and `config_overrides` that
-sets one (`llm_models=`, `llm=`) is refused. A proposer's cell records the model it called, in
-`token_usage.json`, and a DEFT or IGSR cell records the provider's config among the overrides in
-its bundle.
+The `language_model` section states how every call is made, by every part that makes one, so that the arms are compared under one setting as well as under one model. Its keys are the fields of `CallSettings`, in [`client.py`](../../seqmaestro/llm/client.py). The comments of `_shared.yaml` give the reason for each value. Each arm's stage passes the model and these settings to DEFT and IGSR as overrides of their own settings, so `config_overrides` that set either are refused. An answer that a run keeps (a proposal, a judgement or a grouping) is stored under the model and its reasoning effort, so a change of either has the model asked again, whereas a change in the retries or the wait keeps the answers already stored.
 
-**The composition baseline is not an arm and has no section.** It runs first in every run, at the
-grid's seeds and with its class weighting, and nothing else about it can be configured (see
-[`../../docs/baseline.md`](../../docs/baseline.md)). `--only baseline` runs it alone.
+## The settings a user may change at the launch
+
+Before a launch, the [agent](../../docs/glossary.md#agent) offers these settings to a user who wants to change one ([`process/suite.md`](../../process/suite.md)). The dry run prints the value each takes in the run, except a setting of DEFT or IGSR that the config leaves at the method's own default. The estimate shows what a change does to the time and the cost.
+
+| Setting | What it changes |
+|---|---|
+| `grid.seeds` | How many fits each arm makes under each label condition. Stability is measured across the seeds, so fewer than five leave few pairs of seeds to measure it on. The time and the cost grow with the count |
+| `reduction.n_features` | How many features each reduced model keeps |
+| `reliability.pairs`, `reliability.permutations` | The half-sample pairs of the panel's Tier 1 (stability) and the permutations of its Tier 2 (association). The panel's time grows with the pairs, whereas the permutations set the smallest p-value Tier 2 can give |
+| `sources.llm_generated`: `proposal_rounds`, `n_per_round`, `n_examples` | How many requests a proposal makes, how many features each asks for, and how many example rows each shows. The cost grows with the first two |
+| `sources.llm_generated_iterative.feedback_rounds` | The rounds after the first, each shown a fit of the arm's model. Each is one more proposal |
+| `grid.generated_features.repair_rounds` | How many times a written feature that fails on the rows goes back to the model |
+| `language_model.reasoning_effort` | How much a model that reasons does before it answers, where the provider takes an effort |
+| `models.<model>` | A Core model's settings, which its class lists ([Source and model settings](#source-and-model-settings)) |
+| `models.deft_or_cart.config_overrides` | DEFT's `params_generation.n_reflections`, `params_generation.n_samples_per_prompt` and `tree.max_depth`. Its calls grow with the product of the first two, and with the nodes the depth allows |
+| `models.igsr.config_overrides` | IGSR's `experiment.total_budget` and `experiment.n_successors`: the nodes its search expands, and how many times its agent runs at each |
+
+## Motifs
+
+The known motifs (`motif_known`) and the discovered motifs (`motif_discovered`) are off unless a dataset's config extends [`_motifs.yaml`](_motifs.yaml) beside the shared config of its kind of target. The fragment adds the arms on both sources and the settings that suit every dataset, which a dataset's config may change like any other. It leaves out the settings that are facts about the dataset, so a run that does not state them is refused:
+
+```yaml
+extends: [_shared.yaml, _motifs.yaml]
+sources:
+  motif_known:
+    collection: JASPAR2026_CORE_vertebrates_non-redundant   # fetched at Stage 1
+    strands: both                                           # given, for RNA
+  motif_discovered:
+    strands: both
+    annotate_with: JASPAR2026_CORE_vertebrates_non-redundant   # optional
+```
+
+- `collection` names a collection of published motifs, such as those of [JASPAR](https://jaspar.elixir.no/), that [`fetch_motif_collection.py`](../prepare/fetch_motif_collection.py) fetched into `data/motif_collections/` at Stage 1.
+- `strands` is `both` for DNA, which a factor binds on either strand, and `given` for RNA. Each source states it.
+- `annotate_with` is optional. It names a fetched collection with which each discovered motif is compared, so that the report can name the closest known motif.
+
+A config that takes one source only sets the other's settings and arms to `null`. In a blinded run, a pool that holds the known motifs beside a written source is refused. A known motif is named after its factor, so a language model that writes beside it could see a factor's name among the columns a fit relied on. The discovered motifs need the [MEME Suite](https://meme-suite.org/meme/), which `./install.sh --with-motifs` builds into `SeqMaestro_Method_meme` ([motif discovery](../../docs/user/installation.md#motif-discovery)). The driver checks for it before a run with `motif_discovered` starts.
+
+The comments of [`_motifs.yaml`](_motifs.yaml) say what each setting does, and [motifs](../../docs/developer/motifs.md) says how a motif is matched and how a discovery is made. `example_motifs.yaml` runs the motif arms on the example dataset.
 
 ## Adding a dataset
 
-Finalise the prepared split first (`../prepare/finalise_dataset.py`), since a config cannot name one
-that has no `dataset.json`. Then write `<name>.yaml` extending `_shared.yaml` with a `dataset`
-section, and write the matching description in `../datasets/<task>.json`. Nothing registers it
-anywhere else.
+1. Finalise the prepared split with [`finalise_dataset.py`](../prepare/finalise_dataset.py), since a config cannot name a split that has no `dataset.json`.
+2. Write the dataset's description, `experiments/datasets/<task>.json` ([dataset descriptions](../datasets/README.md)).
+3. Write `experiments/configs/<name>.yaml`. It extends `_shared.yaml`, or `_shared_continuous.yaml` for a continuous target, and states `name` and the `dataset` section. The dataset needs no registration anywhere else.
+4. Check what the config resolves to. This prints the config as a run would record it, with `extends` merged and any `--set` applied. It works out no run directory, so it suits a config still being edited:
 
-Check it before spending compute on it. This resolves, validates and prints every command the run
-would issue, without running any of them:
+   ```bash
+   $CORE experiments/runners/experiment_config.py --config experiments/configs/<name>.yaml
+   ```
 
-```bash
-$CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml --dry-run
-```
+5. Make the dry run before the launch. It validates the config, makes the driver's checks and prints every command the run would issue, without running any of them:
 
-The dry run makes the driver's checks before a launch, so it needs what the run would need: the
-credentials in the environment where a stage calls a language model
-(`set -a && source .env && set +a`), and each interpreter a stage runs under.
+   ```bash
+   $CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml --dry-run
+   ```
 
-To see only what a config resolves to, with `extends` folded in and any `--set` applied, and
-without the run directory being worked out at all:
+   The dry run needs what the run would need: the language model's credentials in the environment where a stage calls a language model (`set -a && source .env && set +a`), and each interpreter a stage runs under. It also works out the run's directory, so it refuses a config that already has a run, unless `--run-dir` names that run or `--new-run` says that another run is meant.
+6. Estimate how long each arm would take on the machine, and decide about any arm the estimate flags as slow ([`process/suite.md`](../../process/suite.md)):
 
-```bash
-$CORE experiments/runners/experiment_config.py --config experiments/configs/<name>.yaml
-```
-
-That prints the form the run would record. Use it while editing a config, because `--dry-run`
-resolves a run directory and refuses if the config already has runs.
-
-Before launching, estimate what each arm would cost on the machine, and decide about any arm it
-flags as slow (`process/suite.md`):
-
-```bash
-$CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml --estimate
-```
+   ```bash
+   $CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml --estimate
+   ```
 
 ## Exercising the pipeline cheaply
 
-**On the example dataset**, `example_quick.yaml` is a run of every stage that calls no language
-model: fewer arms, two seeds and a small panel, from the baseline to the report's figures. It took
-about eight minutes on eight cores. Build the example first
-([`../prepare/README.md`](../prepare/README.md)), then:
+**On the example dataset**, `example_quick.yaml` runs every stage, from the baseline to the report's figures, in a few minutes and without a language model. It fits fewer arms, at two seeds and with a small reliability panel. Build the example first ([the example dataset](../../docs/user/example.md) gives the commands), and then run:
 
 ```bash
 $CORE experiments/runners/run_experiment.py --config experiments/configs/example_quick.yaml
 ```
 
-It opens the example's test split at the end, since nothing rests on that split. It extends
-`example.yaml` and states only what it cuts, so the two cannot drift apart. `example.yaml` itself
-runs the shared grid and arms as they are: hours of computation, and the credentials.
+- The quick run opens the example's [held-out split](../../docs/glossary.md#held-out-split) at the end, since nothing rests on that split.
+- It extends `example.yaml` and states only what it changes, so the two cannot drift apart. `example.yaml` runs the shared grid and arms as they are, which takes hours and needs the language model's credentials.
+- `example_motifs.yaml` extends `example_quick.yaml` and `_motifs.yaml`, and runs the arms of both motif sources beside the quick run's, once the collection it names has been fetched and the MEME Suite built ([Motifs](#motifs)).
 
-**On any config**, `--set` cuts a run down without a second file. It overrides one value, can be
-repeated, and is recorded with the run, so a cut-down run is documented like any other:
+**On any config**, `--set` makes a run smaller without a second file. Each `--set` overrides one value, which the run records, so a smaller run is documented like any other:
 
 ```bash
 $CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.yaml \
@@ -325,18 +220,10 @@ $CORE experiments/runners/run_experiment.py --config experiments/configs/<name>.
     --set grid.seeds='[42, 43]' --set grid.n_bootstrap=0 --only l1_logistic/positional
 ```
 
-`--only` and `--skip` take a stage's name. An arm's stage is named `model/pool`, and a model or a
-pool alone selects every arm with it, so `--only positional` runs each arm on the positional pool.
-The other stages are `baseline`, the analyses (`analyse_stability`, `analyse_co_discovery`,
-`analyse_recurrence`, `judge`), `reduction`, `reliability`, `reveal`, `reliability_after_reveal`,
-`report_inputs` and `report_figures`.
+- `--set` parses its value as YAML, and a value of `null` removes the key. The section it names must exist already, so a misspelt section is refused instead of being created.
+- A tiny split is a dataset like any other, so it needs its own `dataset.json` before a config can name it.
+- Two seeds are the fewest that measure stability, which is a property of a set of fits. The analyses that measure it are undefined below two.
 
-`--skip` leaves out stages and nothing else. The reduction and the panel are one stage each, with
-one process per arm of the config, so `--skip deft_or_cart` leaves out the tree's arms and still
-starts their reductions and panels, which fail where the arms' cells are missing and hold the
-reveal back. To leave an arm out of a run, take it out of the run's config, in the file or with
-`--set`.
+**`--only` and `--skip` select stages by name.** An arm's stage is named `model/pool`. A model or a pool alone selects every arm with it, so `--only positional` runs each arm on the positional pool. The dry run prints every command under the name of its stage, which shows the names a config's run has. A name that selects nothing is refused.
 
-Two seeds are the minimum, because stability is a property of a *set* of runs, and the analyses that
-read it are undefined below two. A tiny split is a dataset like any other, so it needs its own
-`dataset.json` before a config can name it.
+`--skip` leaves out stages and nothing else. The reduction and the panel are one stage each, with one process per arm, so `--skip deft_or_cart` leaves out the tree's arms and still starts their reductions and panels. These fail where the arms' cells are missing, which holds the [reveal](../../docs/glossary.md#reveal) back. To leave an arm out of a run, remove it from the config file, or drop it with `--set`.

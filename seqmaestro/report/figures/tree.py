@@ -1,20 +1,21 @@
-"""A fitted decision tree, drawn as a tree.
+"""Draw a fitted decision tree in the shape of a tree.
 
 A tree is a set of yes/no questions asked in order, and a reader follows one sequence down it to see
 what the tree predicts for it. The figure keeps that shape: one box per question, the two answers
-below it, and the number of rows each branch carries.
+below it, and the number of rows that reach each branch.
 
-**Deep branches are folded instead of shrunk**, because a large tree drawn in full puts every label
-below reading size. Below the drawn depth, a branch becomes one wedge showing how many rows reach it
+**Deep branches are folded instead of shrunk**, because a large tree drawn in full makes every label
+too small to read. Below the drawn depth, a branch becomes one wedge showing how many rows reach it
 and what they hold, so the figure shows how much of the model is off the page.
 
-Each box is shaded on the same diverging scale the rest of the report uses, so a branch that
-separates the rows is visible before any number is read: from the rate of the positive class among
-the rows reaching it, for a binary target, and for a continuous one from how far their mean sits
-from the mean of every fitting row, in those rows' standard deviations.
+Each box is shaded on the diverging scale the rest of the report uses, so a branch that separates
+the rows is visible before any number is read. For a binary target the shade follows the rate of
+the positive class among the rows reaching the box, and for a continuous one how far their mean
+sits from the mean of every fitting row, in those rows' standard deviations.
 
-Drawn from what `experiments/adapters/deft_cart.py tree` exports: the saved tree's nodes, with the
-fitting rows routed down it, and the kind of target it was grown for (`target_kind`).
+The figure is drawn from what `experiments/adapters/deft_cart.py tree` exports: the saved tree's
+nodes, with the fitting rows routed down it, and the kind of target it was grown for
+(`target_kind`).
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ from seqmaestro.report.figures import style
 
 
 def _blend(colour: str, weight: float) -> tuple[float, float, float]:
-    """`colour` mixed toward the neutral midpoint; weight 0 is neutral, 1 is the pole."""
+    """`colour` mixed toward the neutral midpoint, where a weight of 0 gives the midpoint and 1 the
+    pole."""
     import matplotlib.colors as mcolors
 
     pole = np.array(mcolors.to_rgb(colour))
@@ -59,11 +61,11 @@ def _number(value: float | None) -> str:
 
 
 def _boxes(structure: dict, nodes: dict, poles: list[str]):
-    """How a box is drawn, by the kind of target: its shade, the figure it shows for its rows, and
+    """How a box is drawn, by the kind of target: its shade, the number it shows for its rows, and
     what a leaf predicts. A binary tree's leaf shows the class the tree predicts there, named by
     `poles`: the positive one where the leaf's score is at least a half. The score is the share
     of the leaf's fitting rows in the positive class, weighted as the run weights the classes, so
-    under a weighting a leaf can predict a class that fewer than half of its rows hold. A
+    under a weighting a leaf can predict a class to which fewer than half of its rows belong. A
     continuous tree's leaf shows its predicted value."""
     if structure["target_kind"] == "continuous":
         root = nodes[""]

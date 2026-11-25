@@ -1,18 +1,35 @@
-"""The names of the files in a run's `report/` directory, kept here so each is spelled in one place.
+"""The names of the files in a run's `report/` directory, kept here so that each is spelled in one
+place, and the directory of the run-independent text a report includes.
 
-Imports nothing, because both environments read it: Core writes the inputs, LocalUtils draws the
-figures.
+It imports nothing beyond the standard library, because both environments import it: Core to write
+the inputs, and LocalUtils to draw the figures.
 
     report/
-        facts.json            every number, keyed, with the files it was read from
-        tables/<name>.md      the same numbers rendered, in a reader's names
-        internals/<arm>.json  what is inside each drawn model
-        figure_inputs.json    what each figure draws
-        figures/<name>.png    the figures, drawn under SeqMaestro_LocalUtils
-        figures.json          each figure's path, caption, width and measured aspect
-        REPORT.src.md         the report as written, with placeholders
-        REPORT.md, REPORT.pdf the report expanded, and rendered
+        facts.json            every number, keyed, with the files it   } written by
+                              was read from                            } build_report_inputs.py,
+        tables/<name>.md      the same numbers rendered, in a reader's } under Core
+                              names                                    }
+        internals/<arm>.json  what is inside each drawn model: its     }
+                              kind (ebm_shapes, l1_weights,            }
+                              pysr_equation, tree or no_features) and  }
+                              what that kind draws                     }
+        figure_inputs.json    what each figure draws, with its caption }
+                              and width                                }
+        figures/<name>.png    the figures                              } written by
+        figures.json          each figure's path, caption, width,      } build_report_figures.py,
+                              measured shape, and whether it takes a   } under LocalUtils
+                              rotated page                             }
+        REPORT.src.md         the report as the agent wrote it, with placeholders
+        REPORT.md             the report with every placeholder filled, by assemble_report.py
+        REPORT.pdf            the rendered report, by render_pdf.sh
 """
+
+from pathlib import Path
+
+#: The run-independent explanations a report includes with `{{component:NAME}}`
+#: (`seqmaestro.report.placeholders`). They are the same for every run, so they are kept with the
+#: code that fills them in.
+COMPONENTS_DIR = Path(__file__).resolve().parent / "components"
 
 FACTS_FILE = "facts.json"
 TABLES_DIR = "tables"

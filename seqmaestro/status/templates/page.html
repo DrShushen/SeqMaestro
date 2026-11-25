@@ -1,0 +1,296 @@
+{#- The run's status page. `seqmaestro/status/gather.py` says where each value comes from. -#}
+{%- set words = {"done": "done", "running": "running", "waiting": "waiting", "failed": "failed",
+                 "stopped": "stopped", "held": "held back", "skipped": "not in this run"} -%}
+
+{%- macro state(word) -%}
+<span class="state {{ word }}">{{ words.get(word, word) }}</span>
+{%- endmacro -%}
+
+{%- macro checkpoint(title, items, signed=false) -%}
+<div class="checkpoint{{ ' signed' if signed }}">
+  <h3>{{ title }}</h3>
+  <ul>
+    {% for item in items %}<li class="{{ item.state }}">{{ item.text }}</li>{% endfor %}
+  </ul>
+</div>
+{%- endmacro -%}
+
+{%- macro figures(found, label) -%}
+{% if found %}
+<details>
+  <summary>{{ label }} ({{ found | length }})</summary>
+  {% for figure in found %}
+  <figure>
+    <a href="{{ figure.href }}" target="_blank"><img src="{{ figure.href }}" alt="{{ figure.caption }}"></a>
+    <figcaption>{{ figure.caption }}</figcaption>
+  </figure>
+  {% endfor %}
+</details>
+{% endif %}
+{%- endmacro -%}
+
+{%- macro links(found) -%}
+{% if found %}<div class="links">{% for link in found %}<a href="{{ link.href }}">{{ link.label }}</a>{% endfor %}</div>{% endif %}
+{%- endmacro -%}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% if overall.live %}<meta http-equiv="refresh" content="{{ reload_seconds }}">{% endif %}
+<title>{{ overall.name }} · SeqMaestro</title>
+<style>
+{{ css | safe }}
+</style>
+</head>
+<body>
+
+{#- ------------------------------------------------------------------ the run -#}
+<section class="band overall">
+  <div class="title-row">
+    <h1>{{ overall.name }}</h1>
+    <span class="state {{ overall.state.kind }}">{{ overall.state.word }}</span>
+  </div>
+  {% if overall.description %}<p class="description">{{ overall.description }}</p>{% endif %}
+  <ol class="progress">
+    {% for stage in stages %}<li class="{{ stage.state }}"><span>{{ stage.key }}</span> {{ stage.name }}</li>{% endfor %}
+    <li class="{{ report.state }}"><span>✎</span> Report</li>
+  </ol>
+  <div class="band-grid">
+    <div class="card">
+      <h3>Time</h3>
+      <dl class="facts">
+        <dt>Started</dt><dd>{{ overall.started_utc | clock }}</dd>
+        <dt>Elapsed</dt><dd>{{ overall.elapsed or "–" }}{% if overall.invocations > 1 %} over {{ overall.invocations }} launches{% endif %}</dd>
+        {% if overall.updated_utc %}<dt>Updated</dt><dd>{{ overall.updated_utc | clock }}</dd>{% endif %}
+        {% if overall.estimate_hours is not none %}<dt>Estimated</dt><dd>{{ overall.estimate_hours | hours }} before any language model's time</dd>{% endif %}
+      </dl>
+    </div>
+    <div class="card">
+      <h3>Running now</h3>
+      {% if overall.running %}
+      <ul class="plain">
+        {% for job in overall.running[:6] %}<li><span class="tag">{{ job.stage }}</span> {{ job.label }} <span class="muted">{{ job.for }}</span></li>{% endfor %}
+      </ul>
+      {% if overall.running | length > 6 %}
+      <details><summary>{{ overall.running | length - 6 }} more</summary>
+        <ul class="plain">{% for job in overall.running[6:] %}<li><span class="tag">{{ job.stage }}</span> {{ job.label }} <span class="muted">{{ job.for }}</span></li>{% endfor %}</ul>
+      </details>
+      {% endif %}
+      {% else %}<p class="muted">Nothing is running.</p>{% endif %}
+    </div>
+    <div class="card">
+      <h3>Machine</h3>
+      {% if overall.budget %}
+      <dl class="facts">
+        <dt>Threads</dt><dd>{{ overall.budget.cpus }} of {{ overall.machine.cpus }}</dd>
+        <dt>Memory</dt><dd>{{ (overall.budget.memory / 2**30) | round | int }} GB</dd>
+        <dt>Language-model slots</dt><dd>{{ overall.budget.model_calls }}</dd>
+      </dl>
+      {% else %}<p class="muted">Not probed yet.</p>{% endif %}
+    </div>
+    <div class="card">
+      <h3>Who and what</h3>
+      <dl class="facts">
+        {% for agent in overall.agents %}<dt>Stages {{ agent.stages | join(", ") }}</dt><dd>{{ agent.agent }} ({{ agent.model }})</dd>{% endfor %}
+        {% if not overall.agents %}<dt>Agents</dt><dd class="muted">None recorded</dd>{% endif %}
+        <dt>Language model</dt><dd>{{ overall.language_model or "None called" }}</dd>
+      </dl>
+    </div>
+  </div>
+  {% if overall.failures %}
+  <details class="failures" open>
+    <summary class="warning">{{ overall.failures | length | count("call") }} with a failure on file</summary>
+    <div class="links">{% for failure in overall.failures %}<a href="{{ failure.href }}">{{ failure.name }}</a>{% endfor %}</div>
+  </details>
+  {% endif %}
+  {{ links(overall.links) }}
+</section>
+
+<div class="stages">
+{% for stage in stages %}
+<section class="stage" id="stage-{{ stage.key }}">
+  <header><span class="number">{{ stage.key }}</span><span class="name">{{ stage.name }}</span>{{ state(stage.state) }}</header>
+  <div class="subtitle">{{ stage.subtitle }}</div>
+  <div class="body">
+
+  {#- ---------------------------------------------------------------- Stage 1 -#}
+  {% if stage.key == "1" %}
+    <div class="card">
+      <h3>The target</h3>
+      <p><strong>{{ stage.target_name or stage.target_column }}</strong>, {{ "two classes" if stage.target_kind == "binary" else "a continuous value" }} (column <code>{{ stage.target_column }}</code>)</p>
+      {% if stage.classes %}
+      <table>
+        {% for item in stage.classes %}<tr><td class="class class-{{ item.label }}">{{ item.name }}</td><td>{{ item.meaning }}</td></tr>{% endfor %}
+      </table>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>The sequences</h3>
+      <dl class="facts">
+        <dt>Window</dt><dd>{{ stage.sequences.window }}</dd>
+        {% if stage.sequences.anchor %}<dt>Anchor</dt><dd>{{ stage.sequences.anchor }}</dd>{% endif %}
+        {% if stage.sequences.observed_length %}<dt>Length</dt><dd>{{ stage.sequences.observed_length.min }}{% if stage.sequences.observed_length.max != stage.sequences.observed_length.min %} to {{ stage.sequences.observed_length.max }}{% endif %} nt</dd>{% endif %}
+        {% if stage.covariates %}<dt>Covariates</dt><dd>{{ stage.covariates | join(", ") }}</dd>{% endif %}
+      </dl>
+      <details><summary>Orientation and alphabet</summary>
+        <p>{{ stage.sequences.orientation }}</p>
+        {% if stage.sequences.alphabet %}<p>Alphabet: <code>{{ stage.sequences.alphabet | join("") }}</code></p>{% endif %}
+      </details>
+    </div>
+    <div class="card">
+      <h3>Dividing the sequences into sets</h3>
+      <p>{{ stage.split.method }}{% if stage.split.grouped_by %}, grouped by {{ stage.split.grouped_by | join(", ") }}{% endif %}.</p>
+      <table>
+        <tr><th></th><th class="number">Rows</th><th class="number">Share</th>{% if stage.target_kind == "binary" %}<th class="number">Positive</th>{% endif %}</tr>
+        {% for name, split in stage.splits.items() %}
+        <tr><td>{{ {"train": "Training", "val": "Validation", "test": "Held out"}.get(name, name) }}</td><td class="number">{{ split.rows }}</td><td class="number">{{ split.share | share }}</td>{% if stage.target_kind == "binary" %}<td class="number">{{ split.positive_rate | share }}</td>{% endif %}</tr>
+        {% endfor %}
+      </table>
+      {% if stage.design_power.test and stage.design_power.test.smallest_detectable_auroc %}
+      <p>The held-out set can tell an AUROC of {{ stage.design_power.test.smallest_detectable_auroc | score }} from chance.</p>
+      {% endif %}
+    </div>
+    <div class="card">
+      <h3>Decisions and checks</h3>
+      <details><summary>{{ stage.filters | length | count("filtering step") }}</summary>
+        <ul class="plain">{% for step in stage.filters %}<li><strong>{{ step.step }}</strong>{% if step.why %}: {{ step.why }}{% endif %}</li>{% endfor %}</ul>
+      </details>
+      <details><summary>{{ stage.checks | length | count("check") }}: {% for status, number in stage.checks_counted.items() %}{{ number }} {{ status }}{{ ", " if not loop.last }}{% endfor %}</summary>
+        <table>{% for check in stage.checks %}<tr><td>{{ check.name | capitalize }}</td><td>{{ check.status | replace("_", " ") }}</td></tr>{% endfor %}</table>
+        {% if stage.acknowledged %}<p>Acknowledged in the declaration: {{ stage.acknowledged | join(", ") }}.</p>{% endif %}
+      </details>
+      <details><summary>What the language models are told</summary>
+        <p>{{ stage.task }}</p>
+        <p>{{ stage.sequence_layout }}</p>
+        <p>{{ "A fact is withheld from the models that write features (a blinded run)." if stage.blinded else "Nothing is withheld from the models (the run is not blinded)." }}</p>
+        <p>{% if stage.guidance %}Guidance on the form of the features: “{{ stage.guidance }}”{% else %}No guidance on the form of the features.{% endif %}</p>
+      </details>
+      {% if stage.notes %}<details><summary>Notes</summary><p>{{ stage.notes }}</p></details>{% endif %}
+      {{ links(stage.links) }}
+    </div>
+    {{ checkpoint("Checkpoint 1 (signed off by the user)", [
+        {"text": "Every blocking check passed or is acknowledged" if not stage.checks_failed else "Blocking checks failed: " ~ (stage.checks_failed | join(", ")),
+         "state": "no" if stage.checks_failed else "ok"},
+        {"text": "The user approved the dataset and the config before Stage 2", "state": "ok" if stage.state == "done" else "open"}], signed=true) }}
+
+  {#- ---------------------------------------------------------------- Stage 2 -#}
+  {% elif stage.key == "2" %}
+    <div class="card">
+      <h3>Every pairing is fitted</h3>
+      <table class="grid">
+        <tr><th></th>{% for model in stage.models %}<th>{{ model }}</th>{% endfor %}</tr>
+        {% for row in stage.rows %}
+        <tr><th>{{ row.label | capitalize }}</th>
+          {% for arm in row.arms %}
+          {% if arm %}
+          <td class="arm{{ ' writes' if arm.writes }}" title="{{ arm.label }}; on shuffled labels {{ arm.control | score }}">
+            <span class="score">{{ arm.score | score }}</span>
+            <span class="cells">{% for cell in arm.cells %}<a class="dot {{ cell.state }}{{ ' control' if cell.labels != 'real' }}" href="{{ cell.href }}" title="{{ cell.labels }} labels, seed {{ cell.seed }}: {{ words.get(cell.state, cell.state) }}{% if cell.score is not none %}, {{ cell.score | score }}{% endif %}"></a>{% endfor %}</span>
+          </td>
+          {% else %}<td class="arm none"></td>{% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </table>
+      <p class="legend">Mean validation {{ stage.headline | upper if stage.headline == "auroc" else "R²" }} on the real labels, over {{ stage.seeds | length }} seeds. Each dot is a cell: round on the real labels, square on the shuffled ones.</p>
+      <p>{{ stage.cells_done }} of {{ stage.cells_expected }} cells done.</p>
+    </div>
+    <div class="card">
+      <h3>A baseline from base composition</h3>
+      <p>Validation {{ "AUROC" if stage.headline == "auroc" else "R²" }} <strong>{{ stage.baseline | score }}</strong>, which every pairing is compared with (chance is {{ stage.chance }}).</p>
+    </div>
+    <div class="card">
+      <h3>The analyses</h3>
+      <ul class="plain">{% for analysis in stage.analyses %}<li>{{ state(analysis.state) }} {% if analysis.href %}<a href="{{ analysis.href }}">{{ analysis.label }}</a>{% else %}{{ analysis.label }}{% endif %}</li>{% endfor %}</ul>
+    </div>
+    {{ figures([stage.figure] if stage.figure else [], "The report's figure") }}
+    {{ checkpoint("Checkpoint 2", stage.checkpoint) }}
+
+  {#- ---------------------------------------------------------------- Stage 3A -#}
+  {% elif stage.key == "3A" %}
+    {% if stage.state == "skipped" %}<div class="card"><p class="muted">The config has no reduction.</p></div>{% else %}
+    <div class="card">
+      <h3>Reduced to {{ stage.n_features }} features</h3>
+      <table>
+        <tr><th>Configuration</th><th class="number">Full</th><th class="number">Reduced</th>{% if stage.held_out %}<th class="number">Held out</th>{% endif %}</tr>
+        {% for arm in stage.arms %}
+        {% if arm.val_reduced is not none %}
+        <tr><td><a href="{{ arm.href }}">{{ arm.label }}</a></td><td class="number">{{ arm.val_full | score }}</td><td class="number"><strong>{{ arm.val_reduced | score }}</strong></td>{% if stage.held_out %}<td class="number">{{ arm.held_out_score | score }}</td>{% endif %}</tr>
+        {% else %}
+        <tr><td>{{ arm.label }}</td><td colspan="3">{{ state(arm.state) }}</td></tr>
+        {% endif %}
+        {% endfor %}
+      </table>
+      <p class="legend">Validation {{ "AUROC" if stage.headline == "auroc" else "R²" }} of the model on every feature its cell used, and of the model reduced to {{ stage.n_features }}{% if stage.held_out %}, with the reduced model's score on the held-out rows{% endif %}.</p>
+    </div>
+    {% if stage.best %}
+    <div class="card">
+      <h3>The best small models</h3>
+      {% for arm in stage.best %}
+      <details>
+        <summary>{{ arm.label }}: {{ arm.val_reduced | score }}</summary>
+        <ol class="features">{% for feature in arm.features %}<li><code>{{ feature.name }}</code></li>{% endfor %}</ol>
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {{ figures(stage.figures, "The models drawn for the report") }}
+    {{ checkpoint("Checkpoint 3A", stage.checkpoint) }}
+    {% endif %}
+
+  {#- ---------------------------------------------------------------- Stage 3B -#}
+  {% elif stage.key == "3B" %}
+    {% if stage.state == "skipped" %}<div class="card"><p class="muted">The config has no reliability panel.</p></div>{% else %}
+    {% for arm in stage.arms %}
+    <div class="card">
+      <h3><a href="{{ arm.href }}">{{ arm.label }}</a>{% if arm.state != "done" %} {{ state(arm.state) }}{% endif %}</h3>
+      <div class="parts">{% for part in arm.parts %}<span class="part {{ part.state }}{{ ' after' if part.after }}">{{ part.name }}{% if part.name == "Tier 1" and arm.selections and part.state != "done" %} {{ arm.selections.done }}/{{ arm.selections.of }}{% endif %}</span>{% endfor %}</div>
+      {% if arm.features %}
+      <details>
+        <summary>The evidence for its {{ arm.features | length | count("feature") }}</summary>
+        <table class="evidence">
+          <tr><th>Feature</th><th>Tier 1: chosen again</th><th class="number">Tier 2: q</th><th class="number">Tier 3: {{ stage.tier3_label }}</th></tr>
+          {% for feature in arm.features %}
+          <tr>
+            <td title="{{ feature.description }}"><code>{{ feature.name }}</code></td>
+            <td><div class="bar"><span style="width: {{ (100 * (feature.pi_hat or 0)) | round | int }}%"></span></div> {{ feature.pi_hat | score(2) }}</td>
+            <td class="number{{ ' called' if feature.called }}">{{ feature.q | score }}</td>
+            <td class="number">{{ feature.loss | signed }}{% if feature.verdict %} <span class="muted">{{ feature.verdict }}</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </details>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="reveal{{ ' opened' if stage.revealed_utc }}">
+      {% if stage.revealed_utc %}The held-out set was opened on {{ stage.revealed_utc | clock }} for Tiers 2 and 3 and every other evaluation.{% else %}The held-out set is still sealed. It is opened once, for Tiers 2 and 3 and every other evaluation.{% endif %}
+    </div>
+    {{ figures(stage.figures, "The panel's figures for the report") }}
+    {{ checkpoint("Checkpoint 3B", stage.checkpoint) }}
+    {% endif %}
+  {% endif %}
+
+  </div>
+</section>
+{% endfor %}
+</div>
+
+{#- ------------------------------------------------------------------ the report -#}
+<section class="band">
+  <h2>Final output</h2>
+  {% if report.written %}
+  <p>The report is written.</p>
+  {% elif report.inputs %}
+  <p>The report's tables and figures are ready, and the report is written from them as <code>process/reporting.md</code> says.</p>
+  {% else %}
+  <p class="muted">The report is written once the run has finished and the held-out set is opened.</p>
+  {% endif %}
+  {{ links(report.links) }}
+</section>
+
+<footer class="muted">Built on {{ built_utc | clock }}{% if overall.live %}. This page reloads every {{ reload_seconds }} seconds while the run is going{% endif %}.</footer>
+</body>
+</html>

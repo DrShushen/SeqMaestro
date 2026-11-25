@@ -1,13 +1,14 @@
 """Gradient-boosted trees, the black-box reference.
 
-Reported as a **strong tabular baseline**, and not as the ceiling on accuracy. On short sequence
-windows a convolutional network would plausibly beat gradient boosting, and the DEFT paper compares
-against both a CNN and a transformer. A true ceiling would have to come from models like those.
+They are reported as a **strong reference among models of tabular features**, not as the ceiling on
+accuracy. On short sequence windows a convolutional network would plausibly beat gradient boosting,
+and the DEFT paper compares against both a convolutional network and a transformer, so a true
+ceiling would have to come from models like those.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
@@ -27,9 +28,12 @@ class _Trees:
     name = "xgboost"
     importance_kind = "xgb_gain"
     direction_kind = "treeshap_dependence"
-    #: An ensemble of many trees, known through its predictions and not its features.
+    #: An ensemble of many trees, which can be interpreted only through its predictions.
     interpretable = False
     reproducible = True
+    #: What a run's config may change (`seqmaestro.models.settings`): how many trees, how deep each
+    #: may grow, and how much each corrects the trees before it.
+    settings: ClassVar[dict[str, type]] = {"n_estimators": int, "max_depth": int, "learning_rate": float}
     target_kind: str
     _model: Any
     #: The columns the model was fitted on, in order, which every prediction is checked against.
@@ -54,10 +58,11 @@ class _Trees:
         """Which way each split feature moves the model, from its TreeSHAP contributions.
 
         Gain is unsigned, so unlike the linear models and the EBM this one has no direction stored
-        in the fitted object. TreeSHAP supplies it: `pred_contribs` gives every row's signed
-        contribution from every feature, in log-odds for a binary target and in the target's units
-        for a continuous one, computed exactly and not by sampling. It ships inside XGBoost, so this
-        costs one prediction pass and no new dependency.
+        in the fitted object. TreeSHAP (the Shapley-value attribution for tree ensembles)
+        supplies it: `pred_contribs` gives every row's signed contribution from every feature, in
+        log-odds for a binary target and in the target's units for a continuous one, computed
+        exactly and not by sampling. It ships inside XGBoost, so this takes one prediction pass and
+        no new dependency.
 
         Grouping those contributions into bins of the feature turns them into a curve, which is
         then treated the way an additive model's shape function is. That is what lets a boosted
@@ -69,8 +74,8 @@ class _Trees:
 
         used = self.importances()
         words = target_for(self.target_kind).directions
-        # Column order comes from `X`, and `DMatrix` carries its names, so the booster refuses a
-        # frame whose columns are not the ones it was fitted on rather than misattributing them.
+        # Column order comes from `X`, and `DMatrix` keeps its names, so the booster refuses a
+        # frame whose columns are not the ones it was fitted on instead of misattributing them.
         contributions = self._model.get_booster().predict(xgb.DMatrix(X), pred_contribs=True)
 
         found = {}
@@ -87,9 +92,10 @@ class _Trees:
     def feedback(self, X: pd.DataFrame, y) -> dict[str, Any]:
         """The shared summary, plus gain against cover.
 
-        Gain says how much a split improved the objective; cover says how many rows it applied to.
-        A feature with high gain and low cover fired on a handful of rows. That is worth proposing
-        *around* instead of proposing again, and the ranking alone cannot show it.
+        Gain says how much a split improved the objective, whereas cover says how many rows it
+        applied to. A feature with high gain and low cover fired on a handful of rows, so the next
+        proposals should build *around* it instead of restating it, and the ranking alone cannot
+        show that.
         """
         summary = fit_summary(self, X, y)
         booster = self._model.get_booster()
@@ -161,16 +167,16 @@ class GradientBoosting(_Trees):
 
 
 class GradientBoostingRegression(_Trees):
-    """XGBoost for a continuous target: the same trees fitted by squared error, with TreeSHAP
-    contributions in the target's units. It takes no class weighting; per-row weights from the
-    design are used as for every model.
+    """XGBoost for a continuous target. Its trees are fitted by squared error, so its TreeSHAP
+    contributions are in the target's units. It takes no class weighting, and per-row weights from
+    the design are used as for every model.
 
     **It stops early.** A fixed number of trees fits the noise of a heavy-tailed target, and squared
-    error punishes that where a ranking metric does not, so held-out R-squared can fall below zero.
-    Each fit therefore sets aside `validation_fraction` of its own rows, drawn with the seed and
-    stratified on the target's quantile bins, and grows trees on the rest until the squared error on
-    the part set aside has not fallen for `early_stopping_rounds` rounds. The model keeps the trees
-    up to the round where that error was lowest, at most `n_estimators` of them.
+    error punishes that, whereas a ranking metric does not, so held-out R-squared can fall below
+    zero. Each fit therefore sets aside `validation_fraction` of its fitting rows, drawn with the
+    seed and stratified on the target's quantile bins, and grows trees on the rest until the squared
+    error on the part set aside has not fallen for `early_stopping_rounds` rounds. The model keeps
+    the trees up to the round where that error was lowest, at most `n_estimators` of them.
 
     The part set aside comes from the fitting rows, and not from the dataset's validation split, so
     that the fit depends on its fitting rows alone, as every model's does: the reduction's steps and

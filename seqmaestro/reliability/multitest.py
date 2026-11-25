@@ -8,14 +8,14 @@ The three corrections control different things, so a report prints all three sid
 | Benjamini-Yekutieli | false discovery rate | nothing (valid under arbitrary dependence) |
 | Holm | family-wise error rate | nothing |
 
-Candidates that are positional indicators and overlapping *k*-mer counts are dependent, and nobody
-has checked that the dependence is positive, so BH is the number to quote and BY is the one with a
-guarantee. BY is BH inflated by the harmonic number of p (a factor of about 7.3 at p = 800), and
-that gap is the cost of the guarantee.
+Positional indicators and overlapping *k*-mer counts are dependent candidates, and their
+dependence has not been shown to be positive, so BH is the number to quote, whereas BY is the one
+with a guarantee. BY's q-values are BH's multiplied by the harmonic number of p (a factor of about
+7.3 at p = 800), so BY calls fewer features in exchange for its guarantee.
 
 The tests compare these functions with `statsmodels.stats.multitest` instead of hand-worked
 examples, because the likely bug is an off-by-one in the step-up ordering, which a three-element
-example does not reach.
+example would not reveal.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ def benjamini_yekutieli(p_values: np.ndarray) -> np.ndarray:
     if n == 0:
         return p_values.copy()
     # Summed exactly, because the approximation log(n) + gamma omits a 1/(2n) term, which is enough
-    # to move a q-value across a threshold at the boundary. The sum costs nothing at any p this
-    # will see.
+    # to move a q-value across a threshold at the boundary. The sum takes negligible time at any p
+    # this will see.
     harmonic = float(np.sum(1.0 / np.arange(1, n + 1)))
     return np.minimum(benjamini_hochberg(p_values) * harmonic, 1.0)
 

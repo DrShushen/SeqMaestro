@@ -11,6 +11,7 @@ from igsr.agent.agent import (
     OPENING_TURN,
     LiteLLMAgent,
     completion_settings,
+    retry_settings,
     with_user_turns,
 )
 
@@ -26,6 +27,34 @@ def test_each_kind_of_model_gets_the_settings_it_takes():
         assert completion_settings(SimpleNamespace(kind=kind), "k") == {"api_key": "k"}
     with pytest.raises(ValueError, match="Invalid LLM kind: other"):
         completion_settings(SimpleNamespace(kind="other"), "k")
+
+
+def test_a_reasoning_effort_the_config_states_is_passed_on():
+    """A Foundry deployment's name is in no model map, so LiteLLM would drop the effort unless told
+    to pass it on. A config that states none sends none."""
+    llm = SimpleNamespace(kind="azure_ai", endpoint="https://x.invalid/", reasoning_effort="none")
+    assert completion_settings(llm, "k") == {"api_base": "https://x.invalid/", "api_key": "k",
+                                             "reasoning_effort": "none",
+                                             "allowed_openai_params": ["reasoning_effort"]}
+    llm.reasoning_effort = None
+    assert "reasoning_effort" not in completion_settings(llm, "k")
+
+
+def test_a_wait_the_config_states_reaches_every_call():
+    llm = SimpleNamespace(kind="openai", request_timeout=90)
+    assert completion_settings(llm, "k") == {"api_key": "k", "timeout": 90}
+    llm.request_timeout = None
+    assert "timeout" not in completion_settings(llm, "k")
+
+
+def test_retries_the_config_states_are_the_agents_after_the_first_attempt():
+    """The agent's `max_retries` counts every attempt, the first included, and LiteLLM is asked
+    for none, so a config's count of retries is what a failed call gets."""
+    assert retry_settings(SimpleNamespace(num_retries=5)).max_retries == 6
+    assert retry_settings(SimpleNamespace(num_retries=0)).max_retries == 1
+    assert retry_settings(SimpleNamespace(num_retries=None)) is None
+    assert retry_settings(SimpleNamespace()) is None
+    assert "num_retries" not in completion_settings(SimpleNamespace(kind="openai", num_retries=5), "k")
 
 
 def test_a_conversation_with_no_user_turn_is_opened_by_one():

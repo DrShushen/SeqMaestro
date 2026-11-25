@@ -1,0 +1,5 @@
+# Codex's settings for this repository, which it reads once the folder is trusted. Codex runs each
+# command in a sandbox that may write only inside this folder. The commands of a run also call the
+# language model SeqMaestro uses, so they need the network.
+[sandbox_workspace_write]
+network_access = true

@@ -30,7 +30,7 @@ from seqmaestro.features.positional import PositionalWindow
 from seqmaestro.grouping import group_map, shared_stretch_groups
 from seqmaestro.harness.power import smallest_detectable_auroc, smallest_detectable_correlation
 from seqmaestro.target import BINARY, CONTINUOUS, STRATA, target_for
-from tests.planted import ANALYSES
+from tests.planted import ANALYSES, LANGUAGE_MODEL
 
 PREPARE = Path(__file__).resolve().parents[1] / "experiments" / "prepare"
 
@@ -134,7 +134,8 @@ def test_the_design_power_is_the_harness_arithmetic_on_the_test_counts():
 
 
 def test_a_test_split_too_small_to_detect_anything_says_so_rather_than_writing_nan(tmp_path):
-    """One positive has no sampling distribution, so there is no floor to report."""
+    """With a single positive the AUROC has no sampling distribution, so there is no smallest
+    detectable AUROC to report."""
     directory = a_split(tmp_path)
     _relabel(directory, "test", [1, 0, 0, 0])
     finalise(directory, a_declaration(filters=[]))
@@ -196,8 +197,8 @@ def test_a_declared_variable_length_is_not_checked(tmp_path):
 
 
 def test_one_sequence_in_two_splits_is_flagged_rather_than_failed(tmp_path):
-    """The check is advisory. Whether a repeated sequence is a leak or a property of the data
-    depends on the experiment, so the check measures the overlap and Stage 1 decides."""
+    """The check is advisory, because whether a repeated sequence is a leak or a property of the
+    data depends on the experiment. The check measures the overlap, and Stage 1 decides."""
     directory = a_split(tmp_path)
     _resequence(directory, "test", 2, SEQUENCES["train"][0])
     record = finalise(directory, a_declaration())
@@ -218,9 +219,9 @@ def test_a_flagged_sequence_overlap_reports_the_share_of_the_held_out_rows(tmp_p
 
 
 def test_a_test_sequence_that_repeats_a_validation_one_is_flagged_too(tmp_path):
-    """A run makes its choices on validation, so a test row whose sequence sits there has been
-    seen by those choices. It is no training sequence, so it is counted apart, and the grouping
-    check leaves it to this one."""
+    """A run makes its choices on the validation split, so a test row whose sequence also appears
+    there has informed those choices. Because it is not a training sequence, it is counted
+    separately, and the grouping check leaves it to this check."""
     directory = a_split(tmp_path)
     _resequence(directory, "test", 2, SEQUENCES["val"][0])
     result = finalise(directory, a_declaration())["checks"]["no_sequence_in_two_splits"]
@@ -240,9 +241,9 @@ def test_two_different_sequences_of_one_group_in_two_splits_fails(tmp_path):
 
 
 def test_a_sequence_in_two_groups_is_set_aside_rather_than_blamed_on_the_grouping(tmp_path):
-    """The split files do not identify source rows, so for a sequence carried by two groups there is
-    no record of which group's row went to which split. Treating it as evidence would fail a
-    grouping over a placement that was never observed."""
+    """The split files do not identify source rows, so for a sequence that belongs to two groups
+    there is no record of which group's row went to which split. Treating it as evidence would fail
+    a grouping over a placement that was never observed."""
     directory = a_split(tmp_path)
     table = pd.read_csv(directory / GROUP_FILE)
     doubled = pd.concat([table, pd.DataFrame([{"sequence": SEQUENCES["test"][0],
@@ -261,7 +262,7 @@ def test_a_missing_group_map_fails_rather_than_passing(tmp_path):
 
 def test_a_group_map_that_does_not_cover_the_splits_fails(tmp_path):
     """A group map can miss sequences in the splits when the dataset was rebuilt after its split
-    was cut."""
+    was made."""
     directory = a_split(tmp_path)
     table = pd.read_csv(directory / GROUP_FILE)
     table[table["sequence"] != SEQUENCES["test"][0]].to_csv(directory / GROUP_FILE, index=False)
@@ -340,7 +341,7 @@ def test_a_bad_declaration_is_refused_by_name(change, message):
 
 
 def test_a_split_that_declares_no_grouping_reports_it_rather_than_passing(tmp_path):
-    """The check reports `not_applicable` and not a pass, because a check that did not run has
+    """The check reports `not_applicable` instead of a pass, because a check that did not run has
     shown nothing."""
     split = {**a_declaration()["split"], "grouped_by": []}
     directory = a_split(tmp_path)
@@ -472,7 +473,7 @@ def test_a_dataset_without_covariates_says_so(tmp_path):
 
 def test_a_column_that_nothing_declares_is_listed_as_unused(tmp_path):
     """A builder may keep provenance columns in the split files, so an undeclared column is not an
-    error. It is listed, so it cannot sit in the files unnoticed."""
+    error. It is listed instead, so that it cannot sit in the files unnoticed."""
     record = finalise(a_split(tmp_path, extra={"signal": COVARIATES["signal"]}), a_declaration())
     assert record["columns"]["unused"] == ["signal"]
 
@@ -506,8 +507,8 @@ def test_columns_refuse_rows_that_lack_one_of_them():
     (with_values("peaks", "train", [1] * 8), "peaks is constant on the training rows"),
 ])
 def test_a_covariate_no_model_can_use_as_it_stands_fails(tmp_path, covariates, message):
-    """Missing values are refused and not filled: imputation is a Stage 1 decision, recorded as a
-    preparation step, so no stage after it has to guess one."""
+    """Missing values are refused instead of filled, because imputation is a Stage 1 decision,
+    recorded as a preparation step, so that a later stage never has to guess one."""
     result = finalise(a_split(tmp_path, extra=covariates), covariate_declaration())["checks"]
     assert result["covariates_valid"]["status"] == FAILED
     assert message in result["covariates_valid"]["detail"]
@@ -551,8 +552,8 @@ def test_a_bad_covariate_declaration_is_refused_by_name(change, message):
 
 
 def test_a_repeated_sequence_whose_covariates_differ_is_counted_apart(tmp_path):
-    """Two rows with one sequence and different measurements are different samples, so the overlap
-    finding says how many of the repeated rows those are."""
+    """Two rows with the same sequence but different measurements are different samples, so the
+    overlap finding reports how many of the repeated rows are such samples."""
     directory = a_split(tmp_path, extra=COVARIATES)
     _resequence(directory, "val", 0, SEQUENCES["train"][0])
     _resequence(directory, "val", 1, SEQUENCES["train"][1])
@@ -568,7 +569,8 @@ def test_a_repeated_sequence_whose_covariates_differ_is_counted_apart(tmp_path):
 
 # ------------------------------------------------------------------------------ variable lengths
 
-#: Class 1 is longer than class 0, which is the finding the length check exists to put to Stage 1.
+#: The sequences of class 1 are longer than those of class 0, which is the finding the length check
+#: exists to put to Stage 1.
 RAGGED = {"train": ["ACGTACGTAC", "CCGTAA", "TTGACAGGAT", "GGGTCA", "ACCTGAACGT", "TAGCA",
                     "CATGCATGCA", "GTACG"],
           "val": ["AAGTCCATGC", "CTGAC", "GTTACAGGTA", "TCAGG"],
@@ -607,8 +609,8 @@ def test_the_window_reports_what_it_pads_and_cuts_by_class(tmp_path):
 
 
 def test_a_window_without_padding_refuses_a_shorter_sequence(tmp_path):
-    """Without padding, Stage 1 filters the short sequences out as a recorded step, so every arm
-    reads the same rows. One left in the splits is a defect."""
+    """Without padding, Stage 1 removes the short sequences in a recorded filter step, so that every
+    arm is given the same rows. A short sequence left in the splits is therefore a defect."""
     record = finalise(a_split(tmp_path, sequences=RAGGED),
                       ragged_declaration({"length": 6, "anchor": "end", "pad": False}))
     result = record["checks"]["positional_window_fits"]
@@ -657,9 +659,6 @@ def test_a_misspelled_sequences_key_is_refused_rather_than_dropped():
                  "positional_windw": {"length": 6, "anchor": "start", "pad": True}}
     with pytest.raises(DatasetError, match="no key positional_windw"):
         validate_declared(a_declaration(sequences=sequences))
-
-
-# ------------------------------------------------------------------------------ the finaliser
 
 
 # ------------------------------------------------------------------------------ a continuous target
@@ -723,7 +722,7 @@ def test_a_split_whose_continuous_target_is_constant_fails(tmp_path):
 
 
 def test_a_heavy_tailed_target_is_flagged_with_its_distribution(tmp_path):
-    """Most rows near zero and a few far out: the tails are for Stage 1 to explain."""
+    """Most rows lie near zero and a few far out, and the tails are for Stage 1 to explain."""
     train = [0.01, -0.01, 0.02, 0.0, -0.02, 0.01, 0.9, -0.8]
     record = finalise(continuous_split(tmp_path, {**CHANGES, "train": train}),
                       continuous_declaration())
@@ -795,7 +794,7 @@ def test_continuous_weights_need_only_carry_some_weight(tmp_path):
 
 
 def test_continuous_lengths_are_reported_with_their_rank_correlation_with_the_target(tmp_path):
-    """Longer sequences carry larger changes here, so the correlation is high and positive."""
+    """Longer sequences have larger changes here, so the correlation is high and positive."""
     targets = {split: [len(text) / 10 + 0.01 * index for index, text in enumerate(texts)]
                for split, texts in RAGGED.items()}
     sequences = {**continuous_declaration()["sequences"], "length": "variable",
@@ -848,6 +847,9 @@ def test_a_continuous_target_is_stratified_on_quantile_bins():
     assert list(target_for(BINARY).strata([1, 0, 1])) == [1, 0, 1]
 
 
+# ------------------------------------------------------------------------------ the finaliser
+
+
 @pytest.fixture
 def finaliser():
     sys.path.insert(0, str(PREPARE))
@@ -859,7 +861,7 @@ def finaliser():
 
 def test_every_advisory_check_puts_its_question(finaliser):
     """The finaliser ends each advisory finding with the question it raises, so a finding without
-    one would stop the finaliser at the moment it matters."""
+    one would make the finaliser fail at the moment it matters."""
     assert set(finaliser.QUESTIONS) == set(ADVISORY)
 
 
@@ -887,8 +889,8 @@ def test_the_summary_describes_a_continuous_target_by_its_distribution(tmp_path,
 
 
 def _config(tmp_path: Path, splits: Path, continuous: bool = False, **dataset) -> Path:
-    """A run config on `splits`. A continuous target has no class weighting and its own linear
-    model."""
+    """A run config on `splits`. A continuous target has no class weighting and is fitted with
+    `l1_linear` instead of `l1_logistic`."""
     document = {
         "name": "example",
         "dataset": {"task": "example", "splits": str(splits), "blinded": False, **dataset},
@@ -897,7 +899,8 @@ def _config(tmp_path: Path, splits: Path, continuous: bool = False, **dataset) -
                  **({} if continuous else {"class_weight": "balanced"}),
                  "permutation_repeats": 0, "judge": False, "judge_direction": False,
                  "generated_features": {"repair_rounds": 1, "max_undefined_share": 0.2,
-                                        "max_example_length": 300, "max_seconds": 60}},
+                                        "max_example_length": 300, "max_seconds": 60, "guidance": None}},
+        "language_model": LANGUAGE_MODEL,
         "analyses": ANALYSES,
         "arms": {"positional": {"models": ["l1_linear" if continuous else "l1_logistic"]}},
     }
@@ -966,8 +969,8 @@ def test_a_config_on_a_dataset_without_covariates_records_none(tmp_path, experim
 
 
 def test_a_recorded_config_states_the_kind_of_its_target(tmp_path, experiment_config):
-    """The copy of a config recorded beside a run states the kind of target, so the run describes
-    itself, and a config that states another kind than its dataset's is refused."""
+    """The copy of a config recorded in a run states the kind of target, so that the run describes
+    itself. A config that states a different kind from its dataset's is refused."""
     binary = a_split(tmp_path / "binary")
     finalise(binary, a_declaration())
     config = experiment_config.load(_config(tmp_path / "binary", binary))
@@ -1025,7 +1028,7 @@ def test_the_group_map_joins_relations_that_overlap():
 
 
 def test_a_sequence_in_two_groups_gets_a_row_for_each():
-    """Only the declared relations are used, so a window carried by two genes is not merged into
+    """Only the declared relations are used, so a window shared by two genes is not merged into
     one group. The map's two rows record that the declared grouping does not decide where the
     window goes."""
     frame = pd.DataFrame({"sequence": ["AA", "AA", "CC"], "gene": ["x", "y", "y"]})
@@ -1034,8 +1037,8 @@ def test_a_sequence_in_two_groups_gets_a_row_for_each():
 
 
 def test_a_missing_value_joins_nothing_in_the_group_map():
-    """Rows whose gene is unknown must not all land in one group, which is what reading the file
-    with empty fields as text would do."""
+    """Rows whose gene is unknown must not all fall into one group, as they would if the file's
+    empty fields were read as text."""
     frame = pd.DataFrame({"sequence": ["AA", "CC", "GG"], "gene": [None, None, "y"]})
     mapped = group_map(frame, "sequence", ["gene"])
     assert mapped["group"].nunique() == 3
@@ -1062,8 +1065,8 @@ def test_sequences_sharing_a_stretch_are_grouped_whatever_their_lengths():
 
 # ---------------------------------------------------------------- the declarations in the repository
 #
-# A clone holds the example's. A machine with datasets of its own also holds theirs, which git
-# ignores, and the tests below check those too.
+# A clone holds the example dataset's declaration. A machine with further datasets also holds
+# theirs, which git ignores, and the tests below check those too.
 
 DECLARATIONS = sorted((Path(__file__).resolve().parents[1] / "experiments" / "prepare"
                        / "declarations").glob("*.yaml"))

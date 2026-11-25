@@ -1,4 +1,4 @@
-"""`seqmaestro.provenance`: the snapshot layer of the environment record.
+"""`seqmaestro.provenance`: the snapshot of an environment and the record of each command.
 
 The tests snapshot the environment that runs them, so a snapshot that would be empty or unreadable
 fails here and not months later, when someone tries to reproduce a run.
@@ -97,9 +97,10 @@ def test_a_snapshot_directory_is_named_for_its_environment():
 @pytest.mark.crossenv
 @pytest.mark.skipif(not PYSR_PYTHON.exists(), reason="the PySR environment is not installed here")
 def test_the_pysr_environment_is_snapshotted_by_its_own_interpreter_with_its_julia_project(tmp_path):
-    """Called from Core, the snapshot of another environment runs this module under that
-    environment's interpreter from the repository root, since it imports only the standard library,
-    and there it finds the Julia project the recipe placed."""
+    """When Core asks for another environment's snapshot, `write_snapshot` runs
+    `seqmaestro.provenance` under that environment's interpreter from the repository root, which
+    works because the module imports only the standard library. There it finds the Julia project
+    the recipe placed."""
     manifest = write_snapshot("SeqMaestro_Method_pysr", tmp_path, repo_root=REPO)
 
     assert Path(manifest["executable"]).parent.parent.resolve() == PYSR_PYTHON.parent.parent.resolve()
@@ -132,8 +133,8 @@ def test_a_dirty_tree_is_recorded_not_only_warned(tmp_path):
 
 
 def test_two_calls_writing_to_one_directory_keep_a_record_each(tmp_path):
-    """Every command names its record, so two that write into one directory cannot overwrite each
-    other's by leaving the name out."""
+    """Every command must name its record, so two commands writing into one directory cannot
+    overwrite each other's record by leaving the name out."""
     record_invocation(tmp_path, filename="fit.json", warn=False, call="fit")
     record_invocation(tmp_path, filename="analyse.json", warn=False, call="analyse")
 

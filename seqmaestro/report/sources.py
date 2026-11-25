@@ -4,7 +4,7 @@
 `seqmaestro.pipeline.report`, reads the config and knows the run's layout, so it lists every cell
 and every stage's directory in an `Inventory`, and this module reads them. A listed file that is
 missing raises, so a report cannot be assembled around a silent gap. The Stage 2 analyses are the
-exception, because a run may not produce one (recurrence and the judge need a language model). A
+exception, because a run may not produce them (recurrence and the judge need a language model). A
 missing analysis is returned as None, and the report says "not measured" in its place. The judge is
 listed only where the run's config runs it.
 
@@ -12,9 +12,8 @@ listed only where the run's config runs it.
 The reveal must be complete and must have sealed every listed cell, so every test number in a
 report is one the reveal scored.
 
-**Nothing here interprets.** A loader returns what a file says, keyed on the arm
-(`model/pool`). Deciding what a number means is the report's job, and choosing which rows
-to show is `facts.py`'s.
+**Nothing here interprets.** A loader returns what a file says, keyed on the arm (`model/pool`).
+Deciding what a number means is the report's job, and choosing which rows to show is `facts.py`'s.
 """
 
 from __future__ import annotations
@@ -55,8 +54,8 @@ def read_json(path: Path) -> dict[str, Any]:
 class Inventory:
     """Everything a run's config says it holds, as paths relative to the run directory.
 
-    `suite` maps arm -> labels -> seed -> cell. `analyses` maps each Stage 2 analysis output a
-    report reads to its file.
+    `suite` maps arm -> label condition -> seed -> cell. `analyses` maps each Stage 2 analysis
+    output a report reads to its file.
     """
 
     suite: dict[str, dict[str, dict[int, Path]]]
@@ -87,7 +86,8 @@ class Cell:
 
 @dataclass
 class ReducedArm:
-    """One arm's Stage 3A: its record, its three revealed models, and its source cell's records."""
+    """One arm's Stage 3A: its record, its three revealed models, and the feature records of the
+    Stage 2 cell it was reduced from."""
 
     directory: Path
     record: dict[str, Any]
@@ -126,6 +126,9 @@ class Run:
     #: `dataset.blinded` and its task description's `judge_only`: `{"blinded": bool, "withheld":
     #: str | None}`.
     blinding: dict[str, Any]
+    #: What the person running the analysis asked of the form of the written features, from its
+    #: config's `grid.generated_features.guidance`, or None where the run gave no guidance.
+    guidance: str | None
     analyses: dict[str, Any] = field(default_factory=dict)
 
 
@@ -181,9 +184,10 @@ def _profiled(run_dir: Path, directory: Path) -> ProfiledArm:
 
 
 def load(run_dir: str | Path, inventory: Inventory, dataset: Dataset,
-         reduced_roles: tuple[str, ...], blinding: dict[str, Any]) -> Run:
-    """Read everything `inventory` lists from a revealed run. `blinding` is `Run.blinding`, which the
-    caller reads from the run's config and the task description, neither of which is read here."""
+         reduced_roles: tuple[str, ...], blinding: dict[str, Any], guidance: str | None) -> Run:
+    """Read everything `inventory` lists from a revealed run. `blinding` and `guidance` are
+    `Run.blinding` and `Run.guidance`, which the caller reads from the run's config and the task
+    description, as this module reads neither file."""
     run_dir = Path(run_dir)
     reveal = reveal_record(run_dir)
     if reveal is None:
@@ -209,5 +213,6 @@ def load(run_dir: str | Path, inventory: Inventory, dataset: Dataset,
         profiled={arm: _profiled(run_dir, directory) for arm, directory in inventory.profiled.items()},
         not_profiled=dict(inventory.not_profiled),
         blinding=dict(blinding),
+        guidance=guidance,
         analyses=_analyses(run_dir, inventory.analyses),
     )

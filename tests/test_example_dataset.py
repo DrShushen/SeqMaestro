@@ -1,9 +1,9 @@
 """The example dataset: its builder, its declaration, its description and its config agree.
 
-The example is the one dataset a clone holds, and it is what shows how a dataset is prepared. Its
-files are written by hand in four places, and `data/` is not in git, so nothing but these tests
-would notice the builder being changed without the declaration, or the description stating a
-layout the builder no longer cuts.
+The example is the only dataset a clone holds, and it shows how a dataset is prepared. Its files
+are written by hand in four places, and `data/` is not in git, so only these tests would notice
+the builder changing without the declaration, or the description stating a layout the builder does
+not produce.
 """
 
 from __future__ import annotations
@@ -119,9 +119,9 @@ def test_the_config_names_the_folder_the_builder_writes_and_loads_on_it(built):
 
 
 def test_the_quick_config_is_the_example_cut_down_to_what_needs_no_language_model(built):
-    """The pages offer the quick config as a run that needs no credentials, so no arm of it may be
-    on a pool with a written source, and the judge must be off. Everything it runs, the full
-    config runs too."""
+    """The documentation offers the quick config as a run that needs no credentials, so none of its
+    arms may be on a pool with a written source, and the judge must be off. The full config runs
+    everything the quick one runs."""
     directory, _ = built
     splits = (f"dataset.splits={directory / example.SPLITS}",)
     full, quick = experiment_config.load(CONFIG, splits), experiment_config.load(QUICK, splits)
@@ -144,8 +144,9 @@ def test_building_again_writes_the_same_files(built, tmp_path):
 
 
 def test_a_window_that_drops_much_of_a_class_is_refused(built, monkeypatch):
-    """A filter reports what it dropped, and refuses to drop many: a wider window here would cost
-    one class most of its rows, and the build stops before writing a dataset with another task."""
+    """A filter reports what it dropped and refuses to drop many rows: a wider window here would
+    remove most of one class's rows, so the build stops before writing a dataset that poses a
+    different task."""
     directory, _ = built
     monkeypatch.setattr(example, "WINDOW", 100)
     with pytest.raises(ValueError, match="drops 60% of the bound sites"):

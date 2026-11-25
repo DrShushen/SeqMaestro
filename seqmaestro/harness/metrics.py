@@ -1,29 +1,30 @@
-"""Binary classification and regression metrics, computed once and identically for every arm.
+"""Binary classification and regression metrics, computed once and in the same way for every arm.
 
 There are three reasons to compute these here instead of in each method:
 
-**No method's metric set is complete.** DEFT reports accuracy and has no AUROC anywhere in it,
-and the paper we compare against reports accuracy and AUPRC. Scoring on the SeqMaestro side
-measures every arm the same way, including arms that compute no metric of their own.
+**Each method reports only some of the metrics.** DEFT, for example, reports accuracy but not
+AUROC. Scoring in SeqMaestro measures every arm in the same way, including arms that compute no
+metrics themselves.
 
 **Accuracy alone does not separate these arms.** Two arms can tie on accuracy while differing in
-calibration, ranking quality and the interpretability axes, so a single headline number would hide
-the differences that matter. The set of metrics is therefore wide, and those in `BOOTSTRAP_METRICS`
-carry a bootstrap interval on request, since two accuracies a point apart mean nothing without one.
+calibration and ranking quality, so a single headline number would hide the differences that
+matter. The set of metrics is therefore wide, and those in `BOOTSTRAP_METRICS` come with a
+bootstrap interval on request, because two accuracies a point apart mean nothing without one.
 
-**Anything not recorded is lost.** The raw confusion counts, the prevalence and the sample size are
-returned alongside the derived metrics, so a metric derived from them can be computed later from a
-stored `metrics.json` without re-running anything.
+**The raw counts are recorded too.** The confusion counts, the prevalence and the sample size are
+returned beside the derived metrics, so that any metric derived from them can be computed later from
+a stored `metrics.json` without rerunning anything.
 
-Left out because they add nothing to what is here: Youden's J, which is
+Two metrics are left out because they add nothing: Youden's J, which is
 `2 * balanced_accuracy - 1`, and Cohen's kappa, which on balanced binary data tracks MCC closely
-enough not to need a column. Specificity is included, in the thresholded block.
+enough not to need a column. Specificity is included, among the thresholded metrics.
 
-**A continuous target has its own set** (`regression_metrics`): R-squared, the error in the
-target's units (RMSE and MAE), and the two correlations of prediction with target. R-squared
-measures the squared error a least-squares model minimises, and a permuted-label arm scores zero on
-it. A heavy-tailed target makes it rest on its tails, which is why Spearman's rank correlation
-always stands beside it. There is no threshold, so nothing is chosen on validation for this set.
+**A continuous target has a separate set of metrics** (`regression_metrics`): R-squared, the error
+in the target's units (RMSE and MAE), and the two correlations of prediction with target. R-squared
+measures the squared error a least-squares model minimises, and a cell under the permuted label
+condition scores about zero on it. On a heavy-tailed target R-squared depends mostly on the tails,
+which is why Spearman's rank correlation is always reported beside it. There is no threshold, so
+nothing is chosen on validation for this set.
 """
 
 from __future__ import annotations
@@ -32,13 +33,13 @@ import numpy as np
 from scipy.stats import rankdata
 from sklearn import metrics as skm
 
-# The metrics reported with a bootstrap interval: the ones a comparison between arms turns on.
+# The metrics reported with a bootstrap interval: the ones that comparisons between arms depend on.
 BOOTSTRAP_METRICS = ("auroc", "auprc", "accuracy", "balanced_accuracy", "f1", "mcc", "brier")
 
 #: The same, for a continuous target.
 REGRESSION_BOOTSTRAP_METRICS = ("r2", "rmse", "mae", "pearson_r", "spearman_rho")
 
-#: Equal-width bins the expected calibration error is measured over.
+#: The number of equal-width bins over which the expected calibration error is measured.
 CALIBRATION_BINS = 10
 
 HIGHER_IS_BETTER = {
@@ -49,7 +50,7 @@ HIGHER_IS_BETTER = {
 }
 
 # The metrics that change when the threshold moves. The rest are ranking or probabilistic metrics,
-# identical at every cut point, which is what makes `choose_threshold` cheap.
+# which take the same value at every cut point, so `choose_threshold` computes them only once.
 THRESHOLDED_METRICS = frozenset(
     {"accuracy", "balanced_accuracy", "f1", "precision", "recall", "specificity", "mcc"}
 )
@@ -66,7 +67,8 @@ def classification_metrics(
 
     `y_score` is the predicted probability of the positive class. Brier score, log loss and
     calibration are meaningless on a hard label or an unbounded decision function, so scores
-    outside [0, 1] are refused: silently reporting a meaningless number is worse than failing.
+    outside [0, 1] are refused, because silently reporting a meaningless number is worse than
+    failing.
 
     With `n_bootstrap > 0`, adds percentile confidence intervals under `"ci"`.
     """
@@ -92,10 +94,10 @@ def classification_metrics(
 def regression_metrics(y_true, y_pred, n_bootstrap: int = 0, seed: int = 0) -> dict:
     """Every regression metric this project reports, from true values and predictions.
 
-    The centre and spread of both are recorded beside the metrics, so a stored `metrics.json` shows
-    whether a low R-squared is a poor ranking or predictions on the wrong scale. A correlation is
-    undefined when either side is constant, and is then NaN, as a ranking metric is on a resample
-    holding one class.
+    The mean and standard deviation of both are recorded beside the metrics, so that a stored
+    `metrics.json` shows whether a low R-squared comes from a poor ranking or from predictions on the
+    wrong scale. A correlation is undefined when either side is constant and is then NaN, as a
+    ranking metric is on a resample that holds one class.
 
     With `n_bootstrap > 0`, adds percentile confidence intervals under `"ci"`.
     """
@@ -117,8 +119,8 @@ def regression_metrics(y_true, y_pred, n_bootstrap: int = 0, seed: int = 0) -> d
 
 
 def r_squared(y_true, y_pred) -> float:
-    """1 - SSE / SST, NaN where the target does not vary. Below zero for predictions worse than
-    the target's mean."""
+    """1 - SSE / SST, which is NaN where the target does not vary, and below zero for predictions
+    worse than the target's mean."""
     y_true, y_pred = np.asarray(y_true, dtype=float), np.asarray(y_pred, dtype=float)
     total = float(np.square(y_true - y_true.mean()).sum())
     if total == 0:
@@ -127,18 +129,19 @@ def r_squared(y_true, y_pred) -> float:
 
 
 def choose_threshold(y_true, y_score, metric: str = "balanced_accuracy") -> float:
-    """The threshold that optimises `metric`, to be chosen on validation and then applied to test.
+    """The threshold that optimises `metric`, to be chosen on validation and then applied to the
+    test split.
 
-    A fixed 0.5 suits a model whose scores are calibrated probabilities. A shallow tree's scores are
-    leaf proportions, which need not be calibrated, so an arm can get an unfair accuracy purely
-    because of where its scores sit. Choosing on validation removes that, provided the chosen
-    threshold is then *fixed* for test.
+    A fixed 0.5 suits a model whose scores are calibrated probabilities, whereas a shallow tree's
+    scores are leaf proportions, which need not be calibrated, so an arm's accuracy could be unfair
+    purely because of where its scores sit. Choosing on validation removes that, provided the chosen
+    threshold is then *fixed* for the test split.
 
-    All candidate cut points are evaluated at once. Calling the full set of metrics once per
-    candidate would cost O(n^2): there are up to `n` distinct scores, and each call recomputes every
-    metric over all `n` rows, including AUROC and AUPRC, which sort and do not depend on the
+    All candidate cut points are evaluated at once, because calling the full set of metrics once per
+    candidate would take O(n^2) time: there are up to `n` distinct scores, and each call recomputes
+    every metric over all `n` rows, including AUROC and AUPRC, which sort and do not depend on the
     threshold at all. Here the four confusion counts come from one sort and a `searchsorted`, and
-    only the requested metric is formed, vectorised across candidates.
+    only the requested metric is computed, vectorised across candidates.
     """
     y_true, y_score = _check(y_true, y_score)
     if metric not in HIGHER_IS_BETTER:
@@ -153,9 +156,9 @@ def choose_threshold(y_true, y_score, metric: str = "balanced_accuracy") -> floa
     if metric in THRESHOLDED_METRICS:
         values = _threshold_curve(y_true, y_score, candidates, metric)
     else:
-        # The metric is identical at every cut point, so the choice is vacuous. It is computed once
-        # and broadcast, so the tie-break below still picks the threshold, and an undefined metric
-        # still falls back to 0.5.
+        # The metric takes the same value at every cut point, so any threshold is as good as any
+        # other. It is computed once and broadcast, so that the tie-break below still picks the
+        # threshold and an undefined metric still falls back to 0.5.
         single = _metrics(y_true, y_score, 0.5).get(metric, np.nan)
         values = np.full(candidates.shape, single, dtype=float)
 
@@ -182,8 +185,8 @@ def _threshold_curve(
     """One thresholded metric evaluated at every threshold, from a single sort.
 
     `y_score >= t` partitions the sorted scores, so the four confusion counts at every threshold
-    follow from one `searchsorted` and one cumulative sum. Zero-denominator cases return 0.0, which
-    matches the scikit-learn calls in `_metrics` under `zero_division=0`.
+    follow from one `searchsorted` and one cumulative sum. A zero denominator gives 0.0, as the
+    scikit-learn calls in `_metrics` do under `zero_division=0`.
     """
     order = np.argsort(y_score, kind="mergesort")
     sorted_score, sorted_true = y_score[order], y_true[order]
@@ -191,7 +194,7 @@ def _threshold_curve(
     positives = int(sorted_true.sum())
     negatives = n - positives
 
-    # First index whose score is >= t; everything from there on is predicted positive.
+    # The first index whose score is >= t. Every row from there on is predicted positive.
     first = np.searchsorted(sorted_score, thresholds, side="left")
     positives_below = np.concatenate([[0], np.cumsum(sorted_true)])[first]
 
@@ -306,19 +309,19 @@ def _metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float) -> dict:
     auprc = float(skm.average_precision_score(y_true, y_score)) if both_classes else np.nan
 
     return {
-        # Ranking: threshold-free, so unaffected by where a model's scores happen to sit.
+        # Ranking metrics: free of the threshold, so unaffected by where a model's scores sit.
         "auroc": float(skm.roc_auc_score(y_true, y_score)) if both_classes else np.nan,
         "auprc": auprc,
-        # A random ranker scores AUPRC == prevalence, so the raw value is not comparable across
-        # datasets with different balance. The lift is.
+        # A random ranker scores an AUPRC equal to the prevalence, so the raw value is not comparable
+        # across datasets with different class balance, whereas the lift is.
         "auprc_baseline": prevalence,
         "auprc_lift": auprc / prevalence if both_classes and prevalence > 0 else np.nan,
-        # Probabilistic: whether the score is a usable probability as well as a usable ranking.
-        # This matters here because a tree's leaf proportions are offered as probabilities.
+        # Probabilistic metrics: whether the score is a usable probability as well as a usable
+        # ranking. This matters here because a tree's leaf proportions are given as probabilities.
         "brier": float(np.mean((y_score - y_true) ** 2)),
         "log_loss": float(skm.log_loss(y_true, y_score, labels=[0, 1])),
         "expected_calibration_error": _expected_calibration_error(y_true, y_score, CALIBRATION_BINS),
-        # Thresholded.
+        # Thresholded metrics.
         "accuracy": float(skm.accuracy_score(y_true, y_pred)),
         "balanced_accuracy": float(skm.balanced_accuracy_score(y_true, y_pred)),
         "f1": float(skm.f1_score(y_true, y_pred, zero_division=0)),
@@ -332,15 +335,16 @@ def _metrics(y_true: np.ndarray, y_score: np.ndarray, threshold: float) -> dict:
 
 
 def _counts(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    """The four cells, so any thresholded metric can be recomputed from a stored result."""
+    """The four cells of the confusion matrix, so that any thresholded metric can be recomputed from
+    a stored result."""
     tn, fp, fn, tp = skm.confusion_matrix(y_true, y_pred.astype(int), labels=[0, 1]).ravel()
     return {"tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn)}
 
 
 def _expected_calibration_error(y_true: np.ndarray, y_score: np.ndarray, bins: int) -> float:
-    """Mean gap between confidence and accuracy, weighted by bin occupancy.
+    """The mean gap between confidence and accuracy, weighted by bin occupancy.
 
-    Uses equal-width bins, the common convention. The value depends on `bins`, so it is comparable
+    The bins have equal widths, as is common. The value depends on `bins`, so it is comparable
     across arms scored here but not with published numbers.
     """
     edges = np.linspace(0.0, 1.0, bins + 1)
@@ -360,9 +364,10 @@ def _expected_calibration_error(y_true: np.ndarray, y_score: np.ndarray, bins: i
 def _percentile_intervals(compute, size: int, names, n: int, seed: int) -> dict:
     """Percentile intervals by resampling rows with replacement.
 
-    `compute(rows)` returns the metrics of a resample given as row indices. Seeded, so a rerun
-    reproduces the interval exactly. A resample on which a metric is undefined (one that loses a
-    class, or holds one target value) gives NaN, and those NaNs are left out of the percentiles.
+    `compute(rows)` returns the metrics of a resample given as row indices. The resampling is
+    seeded, so a rerun reproduces the same interval. A resample on which a metric is undefined (one
+    that loses a class, or holds one target value) gives NaN, and those NaNs are left out of the
+    percentiles.
     """
     rng = np.random.default_rng(seed)
     draws: dict[str, list[float]] = {name: [] for name in names}

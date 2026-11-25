@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""The composition baseline of a run: base fractions into a sparse linear model, at every seed.
+"""Fit a run's composition baseline, a sparse linear model on the base fractions, at every seed.
 
     experiments/runners/run_baseline.py --run-dir experiments/runs/<date>_<name>
 
